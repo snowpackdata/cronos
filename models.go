@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/dgrijalva/jwt-go"
+	jwt "github.com/dgrijalva/jwt-go"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -29,11 +29,11 @@ func (s RateType) String() string {
 }
 
 const (
-	HOUR = 60.0
-
-	UserRoleAdmin  UserRole = "ADMIN"
-	UserRoleStaff  UserRole = "STAFF"
-	UserRoleClient UserRole = "CLIENT"
+	HOUR                      = 60.0
+	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
+	UserRoleAdmin    UserRole = "ADMIN"
+	UserRoleStaff    UserRole = "STAFF"
+	UserRoleClient   UserRole = "CLIENT"
 
 	AccountTypeClient   AccountType = "ACCOUNT_TYPE_CLIENT"
 	AccountTypeInternal AccountType = "ACCOUNT_TYPE_INTERNAL"
@@ -50,8 +50,7 @@ const (
 type User struct {
 	// User is the generic user object for anyone accessing the application
 	gorm.Model
-	Username  string `json:"username"`
-	Email     string `json:"email"`
+	Email     string `gorm:"unique" json:"email"`
 	Password  string `json:"password"`
 	IsAdmin   bool   `json:"is_admin"`
 	Role      string `json:"role"`
@@ -60,21 +59,23 @@ type User struct {
 
 // Token is a non-persistent object that is used to store the JWT token
 type Token struct {
-	UserID   uint
-	Username string
-	Email    string
+	UserID uint
+	Email  string
 	*jwt.StandardClaims
 }
 
 type Employee struct {
 	// Employee refers to internal information regarding an employee
 	gorm.Model
-	UserID    uint    `json:"user_id"`
-	User      User    `json:"user"`
-	Title     string  `json:"title"`
-	FirstName string  `json:"first_name"`
-	LastName  string  `json:"last_name"`
-	Entries   []Entry `json:"entries"`
+	UserID    uint      `json:"user_id"`
+	User      User      `json:"user"`
+	Title     string    `json:"title"`
+	FirstName string    `json:"first_name"`
+	LastName  string    `json:"last_name"`
+	IsActive  bool      `json:"is_active"`
+	StartDate time.Time `json:"start_date"`
+	EndDate   time.Time `json:"end_date"`
+	Entries   []Entry   `json:"entries"`
 }
 
 type Client struct {
@@ -92,7 +93,7 @@ type Account struct {
 	gorm.Model
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
-	LegalName string    `json:"legal_name"`
+	LegalName string    `gorm:"unique" json:"legal_name"`
 	Email     string    `json:"email"`
 	Website   string    `json:"website"`
 	Admin     User      `json:"admin"`
@@ -134,7 +135,7 @@ type BillingCode struct {
 	Name        string    `json:"name"`
 	RateType    string    `json:"type"`
 	Category    string    `json:"category"`
-	Code        string    `json:"code"`
+	Code        string    `gorm:"unique" json:"code"`
 	RoundedTo   int       `gorm:"default:15" json:"rounded_to"`
 	ProjectID   uint      `json:"project"`
 	ActiveStart time.Time `json:"active_start"`
@@ -199,11 +200,11 @@ func (a *App) Initialize() {
 	newLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 		logger.Config{
-			SlowThreshold:             time.Second,   // Slow SQL threshold
-			LogLevel:                  logger.Silent, // Log level
-			IgnoreRecordNotFoundError: true,          // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,          // Don't include params in the SQL log
-			Colorful:                  false,         // Disable color
+			SlowThreshold:             time.Second, // Slow SQL threshold
+			LogLevel:                  logger.Info, // Log level
+			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
+			ParameterizedQueries:      true,        // Don't include params in the SQL log
+			Colorful:                  true,        // Disable color
 		},
 	)
 

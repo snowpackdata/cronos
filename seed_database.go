@@ -2,35 +2,37 @@ package main
 
 import "time"
 
-const ACCOUNTS_RECEIVABLE = "SNOWPACK_ACCOUNTS_RECEIVABLE"
-const ACCOUNTS_PAYABLE = "SNOWPACK_ACCOUNTS_PAYABLE"
+const AccountsReceivable = "SNOWPACK_ACCOUNTS_RECEIVABLE"
+const AccountsPayable = "SNOWPACK_ACCOUNTS_PAYABLE"
+const CostOfGoodsSold = "SNOWPACK_COGS"
 
 func (a *App) SeedDatabase() {
 	journals := []Journal{
-		Journal{Name: ACCOUNTS_RECEIVABLE},
-		Journal{Name: ACCOUNTS_PAYABLE},
+		Journal{Name: AccountsReceivable},
+		Journal{Name: AccountsPayable},
+		Journal{Name: CostOfGoodsSold},
 	}
 	_ = a.DB.Create(&journals)
 
 	// Create Users
 	users := []User{
 		User{
-			Username: "nater",
 			Email:    "nate@snowpack-data.com",
 			IsAdmin:  true,
 			Role:     UserRoleAdmin.String(),
+			Password: DEFAULT_PASSWORD,
 		},
 		User{
-			Username: "kevink",
 			Email:    "kevin@snowpack-data.com",
 			IsAdmin:  true,
 			Role:     UserRoleStaff.String(),
+			Password: DEFAULT_PASSWORD,
 		},
 		User{
-			Username: "davids",
-			Email:    "kevin@snowpack-data.com",
+			Email:    "david@snowpack-data.com",
 			IsAdmin:  false,
 			Role:     UserRoleStaff.String(),
+			Password: DEFAULT_PASSWORD,
 		},
 	}
 	_ = a.DB.Create(&users)
@@ -41,18 +43,24 @@ func (a *App) SeedDatabase() {
 			Title:     "Partner",
 			FirstName: "Nate",
 			LastName:  "Robinson",
+			IsActive:  true,
+			StartDate: time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		Employee{
 			User:      users[1],
 			Title:     "Partner",
 			FirstName: "Kevin",
 			LastName:  "Koenitzer",
+			IsActive:  true,
+			StartDate: time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		Employee{
 			User:      users[2],
 			Title:     "Partner",
 			FirstName: "David",
 			LastName:  "Shore",
+			IsActive:  true,
+			StartDate: time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
 	_ = a.DB.Create(&employees)
