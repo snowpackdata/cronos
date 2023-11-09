@@ -1,4 +1,4 @@
-package main
+package cronos
 
 import "github.com/pkg/errors"
 

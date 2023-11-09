@@ -1,4 +1,4 @@
-package main
+package cronos
 
 import (
 	jwt "github.com/dgrijalva/jwt-go"
