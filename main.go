@@ -1,5 +1,8 @@
-package cronos
+package main
 
 func main() {
-	return
+	a := &App{}
+	a.Initialize()
+	a.migrate()
+	a.SeedDatabase()
 }
