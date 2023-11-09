@@ -13,46 +13,49 @@ func (a *App) SeedDatabase() {
 	_ = a.DB.Create(&journals)
 
 	// Create Users
-	nateUser := User{
-		Username: "nater",
-		Email:    "nate@snowpack-data.com",
-		IsAdmin:  true,
-		Role:     UserRoleAdmin.String(),
+	users := []User{
+		User{
+			Username: "nater",
+			Email:    "nate@snowpack-data.com",
+			IsAdmin:  true,
+			Role:     UserRoleAdmin.String(),
+		},
+		User{
+			Username: "kevink",
+			Email:    "kevin@snowpack-data.com",
+			IsAdmin:  true,
+			Role:     UserRoleStaff.String(),
+		},
+		User{
+			Username: "davids",
+			Email:    "kevin@snowpack-data.com",
+			IsAdmin:  false,
+			Role:     UserRoleStaff.String(),
+		},
 	}
-	nateEmployee := Employee{
-		User:      nateUser,
-		Title:     "Partner",
-		FirstName: "Nate",
-		LastName:  "Robinson",
-	}
-	kevinUser := User{
-		Username: "kevinK",
-		Email:    "kevin@snowpack-data.com",
-		IsAdmin:  true,
-		Role:     UserRoleStaff.String(),
-	}
-	kevinEmployee := Employee{
-		User:      kevinUser,
-		Title:     "Partner",
-		FirstName: "Kevin",
-		LastName:  "Koenitzer",
-	}
-	davidUser := User{
-		Username: "kevinK",
-		Email:    "kevin@snowpack-data.com",
-		IsAdmin:  false,
-		Role:     UserRoleStaff.String(),
-	}
-	davidEmployee := Employee{
-		User:      davidUser,
-		Title:     "Partner",
-		FirstName: "David",
-		LastName:  "Shore",
-	}
+	_ = a.DB.Create(&users)
 
-	// Create Accounts for Nate & Kevin
-	_ = a.DB.Create([]Employee{nateEmployee, kevinEmployee, davidEmployee})
-	_ = a.DB.Create([]User{nateUser, kevinUser, davidUser})
+	employees := []Employee{
+		Employee{
+			User:      users[0],
+			Title:     "Partner",
+			FirstName: "Nate",
+			LastName:  "Robinson",
+		},
+		Employee{
+			User:      users[1],
+			Title:     "Partner",
+			FirstName: "Kevin",
+			LastName:  "Koenitzer",
+		},
+		Employee{
+			User:      users[2],
+			Title:     "Partner",
+			FirstName: "David",
+			LastName:  "Shore",
+		},
+	}
+	_ = a.DB.Create(&employees)
 
 	// Create initial Company for Snowpack
 	snowpack := Account{
@@ -61,8 +64,8 @@ func (a *App) SeedDatabase() {
 		LegalName: "Snowpack Data, LLC",
 		Email:     "billing@snowpack-data.com",
 		Website:   "https://snowpack-data.com",
-		Admin:     nateUser,
-		Clients:   []User{nateUser, kevinUser, davidUser},
+		Admin:     users[0],
+		Clients:   users,
 	}
 	_ = a.DB.Create(&snowpack)
 

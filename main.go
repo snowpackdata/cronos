@@ -3,6 +3,9 @@ package main
 func main() {
 	a := &App{}
 	a.Initialize()
-	a.migrate()
-	a.SeedDatabase()
+
+	// Only want to seed and migrate on the initial build
+	// a.migrate()
+	// a.SeedDatabase()
+
 }
