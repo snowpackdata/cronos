@@ -1,9 +1,9 @@
 package cronos
 
 import (
-	jwt "github.com/dgrijalva/jwt-go"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 	"log"
 	"os"
@@ -39,7 +39,7 @@ const (
 	AccountTypeInternal AccountType = "ACCOUNT_TYPE_INTERNAL"
 
 	RateTypeInternalBillable         RateType = "RATE_TYPE_INTERNAL_CLIENT_NON_BILLABLE"
-	RateTypeInternalNonBillable      RateType = "RATE_TYPE_INTERNAL_CLIENT_NON_BILLABLE"
+	RateTypeInternalNonBillable      RateType = "RATE_TYPE_INTERNAL_CLIENT_BILLABLE"
 	RateTypeInternalAdminBillable    RateType = "RATE_TYPE_INTERNAL_ADMINISTRATIVE"
 	RateTypeInternalAdminNonBillable RateType = "RATE_TYPE_INTERNAL_ADMINISTRATIVE_NON_BILLABLE"
 	RateTypeExternalBillable         RateType = "RATE_TYPE_EXTERNAL_CLIENT_BILLABLE"
@@ -51,17 +51,10 @@ type User struct {
 	// User is the generic user object for anyone accessing the application
 	gorm.Model
 	Email     string `gorm:"unique" json:"email"`
-	Password  string `json:"password"`
+	Password  string `json:"-"`
 	IsAdmin   bool   `json:"is_admin"`
 	Role      string `json:"role"`
 	AccountID uint   `json:"account_id"`
-}
-
-// Token is a non-persistent object that is used to store the JWT token
-type Token struct {
-	UserID uint
-	Email  string
-	*jwt.StandardClaims
 }
 
 type Employee struct {
@@ -132,34 +125,41 @@ type Project struct {
 
 type BillingCode struct {
 	gorm.Model
-	Name        string    `json:"name"`
-	RateType    string    `json:"type"`
-	Category    string    `json:"category"`
-	Code        string    `gorm:"unique" json:"code"`
-	RoundedTo   int       `gorm:"default:15" json:"rounded_to"`
-	ProjectID   uint      `json:"project"`
-	ActiveStart time.Time `json:"active_start"`
-	ActiveEnd   time.Time `json:"active_end"`
-	Internal    bool      `json:"internal"`
-	RateID      uint      `json:"rate_id"`
-	Rate        Rate      `json:"rate"`
-	Entries     []Entry   `json:"entries"`
+	Name           string    `json:"name"`
+	RateType       string    `json:"type"`
+	Category       string    `json:"category"`
+	Code           string    `gorm:"unique" json:"code"`
+	RoundedTo      int       `gorm:"default:15" json:"rounded_to"`
+	ProjectID      uint      `json:"project"`
+	ActiveStart    time.Time `json:"active_start"`
+	ActiveEnd      time.Time `json:"active_end"`
+	RateID         uint      `json:"rate_id"`
+	Rate           Rate      `json:"rate"`
+	InternalRateID uint      `json:"internal_rate_id"`
+	InternalRate   Rate      `json:"internal_rate"`
+	Entries        []Entry   `json:"entries"`
 }
 type Entry struct {
 	gorm.Model
-	ProjectID     uint        `json:"project_id"`
-	Project       Project     `json:"project"`
+	ProjectID     uint        `json:"project_id"` // Can remove these, unnecessary with billing code
+	Project       Project     `json:"project"`    // Can remove these, unnecessary with billing code
+	Notes         string      `gorm:"type:varchar(2048)" json:"notes"`
 	EmployeeID    uint        `json:"employee_id"`
 	Employee      Employee    `json:"employee"`
 	BillingCodeID uint        `json:"billing_code_id"`
 	BillingCode   BillingCode `json:"billing_code"`
-	Start         time.Time   `json:"start_date"`
-	End           time.Time   `json:"end_date"`
+	Start         time.Time   `json:"start"`
+	End           time.Time   `json:"end"`
 	Internal      bool        `json:"internal"`
 	LinkedEntryID uint        `json:"linked_entry_id"`
-	LinkedEntry   *Entry      `json:"linked_period"`
+	LinkedEntry   *Entry      `json:"-"`
 	JournalID     uint        `json:"journal_id"`
 	Journal       Journal     `json:"journal"`
+}
+
+func (e *Entry) AfterDelete(tx *gorm.DB) (err error) {
+	tx.Clauses(clause.Returning{}).Where("linked_entry_id = ? and delete_at is null", e.ID).Update("deleted_at", gorm.Expr("NOW()"))
+	return
 }
 
 // Journal is a preemptive object that we can use to split work across separate accounting Journals,
@@ -175,7 +175,7 @@ type Journal struct {
 
 // Duration finds the length of an Entry as a duration object
 func (e *Entry) Duration() time.Duration {
-	duration := e.Start.Sub(e.End)
+	duration := e.End.Sub(e.Start)
 	return duration
 }
 
@@ -216,7 +216,7 @@ func (a *App) Initialize() {
 }
 
 // Calling the Migrate
-func (a *App) migrate() {
+func (a *App) Migrate() {
 	// Migrate the schema
 	_ = a.DB.AutoMigrate(&User{})
 	_ = a.DB.AutoMigrate(&Employee{})
@@ -227,4 +227,45 @@ func (a *App) migrate() {
 	_ = a.DB.AutoMigrate(&Entry{})
 	_ = a.DB.AutoMigrate(&BillingCode{})
 	_ = a.DB.AutoMigrate(&Journal{})
+}
+
+type ApiEntry struct {
+	EntryID        uint      `json:"entry_id"`
+	ProjectID      uint      `json:"project_id"`
+	BillingCodeID  uint      `json:"billing_code_id"`
+	BillingCode    string    `json:"billing_code"`
+	Start          time.Time `json:"start"`
+	End            time.Time `json:"end"`
+	Notes          string    `json:"notes"`
+	StartDate      string    `json:"start_date"`
+	StartHour      int       `json:"start_hour"`
+	StartMinute    int       `json:"start_minute"`
+	EndDate        string    `json:"end_date"`
+	EndHour        int       `json:"end_hour"`
+	EndMinute      int       `json:"end_minute"`
+	DurationHours  float64   `json:"duration_hours"`
+	StartDayOfWeek string    `json:"start_day_of_week"`
+	StartIndex     float64   `json:"start_index"`
+}
+
+func (e *Entry) GetAPIEntry() ApiEntry {
+	apiEntry := ApiEntry{
+		EntryID:        e.ID,
+		ProjectID:      e.ProjectID,
+		BillingCodeID:  e.BillingCodeID,
+		BillingCode:    e.BillingCode.Code,
+		Start:          e.Start,
+		End:            e.End,
+		Notes:          e.Notes,
+		StartDate:      e.Start.Format("2006-01-02"),
+		StartHour:      e.Start.Hour(),
+		StartMinute:    e.Start.Minute(),
+		EndDate:        e.End.Format("2006-01-02"),
+		EndHour:        e.End.Hour(),
+		EndMinute:      e.End.Minute(),
+		DurationHours:  e.Duration().Hours(),
+		StartDayOfWeek: e.Start.Weekday().String(),
+		StartIndex:     float64(e.Start.Hour()) + (float64(e.Start.Minute()) / 60.0),
+	}
+	return apiEntry
 }

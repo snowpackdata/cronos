@@ -13,7 +13,7 @@ import (
 type EmailType string
 
 const (
-	EmailTemplateFolder               = "templates/emails"
+	EmailTemplateFolder               = "./templates/emails"
 	EmailTypeRegisterClient EmailType = "register_client.html"
 	EmailTypeRegisterStaff  EmailType = "register_staff.html"
 	EmailTypeResetPassword  EmailType = "reset_password.html"
