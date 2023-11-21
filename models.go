@@ -1,6 +1,10 @@
 package cronos
 
 import (
+	"fmt"
+	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
+	"gorm.io/driver/postgres"
+	_ "gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -194,9 +198,9 @@ type App struct {
 	DB *gorm.DB
 }
 
-// Initialize allows us to initialize our application and connect to the database
+// InitializeSQLite allows us to initialize our application and connect to the local database
 // This handler will hold on to our database operations throughout the lifetime of the application
-func (a *App) Initialize() {
+func (a *App) InitializeSQLite() {
 	newLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 		logger.Config{
@@ -211,6 +215,49 @@ func (a *App) Initialize() {
 	db, err := gorm.Open(sqlite.Open("cronos.db"), &gorm.Config{Logger: newLogger})
 	if err != nil {
 		panic("failed to connect database")
+	}
+	a.DB = db
+}
+
+// InitializeLocal allows us to initialize our application and connect to the cloud database
+func (a *App) InitializeLocal(user, password, connection, database string) {
+	newLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
+		logger.Config{
+			SlowThreshold:             time.Second, // Slow SQL threshold
+			LogLevel:                  logger.Info, // Log level
+			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
+			ParameterizedQueries:      true,        // Don't include params in the SQL log
+			Colorful:                  true,        // Disable color
+		},
+	)
+	port := "3306"
+	dbURI := fmt.Sprintf("host=127.0.0.1 user=%s password=%s port=%s database=%s sslmode=disable", user, password, port, database)
+	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{Logger: newLogger})
+
+	if err != nil {
+		fmt.Println(err)
+	}
+	a.DB = db
+}
+
+// InitializeCloud allows us to initalize a connection to the cloud database
+// while on google app engine
+func (a *App) InitializeCloud(user, password, database, connection string) {
+	newLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
+		logger.Config{
+			SlowThreshold:             time.Second, // Slow SQL threshold
+			LogLevel:                  logger.Info, // Log level
+			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
+			ParameterizedQueries:      true,        // Don't include params in the SQL log
+			Colorful:                  true,        // Disable color
+		},
+	)
+	dbURI := fmt.Sprintf("%s:%s@unix(%s)/%s?parseTime=true", user, password, connection, database)
+	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{Logger: newLogger})
+	if err != nil {
+		fmt.Println(err)
 	}
 	a.DB = db
 }
