@@ -3,7 +3,6 @@ module github.com/snowpackdata/cronos
 go 1.21.3
 
 require (
-	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/sendgrid/sendgrid-go v3.13.0+incompatible
 	gorm.io/driver/sqlite v1.5.4
