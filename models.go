@@ -252,7 +252,7 @@ func (a *App) InitializeCloud(user, password, database, connection string) {
 			Colorful:                  true,        // Disable color
 		},
 	)
-	dbURI := fmt.Sprintf("host=/cloudsql/%s user=%s password=%s dbname=%s sslmode=disable", connection, user, password, database)
+	dbURI := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true", user, password, "172.17.0.1", "5432", database)
 	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{
 		Logger:                                   newLogger,
 		DisableForeignKeyConstraintWhenMigrating: true})
