@@ -93,8 +93,6 @@ type Account struct {
 	LegalName string    `gorm:"unique" json:"legal_name"`
 	Email     string    `json:"email"`
 	Website   string    `json:"website"`
-	Admin     User      `json:"admin"`
-	AdminID   uint      `json:"admin_id"`
 	Clients   []User    `json:"clients"`
 	Projects  []Project `json:"projects"`
 }
@@ -254,8 +252,11 @@ func (a *App) InitializeCloud(user, password, database, connection string) {
 			Colorful:                  true,        // Disable color
 		},
 	)
-	dbURI := fmt.Sprintf("%s:%s@unix(%s)/%s?parseTime=true", user, password, connection, database)
-	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{Logger: newLogger})
+	dbURI := fmt.Sprintf("host=/cloudsql/%s user=%s password=%s dbname=%s sslmode=disable", connection, user, password, database)
+	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{
+		Logger:                                   newLogger,
+		DisableForeignKeyConstraintWhenMigrating: true})
+
 	if err != nil {
 		fmt.Println(err)
 	}

@@ -44,7 +44,7 @@ func (a *App) SeedDatabase() {
 			FirstName: "Nate",
 			LastName:  "Robinson",
 			IsActive:  true,
-			StartDate: time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC),
+			StartDate: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		Employee{
 			User:      users[1],
@@ -52,7 +52,7 @@ func (a *App) SeedDatabase() {
 			FirstName: "Kevin",
 			LastName:  "Koenitzer",
 			IsActive:  true,
-			StartDate: time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC),
+			StartDate: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		Employee{
 			User:      users[2],
@@ -60,7 +60,7 @@ func (a *App) SeedDatabase() {
 			FirstName: "David",
 			LastName:  "Shore",
 			IsActive:  true,
-			StartDate: time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC),
+			StartDate: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
 	_ = a.DB.Create(&employees)
@@ -72,127 +72,9 @@ func (a *App) SeedDatabase() {
 		LegalName: "Snowpack Data, LLC",
 		Email:     "billing@snowpack-data.com",
 		Website:   "https://snowpack-data.com",
-		Admin:     users[0],
 		Clients:   users,
 	}
 	_ = a.DB.Create(&snowpack)
-
-	// Create initial set of internal rates
-	snowpackRates := []Rate{
-		Rate{
-			Name:         "Partner Standard",
-			Amount:       250.00,
-			ActiveFrom:   time.Now(),
-			ActiveTo:     time.Now().AddDate(2, 0, 0),
-			InternalOnly: false,
-		},
-		Rate{
-			Name:         "Partner Discounted",
-			Amount:       225.00,
-			ActiveFrom:   time.Now(),
-			ActiveTo:     time.Now().AddDate(2, 0, 0),
-			InternalOnly: false,
-		},
-		Rate{
-			Name:         "Staff Standard",
-			Amount:       175.00,
-			ActiveFrom:   time.Now(),
-			ActiveTo:     time.Now().AddDate(2, 0, 0),
-			InternalOnly: false,
-		},
-		Rate{
-			Name:         "Staff Discounted",
-			Amount:       125.00,
-			ActiveFrom:   time.Now(),
-			ActiveTo:     time.Now().AddDate(2, 0, 0),
-			InternalOnly: false,
-		},
-	}
-	_ = a.DB.Create(&snowpackRates)
-	// Create initial set of internal billing codes
-	snowpackBillingCodes := []BillingCode{
-		BillingCode{
-			Name:         "Admin Non-Billable - Partner",
-			RateType:     RateTypeInternalAdminNonBillable.String(),
-			Category:     "Administrative",
-			Code:         "ADMIN_0000",
-			RoundedTo:    15,
-			ActiveStart:  time.Now(),
-			ActiveEnd:    time.Now().AddDate(2, 0, 0),
-			Rate:         snowpackRates[0],
-			InternalRate: snowpackRates[0],
-		},
-		BillingCode{
-			Name:         "Admin Non-Billable - Staff",
-			RateType:     RateTypeInternalAdminNonBillable.String(),
-			Category:     "Administrative",
-			Code:         "ADMIN_0001",
-			RoundedTo:    15,
-			ActiveStart:  time.Now(),
-			ActiveEnd:    time.Now().AddDate(2, 0, 0),
-			Rate:         snowpackRates[2],
-			InternalRate: snowpackRates[2],
-		},
-		BillingCode{
-			Name:         "Project Work - Partner",
-			RateType:     RateTypeInternalProject.String(),
-			Category:     "Project Work",
-			Code:         "PROJ_0000",
-			RoundedTo:    15,
-			ActiveStart:  time.Now(),
-			ActiveEnd:    time.Now().AddDate(2, 0, 0),
-			Rate:         snowpackRates[0],
-			InternalRate: snowpackRates[0],
-		},
-		BillingCode{
-			Name:         "Project Work - Staff",
-			RateType:     RateTypeInternalProject.String(),
-			Category:     "Project Work",
-			Code:         "PROJ_0001",
-			RoundedTo:    15,
-			ActiveStart:  time.Now(),
-			ActiveEnd:    time.Now().AddDate(2, 0, 0),
-			Rate:         snowpackRates[2],
-			InternalRate: snowpackRates[2],
-		},
-	}
-	_ = a.DB.Create(&snowpackBillingCodes)
-
-	// Create initial set of internal projects
-	snowpackProjects := []Project{
-		Project{
-			Name:          "Snowpack Website",
-			Account:       snowpack,
-			ActiveStart:   time.Now(),
-			ActiveEnd:     time.Now().AddDate(2, 0, 0),
-			BudgetHours:   0,
-			BudgetDollars: 0,
-			Internal:      true,
-			BillingCodes:  []BillingCode{snowpackBillingCodes[2], snowpackBillingCodes[3]},
-		},
-		Project{
-			Name:          "Project Cronos",
-			Account:       snowpack,
-			ActiveStart:   time.Now(),
-			ActiveEnd:     time.Now().AddDate(2, 0, 0),
-			BudgetHours:   0,
-			BudgetDollars: 10000,
-			Internal:      true,
-			BillingCodes:  []BillingCode{snowpackBillingCodes[2], snowpackBillingCodes[3]},
-		},
-		Project{
-			Name:          "Snowpack Admin",
-			Account:       snowpack,
-			ActiveStart:   time.Now(),
-			ActiveEnd:     time.Now().AddDate(2, 0, 0),
-			BudgetHours:   0,
-			BudgetDollars: 0,
-			Internal:      true,
-			BillingCodes:  []BillingCode{snowpackBillingCodes[0], snowpackBillingCodes[1]},
-		},
-	}
-	_ = a.DB.Create(&snowpackProjects)
-	snowpack.Projects = snowpackProjects
 	a.DB.Save(&snowpack)
 
 }
