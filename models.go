@@ -241,7 +241,7 @@ func (a *App) InitializeLocal(user, password, connection, database string) {
 
 // InitializeCloud allows us to initalize a connection to the cloud database
 // while on google app engine
-func (a *App) InitializeCloud(user, password, database, connection string) {
+func (a *App) InitializeCloud(dbURI string) {
 	newLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 		logger.Config{
@@ -252,8 +252,6 @@ func (a *App) InitializeCloud(user, password, database, connection string) {
 			Colorful:                  true,        // Disable color
 		},
 	)
-	socketPath := "/cloudsql/snowpack-368423:us-central1:cronos/.s.PGSQL.5432"
-	dbURI := fmt.Sprintf("user=%s password=%s database=%s host=%s", user, password, database, socketPath)
 	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{
 		Logger:                                   newLogger,
 		DisableForeignKeyConstraintWhenMigrating: true})
