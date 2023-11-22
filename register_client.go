@@ -26,15 +26,11 @@ func (a *App) RegisterClient(email string, accountId uint) error {
 func (a *App) RegisterStaff(email string, accountId uint) error {
 	// Create a blank user and client if they don't already exist
 	user := User{Email: email}
-	if a.DB.Model(&user).Where("email = ?", email).Updates(&user).RowsAffected == 0 {
-		a.DB.Create(&user)
-		a.DB.Create(&Employee{User: user})
-	} else {
-		return ErrUserAlreadyExists
-	}
+	a.DB.Save(&user)
+	a.DB.Save(&Employee{User: user})
 	user.Password = DEFAULT_PASSWORD
 	user.Role = UserRoleStaff.String()
 	user.AccountID = accountId
-	a.DB.Save(user)
+	a.DB.Save(&user)
 	return a.EmailFromAdmin(EmailTypeRegisterStaff, email)
 }

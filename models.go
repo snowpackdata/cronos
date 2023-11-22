@@ -153,7 +153,7 @@ type Entry struct {
 	Start         time.Time   `json:"start"`
 	End           time.Time   `json:"end"`
 	Internal      bool        `json:"internal"`
-	LinkedEntryID uint        `json:"linked_entry_id"`
+	LinkedEntryID *uint       `json:"linked_entry_id"`
 	LinkedEntry   *Entry      `json:"-"`
 	JournalID     uint        `json:"journal_id"`
 	Journal       Journal     `json:"journal"`
@@ -230,7 +230,7 @@ func (a *App) InitializeLocal(user, password, connection, database string) {
 		},
 	)
 	port := "3306"
-	dbURI := fmt.Sprintf("host=127.0.0.1 user=%s password=%s port=%s database=%s sslmode=disable", user, password, port, database)
+	dbURI := fmt.Sprintf("host=127.0.0.1 user=%s password=%s port=%s database=%s sslmode=disable TimeZone=UTC", user, password, port, database)
 	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{Logger: newLogger})
 
 	if err != nil {
@@ -239,7 +239,7 @@ func (a *App) InitializeLocal(user, password, connection, database string) {
 	a.DB = db
 }
 
-// InitializeCloud allows us to initalize a connection to the cloud database
+// InitializeCloud allows us to initialize a connection to the cloud database
 // while on google app engine
 func (a *App) InitializeCloud(dbURI string) {
 	newLogger := logger.New(
@@ -301,18 +301,18 @@ func (e *Entry) GetAPIEntry() ApiEntry {
 		ProjectID:      e.ProjectID,
 		BillingCodeID:  e.BillingCodeID,
 		BillingCode:    e.BillingCode.Code,
-		Start:          e.Start,
-		End:            e.End,
+		Start:          e.Start.In(time.UTC),
+		End:            e.End.In(time.UTC),
 		Notes:          e.Notes,
-		StartDate:      e.Start.Format("2006-01-02"),
-		StartHour:      e.Start.Hour(),
+		StartDate:      e.Start.In(time.UTC).Format("2006-01-02"),
+		StartHour:      e.Start.In(time.UTC).Hour(),
 		StartMinute:    e.Start.Minute(),
-		EndDate:        e.End.Format("2006-01-02"),
-		EndHour:        e.End.Hour(),
+		EndDate:        e.End.In(time.UTC).Format("2006-01-02"),
+		EndHour:        e.End.In(time.UTC).Hour(),
 		EndMinute:      e.End.Minute(),
 		DurationHours:  e.Duration().Hours(),
-		StartDayOfWeek: e.Start.Weekday().String(),
-		StartIndex:     float64(e.Start.Hour()) + (float64(e.Start.Minute()) / 60.0),
+		StartDayOfWeek: e.Start.In(time.UTC).Weekday().String(),
+		StartIndex:     float64(e.Start.In(time.UTC).Hour()) + (float64(e.Start.Minute()) / 60.0),
 	}
 	return apiEntry
 }
