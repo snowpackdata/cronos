@@ -26,9 +26,33 @@ func (s AccountType) String() string {
 	return string(s)
 }
 
+type BillingFrequency string
+
+func (s BillingFrequency) String() string {
+	return string(s)
+}
+
 type RateType string
 
 func (s RateType) String() string {
+	return string(s)
+}
+
+type EntryState string
+
+func (s EntryState) String() string {
+	return string(s)
+}
+
+type InvoiceState string
+
+func (s InvoiceState) String() string {
+	return string(s)
+}
+
+type InvoiceType string
+
+func (s InvoiceType) String() string {
 	return string(s)
 }
 
@@ -49,6 +73,26 @@ const (
 	RateTypeExternalBillable         RateType = "RATE_TYPE_EXTERNAL_CLIENT_BILLABLE"
 	RateTypeExternalNonBillable      RateType = "RATE_TYPE_EXTERNAL_CLIENT_NON_BILLABLE"
 	RateTypeInternalProject          RateType = "RATE_TYPE_INTERNAL_PROJECT"
+
+	BillingFrequencyMonthly BillingFrequency = "BILLING_TYPE_MONTHLY"
+	BillingFrequencyProject BillingFrequency = "BILLING_TYPE_PROJECT"
+
+	EntryStateUnaffiliated EntryState = "ENTRY_STATE_UNAFFILIATED"
+	EntryStateDraft        EntryState = "ENTRY_STATE_DRAFT"
+	EntryStatePending      EntryState = "ENTRY_STATE_PENDING"
+	EntryStateApproved     EntryState = "ENTRY_STATE_APPROVED"
+	EntryStatePaid         EntryState = "ENTRY_STATE_PAID"
+	EntryStateVoid         EntryState = "ENTRY_STATE_VOID"
+
+	InvoiceStateDraft    InvoiceState = "INVOICE_STATE_DRAFT"
+	InvoiceStatePending  InvoiceState = "INVOICE_STATE_PENDING"
+	InvoiceStateApproved InvoiceState = "INVOICE_STATE_APPROVED"
+	InvoiceStateSent     InvoiceState = "INVOICE_STATE_SENT"
+	InvoiceStatePaid     InvoiceState = "INVOICE_STATE_PAID"
+	InvoiceStateVoid     InvoiceState = "INVOICE_STATE_VOID"
+
+	InvoiceTypeAR InvoiceType = "INVOICE_TYPE_ACCOUNTS_RECEIVABLE"
+	InvoiceTypeAP InvoiceType = "INVOICE_TYPE_ACCOUNTS_PAYABLE"
 )
 
 type User struct {
@@ -113,16 +157,18 @@ type Project struct {
 	// often with specific time period. A rate will have a specific billing code
 	// associated with the project.
 	gorm.Model
-	Name          string        `json:"name"`
-	AccountID     uint          `json:"account_id"`
-	Account       Account       `json:"account"`
-	ActiveStart   time.Time     `json:"active_start"`
-	ActiveEnd     time.Time     `json:"active_end"`
-	BudgetHours   int           `json:"budget_hours"`
-	BudgetDollars int           `json:"budget_dollars"`
-	Internal      bool          `json:"internal"`
-	BillingCodes  []BillingCode `json:"billing_codes"`
-	Entries       []Entry       `json:"entries"`
+	Name             string        `json:"name"`
+	AccountID        uint          `json:"account_id"`
+	Account          Account       `json:"account"`
+	ActiveStart      time.Time     `json:"active_start"`
+	ActiveEnd        time.Time     `json:"active_end"`
+	BudgetHours      int           `json:"budget_hours"`
+	BudgetDollars    int           `json:"budget_dollars"`
+	Internal         bool          `json:"internal"`
+	BillingCodes     []BillingCode `json:"billing_codes"`
+	Entries          []Entry       `json:"entries"`
+	Invoices         []Invoice     `json:"invoices"`
+	BillingFrequency string        `json:"billing_frequency"`
 }
 
 type BillingCode struct {
@@ -157,6 +203,9 @@ type Entry struct {
 	LinkedEntry   *Entry      `json:"-"`
 	JournalID     uint        `json:"journal_id"`
 	Journal       Journal     `json:"journal"`
+	Invoice       Invoice     `json:"invoice"`
+	InvoiceID     uint        `json:"invoice_id"`
+	State         string      `json:"state"`
 }
 
 func (e *Entry) AfterDelete(tx *gorm.DB) (err error) {
@@ -164,8 +213,25 @@ func (e *Entry) AfterDelete(tx *gorm.DB) (err error) {
 	return
 }
 
+// Invoice is a record that is used to track the status of a billable invoice either as AR/AP.
+// An invoice will have a collection of entries that are to be billed to a client as line items. While we use
+// the term Invoice, these can mean either an invoice or bill in relationship to Snowpack.
+type Invoice struct {
+	gorm.Model
+	Name        string    `json:"name"`
+	ProjectID   uint      `json:"project_id"`
+	Project     Project   `json:"project"`
+	PeriodStart time.Time `json:"period_start"`
+	PeriodEnd   time.Time `json:"period_end"`
+	Entries     []Entry   `json:"entries"`
+	SentAt      time.Time `json:"sent_at"`
+	ClosedAt    time.Time `json:"closed_at"`
+	State       string    `json:"state"`
+	Type        string    `json:"type"`
+}
+
 // Journal is a preemptive object that we can use to split work across separate accounting Journals,
-// this may refer specifically to internal vs external billables in the short term, however we may add
+// this may refer specifically to internal vs external billable in the short term, however we may add
 // additional journals in the future. This facilitates simple reporting and accounting at the ledger level.
 type Journal struct {
 	gorm.Model
@@ -182,12 +248,14 @@ func (e *Entry) Duration() time.Duration {
 }
 
 // Fee finds the applicable fee in USD for a particular entry rounded to the given minute
-func (e *Entry) Fee() float64 {
+func (a *App) GetFee(e *Entry) float64 {
+	var billingCode BillingCode
+	a.DB.Preload("Rate").Where("id = ?", e.BillingCodeID).First(&billingCode)
 	durationMinutes := e.Duration().Minutes()
-	roundingFactor := float64(e.BillingCode.RoundedTo) / HOUR
+	roundingFactor := float64(billingCode.RoundedTo) / HOUR
 	hours := float64(durationMinutes) / HOUR
 	roundedHours := float64(int(hours/roundingFactor)) * roundingFactor
-	fee := roundedHours * e.BillingCode.Rate.Amount
+	fee := roundedHours * billingCode.Rate.Amount
 	return fee
 }
 
@@ -274,6 +342,7 @@ func (a *App) Migrate() {
 	_ = a.DB.AutoMigrate(&Entry{})
 	_ = a.DB.AutoMigrate(&BillingCode{})
 	_ = a.DB.AutoMigrate(&Journal{})
+	_ = a.DB.AutoMigrate(&Invoice{})
 }
 
 type ApiEntry struct {
@@ -315,4 +384,71 @@ func (e *Entry) GetAPIEntry() ApiEntry {
 		StartIndex:     float64(e.Start.In(time.UTC).Hour()) + (float64(e.Start.Minute()) / 60.0),
 	}
 	return apiEntry
+}
+
+type DraftEntry struct {
+	EntryID       uint    `json:"entry_id"`
+	ProjectID     uint    `json:"project_id"`
+	BillingCodeID uint    `json:"billing_code_id"`
+	BillingCode   string  `json:"billing_code"`
+	Notes         string  `json:"notes"`
+	StartDate     string  `json:"start_date"`
+	DurationHours float64 `json:"duration_hours"`
+	Fee           float64 `json:"fee"`
+	EmployeeName  string  `json:"user_name"`
+	EmployeeRole  string  `json:"user_role"`
+}
+
+func (a *App) GetDraftEntry(e *Entry) DraftEntry {
+	var employee Employee
+	a.DB.Where("id = ?", e.EmployeeID).First(&employee)
+	var billingCode BillingCode
+	a.DB.Where("id = ?", e.BillingCodeID).First(&billingCode)
+	draftEntry := DraftEntry{
+		EntryID:       e.ID,
+		ProjectID:     e.ProjectID,
+		BillingCodeID: e.BillingCodeID,
+		BillingCode:   billingCode.Code,
+		Notes:         e.Notes,
+		StartDate:     e.Start.In(time.UTC).Format("January 2"),
+		DurationHours: e.Duration().Hours(),
+		Fee:           a.GetFee(e),
+		EmployeeName:  employee.FirstName + " " + employee.LastName,
+		EmployeeRole:  employee.Title,
+	}
+	return draftEntry
+}
+
+type DraftInvoice struct {
+	InvoiceID   uint         `json:"invoice_id"`
+	InvoiceName string       `json:"invoice_name"`
+	ProjectID   uint         `json:"project_id"`
+	ProjectName string       `json:"project_name"`
+	PeriodStart string       `json:"period_start"`
+	PeriodEnd   string       `json:"period_end"`
+	LineItems   []DraftEntry `json:"line_items"`
+	TotalHours  float64      `json:"total_hours"`
+	TotalFees   float64      `json:"total_fees"`
+}
+
+func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
+	draftInvoice := DraftInvoice{
+		InvoiceID:   i.ID,
+		InvoiceName: i.Name,
+		ProjectID:   i.ProjectID,
+		ProjectName: i.Project.Name,
+		PeriodStart: i.PeriodStart.In(time.UTC).Format("01/02/2006"),
+		PeriodEnd:   i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
+	}
+	hourCounter := 0.0
+	feeCounter := 0.0
+	for _, entry := range i.Entries {
+		draftEntry := a.GetDraftEntry(&entry)
+		hourCounter += draftEntry.DurationHours
+		feeCounter += draftEntry.Fee
+		draftInvoice.LineItems = append(draftInvoice.LineItems, draftEntry)
+	}
+	draftInvoice.TotalHours = hourCounter
+	draftInvoice.TotalFees = feeCounter
+	return draftInvoice
 }
