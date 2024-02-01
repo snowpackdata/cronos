@@ -17,7 +17,9 @@ import (
 
 // App is used to initialize a database and hold our handler functions
 type App struct {
-	DB *gorm.DB
+	DB      *gorm.DB
+	Project string
+	Bucket  string
 }
 
 // InitializeSQLite allows us to initialize our application and connect to the local database
@@ -39,6 +41,8 @@ func (a *App) InitializeSQLite() {
 		panic("failed to connect database")
 	}
 	a.DB = db
+	a.Bucket = os.Getenv("GCS_BUCKET")
+	a.Project = os.Getenv("GCP_PROJECT")
 }
 
 // InitializeLocal allows us to initialize our application and connect to the cloud database
@@ -61,6 +65,8 @@ func (a *App) InitializeLocal(user, password, connection, database string) {
 		fmt.Println(err)
 	}
 	a.DB = db
+	a.Bucket = os.Getenv("GCS_BUCKET")
+	a.Project = os.Getenv("GCP_PROJECT")
 }
 
 // InitializeCloud allows us to initialize a connection to the cloud database
@@ -84,13 +90,11 @@ func (a *App) InitializeCloud(dbURI string) {
 		fmt.Println(err)
 	}
 	a.DB = db
+	a.Bucket = os.Getenv("GCS_BUCKET")
+	a.Project = os.Getenv("GCP_PROJECT")
 }
 
-func (a *App) InitializeStorageClient(projectID, clientID string) *storage.Client {
-	err := os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "gcs-service-account.json")
-	if err != nil {
-		fmt.Println(err)
-	}
+func (a *App) InitializeStorageClient(projectID, bucketName string) *storage.Client {
 	ctx := context.Background()
 	storageClient, err := storage.NewClient(ctx)
 	if err != nil {

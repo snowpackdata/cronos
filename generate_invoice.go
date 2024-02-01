@@ -110,11 +110,11 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) string {
 	pdf.Ln(lineBreak)
 	pdf.SetX(safeAreaW/2 + 30)
 	pdf.Cell(invoiceDetailW, lineHeight, "Issued Date:")
-	pdf.Cell(invoiceDetailW, lineHeight, invoice.SentAt.Format("01/02/2006"))
+	pdf.Cell(invoiceDetailW, lineHeight, invoice.SentAt.UTC().Format("01/02/2006"))
 	pdf.Ln(lineBreak)
 	pdf.SetX(safeAreaW/2 + 30)
 	pdf.Cell(invoiceDetailW, lineHeight, "Due Date:")
-	pdf.Cell(invoiceDetailW, lineHeight, invoice.DueAt.Format("01/02/2006"))
+	pdf.Cell(invoiceDetailW, lineHeight, invoice.DueAt.UTC().Format("01/02/2006"))
 	pdf.Ln(lineBreak)
 
 	// Draw the table

@@ -75,13 +75,12 @@ const (
 
 	EntryStateUnaffiliated EntryState = "ENTRY_STATE_UNAFFILIATED"
 	EntryStateDraft        EntryState = "ENTRY_STATE_DRAFT"
-	EntryStatePending      EntryState = "ENTRY_STATE_PENDING"
 	EntryStateApproved     EntryState = "ENTRY_STATE_APPROVED"
+	EntryStateSent         EntryState = "ENTRY_STATE_SENT"
 	EntryStatePaid         EntryState = "ENTRY_STATE_PAID"
 	EntryStateVoid         EntryState = "ENTRY_STATE_VOID"
 
 	InvoiceStateDraft    InvoiceState = "INVOICE_STATE_DRAFT"
-	InvoiceStatePending  InvoiceState = "INVOICE_STATE_PENDING"
 	InvoiceStateApproved InvoiceState = "INVOICE_STATE_APPROVED"
 	InvoiceStateSent     InvoiceState = "INVOICE_STATE_SENT"
 	InvoiceStatePaid     InvoiceState = "INVOICE_STATE_PAID"
@@ -232,7 +231,7 @@ type Invoice struct {
 	TotalFees        float64      `json:"total_fees"`
 	TotalAdjustments float64      `json:"total_adjustments"`
 	TotalAmount      float64      `json:"total_amount"`
-	GCSFile          string       `json:"gcs_file"`
+	GCSFile          string       `json:"file"`
 }
 
 // Adjustment
@@ -327,7 +326,7 @@ type invoiceEntry struct {
 func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItem {
 	var invoiceLineItems []InvoiceLineItem
 	var entries []Entry
-	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").Where("invoice_id = ?", i.ID).Find(&entries)
+	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").Where("invoice_id = ? AND state != ?", i.ID, EntryStateVoid.String()).Find(&entries)
 	for _, entry := range entries {
 		// If a line item exists for the billing code, add the hours to the line item
 		// otherwise create a new line item for the billing code
@@ -368,7 +367,7 @@ func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItem {
 func (a *App) GetInvoiceEntries(i *Invoice) []invoiceEntry {
 	var invoiceEntries []invoiceEntry
 	var entries []Entry
-	a.DB.Preload("BillingCode").Preload("Employee").Where("invoice_id = ?", i.ID).Order("start asc").Find(&entries)
+	a.DB.Preload("BillingCode").Preload("Employee").Where("invoice_id = ? and state != ?", i.ID, EntryStateVoid.String()).Order("start asc").Find(&entries)
 	for _, entry := range entries {
 		invoiceEntries = append(invoiceEntries, invoiceEntry{
 			dateString:     entry.Start.Format("01/02/2006"),
@@ -466,7 +465,7 @@ func (a *App) GetDraftEntry(e *Entry) DraftEntry {
 }
 
 type DraftInvoice struct {
-	InvoiceID    uint         `json:"invoice_id"`
+	InvoiceID    uint         `json:"ID"`
 	InvoiceName  string       `json:"invoice_name"`
 	ProjectID    uint         `json:"project_id"`
 	ProjectName  string       `json:"project_name"`
@@ -479,12 +478,13 @@ type DraftInvoice struct {
 }
 
 type AcceptedInvoice struct {
-	InvoiceID      uint              `json:"invoice_id"`
+	InvoiceID      uint              `json:"ID"`
 	InvoiceName    string            `json:"invoice_name"`
 	ProjectID      uint              `json:"project_id"`
 	ProjectName    string            `json:"project_name"`
 	PeriodStart    string            `json:"period_start"`
 	PeriodEnd      string            `json:"period_end"`
+	File           string            `json:"file"`
 	LineItemsCount int               `json:"line_items_count"`
 	TotalHours     float64           `json:"total_hours"`
 	TotalFees      float64           `json:"total_fees"`
@@ -492,7 +492,6 @@ type AcceptedInvoice struct {
 	SentAt         string            `json:"sent_at"`
 	DueAt          string            `json:"due_at"`
 	ClosedAt       string            `json:"closed_at"`
-	File           string            `json:"file"`
 	LineItems      []InvoiceLineItem `json:"line_items"`
 }
 
@@ -525,12 +524,12 @@ func (a *App) GetAcceptedInvoice(i *Invoice) AcceptedInvoice {
 		ProjectName:    i.Project.Name,
 		PeriodStart:    i.PeriodStart.In(time.UTC).Format("01/02/2006"),
 		PeriodEnd:      i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
+		File:           i.GCSFile,
 		LineItemsCount: len(i.Entries),
 		State:          i.State,
 		SentAt:         i.SentAt.In(time.UTC).Format("01/02/2006"),
 		DueAt:          i.DueAt.In(time.UTC).Format("01/02/2006"),
 		ClosedAt:       i.ClosedAt.In(time.UTC).Format("01/02/2006"),
-		File:           i.GCSFile,
 		TotalHours:     i.TotalHours,
 		TotalFees:      i.TotalFees,
 	}

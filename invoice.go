@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"time"
 )
@@ -22,59 +23,38 @@ var ErrEntryDateOutOfRange = errors.New("entry date is out of range for project"
 func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 	// We need a timestamp to determine the start and end of the month
 	startOfMonth := time.Date(creationDate.Year(), creationDate.Month(), 1, 0, 0, 0, 0, time.UTC)
-	endOfMonth := startOfMonth.AddDate(0, 1, 0).AddDate(0, 0, -1)
+	endOfMonth := startOfMonth.AddDate(0, 1, 0).Add(-time.Nanosecond)
 	// Retrieve the project from the database
 	var project Project
 	a.DB.Where("ID = ?", projectID).First(&project)
 	// next retrieve any currently pending invoices.
 	var invoices []Invoice
 	a.DB.Preload("Entries").Order("period_end desc").Where("project_id = ? AND state = ?", projectID, InvoiceStateDraft).Find(&invoices)
-	// By default we'll create the AP and AR invoices from the start of the current month to the end of the month
+	// By default we'll create the AP invoice from the start of the current month to the end of the month
 	var newARInvoice Invoice
-	var newAPInvoice Invoice
 	newARInvoice = Invoice{
-		Name:        project.Name + ": " + startOfMonth.Format("01/02/2006") + "-" + endOfMonth.Format("01/02/2006"),
+		Name:        project.Name + ": " + startOfMonth.Format("01.02.2006") + "-" + endOfMonth.Format("01.02.2006"),
 		ProjectID:   projectID,
 		PeriodStart: startOfMonth,
 		PeriodEnd:   endOfMonth,
 		State:       InvoiceStateDraft.String(),
 		Type:        InvoiceTypeAR.String(),
 	}
-	newAPInvoice = Invoice{
-		Name:        project.Name + " : " + startOfMonth.Format("01/02/2006") + " - " + endOfMonth.Format("01/02/2006"),
-		ProjectID:   projectID,
-		PeriodStart: startOfMonth,
-		PeriodEnd:   endOfMonth,
-		State:       InvoiceStateDraft.String(),
-		Type:        InvoiceTypeAR.String(),
-	}
-	// if there are no currently pending invoices then we'll update the start date to match the beginning of the project
-	// and then move on, this allows us to backdate entries if they are added after the first of the month
-	if len(invoices) == 0 {
-		newARInvoice.PeriodStart = project.ActiveStart
-	}
-	// if the projects are billed on a project basis, we'll update the end date to match the end of the project
+	// if the projects are billed on a project basis, we'll update the start and end date to match the project
 	if project.BillingFrequency == BillingFrequencyProject.String() {
+		newARInvoice.PeriodStart = project.ActiveStart
 		newARInvoice.PeriodEnd = project.ActiveEnd
-		newAPInvoice.PeriodEnd = project.ActiveEnd
 	}
-	// if there are currently pending invoices, we'll confirm that there are no overlaps between the previously created
-	// invoices and the new invoices. If there are overlaps, we'll generate an error and move on. Otherwise, we'll
+	// if there are currently other draft invoices, we'll confirm that there are no overlaps between the previously created
+	// invoices and the new invoices. If there are overlaps we will generate an error and move on. Otherwise, we'll
 	// move their state to pending along with associated entries.
 	for _, invoice := range invoices {
-		if invoice.PeriodEnd.After(newARInvoice.PeriodStart) {
+		if invoice.PeriodEnd.After(newARInvoice.PeriodStart) && (invoice.State != InvoiceStateDraft.String() || invoice.State != InvoiceStateVoid.String()) {
 			return ErrInvoiceOverlap
 		}
-		invoice.State = InvoiceStatePending.String()
-		for _, entry := range invoice.Entries {
-			entry.State = EntryStatePending.String()
-			a.DB.Save(&entry)
-		}
-		a.DB.Save(&invoice)
 	}
 	// If there are no errors, we'll create the new invoices and save them to the database
 	a.DB.Create(&newARInvoice)
-	a.DB.Create(&newAPInvoice)
 	return nil
 }
 
@@ -82,7 +62,7 @@ func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 func (a *App) ApproveInvoice(invoiceID uint) error {
 	var invoice Invoice
 	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
-	if invoice.State != InvoiceStatePending.String() {
+	if invoice.State != InvoiceStateDraft.String() {
 		return InvalidPriorState
 	}
 	invoice.State = InvoiceStateApproved.String()
@@ -139,6 +119,9 @@ func (a *App) VoidInvoice(invoiceID uint) error {
 // AssociateEntry associates an entry with the proper invoice. This function is called just after an entry is created
 // and associates it to the appropriate invoice based on the entry date and the AP/AR state.
 func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
+	if entry.Internal == true {
+		return nil
+	}
 	var project Project
 	a.DB.Where("ID = ?", projectID).First(&project)
 	// Ensure that the entry date is within the project active start and end dates
@@ -147,13 +130,7 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	}
 	// Retrieve the appropriate invoice
 	var eligibleInvoices []Invoice
-	var invoiceType string
-	if entry.Internal {
-		invoiceType = InvoiceTypeAP.String()
-	} else {
-		invoiceType = InvoiceTypeAR.String()
-	}
-	a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ?", projectID, invoiceType, entry.Start, entry.Start).Find(&eligibleInvoices)
+	a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
 
 	// If there are no eligible invoices, we'll create a new one
 	if len(eligibleInvoices) == 0 {
@@ -161,19 +138,16 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 		if err != nil {
 			return err
 		}
-		a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ?", projectID, invoiceType, entry.Start, entry.Start).Find(&eligibleInvoices)
+		a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
 	}
 	// We now need to provide a way to select the appropriate invoice if there are multiple. We'll do this via waterfall method.
 	// If there is a pending invoice we'll add it to that, allowing us to edit invoices before they are sent. Otherwise, we'll
 	// add it to the draft invoice. We are assuming that we cannot add entries to invoices that have already been approved or sent.
 	var invoice Invoice
 	for _, eligibleInvoice := range eligibleInvoices {
-		if eligibleInvoice.State == InvoiceStatePending.String() {
-			invoice = eligibleInvoice
-			break
-		}
 		if eligibleInvoice.State == InvoiceStateDraft.String() {
 			invoice = eligibleInvoice
+			break
 		}
 	}
 	if invoice.ID == 0 {
@@ -181,19 +155,17 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	} else {
 		entry.InvoiceID = invoice.ID
 		entry.State = EntryStateDraft.String()
-		return nil
 	}
+	a.DB.Save(&entry)
 	return nil
 }
 
 // SaveInvoiceToGCS saves the invoice to GCS
 func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
-	GCS_BUCKET := os.Getenv("GCS_BUCKET")
-	GCP_PROJECT := os.Getenv("GCP_PROJECT")
 	// Generate the invoice
 	localFilePath := a.GenerateInvoicePDF(invoice)
 	// Save the invoice to GCS
-	client := a.InitializeStorageClient(GCP_PROJECT, GCS_BUCKET)
+	client := a.InitializeStorageClient(a.Project, a.Bucket)
 	ctx := context.Background()
 	// Open local file
 	f, err := os.Open(localFilePath)
@@ -207,7 +179,7 @@ func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 		}
 	}(f)
 	// Create a bucket handle
-	bucket := client.Bucket(GCS_BUCKET)
+	bucket := client.Bucket(a.Bucket)
 	// Create a new object and write its contents to the bucket
 	filename := GenerateSecureFilename(invoice.GetInvoiceFilename()) + ".pdf"
 	objectName := "invoices/" + filename
@@ -229,7 +201,20 @@ func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 		return err
 	}
 	// save the public invoice URL to the database
-	invoice.GCSFile = "https://storage.googleapis.com/" + GCS_BUCKET + "/" + objectName
+	invoice.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
 	a.DB.Save(&invoice)
 	return nil
+}
+
+// BackfillEntriesForProject backfills entries to the invoice they belong on
+func (a *App) BackfillEntriesForProject(projectID string) {
+	var entries []Entry
+	a.DB.Where("project_id = ?", projectID).Find(&entries)
+	for i, _ := range entries {
+		err := a.AssociateEntry(&entries[i], entries[i].ProjectID)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+	return
 }
