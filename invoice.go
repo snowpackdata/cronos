@@ -4,9 +4,7 @@ import (
 	"cloud.google.com/go/storage"
 	"context"
 	"errors"
-	"io"
 	"log"
-	"os"
 	"time"
 )
 
@@ -162,44 +160,30 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 
 // SaveInvoiceToGCS saves the invoice to GCS
 func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
+	ctx := context.Background()
 	// Generate the invoice
-	localFilePath := a.GenerateInvoicePDF(invoice)
+	// The output must be stored as a list of bytes in-memory becasue of the readonly filesystem in GAE
+	pdfBytes := a.GenerateInvoicePDF(invoice)
 	// Save the invoice to GCS
 	client := a.InitializeStorageClient(a.Project, a.Bucket)
-	ctx := context.Background()
-	// Open local file
-	f, err := os.Open(localFilePath)
-	if err != nil {
-		return err
-	}
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
 
-		}
-	}(f)
 	// Create a bucket handle
 	bucket := client.Bucket(a.Bucket)
 	// Create a new object and write its contents to the bucket
 	filename := GenerateSecureFilename(invoice.GetInvoiceFilename()) + ".pdf"
 	objectName := "invoices/" + filename
-	wc := bucket.Object(objectName).NewWriter(ctx)
-	if _, err = io.Copy(wc, f); err != nil {
+	writer := bucket.Object(objectName).NewWriter(ctx)
+	if _, err := writer.Write(pdfBytes); err != nil {
 		return err
 	}
-	if err := wc.Close(); err != nil {
-		return err
-	}
+	writer.Close()
+
 	// Set the object to be publicly accessible
 	acl := bucket.Object(objectName).ACL()
 	if err := acl.Set(ctx, storage.AllUsers, storage.RoleReader); err != nil {
 		return err
 	}
 
-	// Delete the local file
-	if err := os.Remove(localFilePath); err != nil {
-		return err
-	}
 	// save the public invoice URL to the database
 	invoice.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
 	a.DB.Save(&invoice)

@@ -1,6 +1,7 @@
 package cronos
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/jung-kurt/gofpdf"
 	"strconv"
@@ -19,7 +20,7 @@ const marginX = 10.0
 const marginY = 20.0
 const gapY = 2.0
 
-func (a *App) GenerateInvoicePDF(invoice *Invoice) string {
+func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	// From the Invoice we need to generate the following:
 	// 1. An overall invoice summary grouped at the billing code level
 	// 2. A detailed invoice summary grouped at the individual entry level
@@ -221,13 +222,12 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) string {
 		pdf.CellFormat(entryColWidth[4], maxHeight, hours, "1", 0, "CM", true, 0, "")
 		pdf.Ln(-1)
 	}
-	filenameEscaped := invoice.GetInvoiceFilename()
-	localPath := "./tmp/" + filenameEscaped + ".pdf"
-	err := pdf.OutputFileAndClose(localPath)
+	var buffer bytes.Buffer
+	err := pdf.Output(&buffer)
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
 	}
-	return localPath
+	return buffer.Bytes()
 }
 
 func breakAddress(input string) []string {
