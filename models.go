@@ -3,14 +3,10 @@ package cronos
 import (
 	"fmt"
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
-	"gorm.io/driver/postgres"
 	_ "gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"gorm.io/gorm/logger"
-	"log"
-	"os"
+	"strings"
 	"time"
 )
 
@@ -135,6 +131,7 @@ type Account struct {
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
 	LegalName string    `gorm:"unique" json:"legal_name"`
+	Address   string    `json:"address"`
 	Email     string    `json:"email"`
 	Website   string    `json:"website"`
 	Clients   []User    `json:"clients"`
@@ -192,13 +189,13 @@ type Entry struct {
 	ProjectID     uint        `json:"project_id"` // Can remove these, unnecessary with billing code
 	Project       Project     `json:"project"`    // Can remove these, unnecessary with billing code
 	Notes         string      `gorm:"type:varchar(2048)" json:"notes"`
-	EmployeeID    uint        `json:"employee_id"`
+	EmployeeID    uint        `json:"employee_id" gorm:"index:idx_employee_internal"`
 	Employee      Employee    `json:"employee"`
 	BillingCodeID uint        `json:"billing_code_id"`
 	BillingCode   BillingCode `json:"billing_code"`
 	Start         time.Time   `json:"start"`
 	End           time.Time   `json:"end"`
-	Internal      bool        `json:"internal"`
+	Internal      bool        `json:"internal" gorm:"index:idx_employee_internal"`
 	LinkedEntryID *uint       `json:"linked_entry_id"`
 	LinkedEntry   *Entry      `json:"-"`
 	JournalID     uint        `json:"journal_id"`
@@ -218,16 +215,39 @@ func (e *Entry) AfterDelete(tx *gorm.DB) (err error) {
 // the term Invoice, these can mean either an invoice or bill in relationship to Snowpack.
 type Invoice struct {
 	gorm.Model
-	Name        string    `json:"name"`
-	ProjectID   uint      `json:"project_id"`
-	Project     Project   `json:"project"`
-	PeriodStart time.Time `json:"period_start"`
-	PeriodEnd   time.Time `json:"period_end"`
-	Entries     []Entry   `json:"entries"`
-	SentAt      time.Time `json:"sent_at"`
-	ClosedAt    time.Time `json:"closed_at"`
-	State       string    `json:"state"`
-	Type        string    `json:"type"`
+	Name             string       `json:"name"`
+	ProjectID        uint         `json:"project_id"`
+	Project          Project      `json:"project"`
+	PeriodStart      time.Time    `json:"period_start"`
+	PeriodEnd        time.Time    `json:"period_end"`
+	Entries          []Entry      `json:"entries"`
+	Adjustments      []Adjustment `json:"adjustments"`
+	AcceptedAt       time.Time    `json:"accepted_at"`
+	SentAt           time.Time    `json:"sent_at"`
+	DueAt            time.Time    `json:"due_at"`
+	ClosedAt         time.Time    `json:"closed_at"`
+	State            string       `json:"state"`
+	Type             string       `json:"type"`
+	TotalHours       float64      `json:"total_hours"`
+	TotalFees        float64      `json:"total_fees"`
+	TotalAdjustments float64      `json:"total_adjustments"`
+	TotalAmount      float64      `json:"total_amount"`
+	GCSFile          string       `json:"gcs_file"`
+}
+
+// Adjustment
+// In the future I imagine that we will need to add an adjustment object to the invoice
+// this will allow us to adjust the hours or the fee of an invoice in a single line item.
+// This would allow us to add a credit or a discount to an invoice, or apply additional fees
+// such as late fees or interest. This would be a separate object that would be added to the
+// invoice as a line item.
+type Adjustment struct {
+	gorm.Model
+	InvoiceID uint    `json:"invoice_id"`
+	Invoice   Invoice `json:"invoice"`
+	Type      string  `json:"type"`
+	Amount    float64 `json:"amount"`
+	Notes     string  `json:"notes"`
 }
 
 // Journal is a preemptive object that we can use to split work across separate accounting Journals,
@@ -247,7 +267,7 @@ func (e *Entry) Duration() time.Duration {
 	return duration
 }
 
-// Fee finds the applicable fee in USD for a particular entry rounded to the given minute
+// GetFee finds the applicable fee in USD for a particular entry rounded to the given minute
 func (a *App) GetFee(e *Entry) float64 {
 	var billingCode BillingCode
 	a.DB.Preload("Rate").Where("id = ?", e.BillingCodeID).First(&billingCode)
@@ -259,90 +279,114 @@ func (a *App) GetFee(e *Entry) float64 {
 	return fee
 }
 
-// App is used to initialize a database and hold our handler functions
-type App struct {
-	DB *gorm.DB
-}
+// UpdateInvoiceTotals updates the totals for an invoice based on non-voided entries
+// associated with the invoice. This saves us from having to recalculate the totals
+func (a *App) UpdateInvoiceTotals(i *Invoice) {
+	var totalHours float64
+	var totalFees float64
+	var totalAdjustments float64
+	var entries []Entry
+	a.DB.Where("invoice_id = ?", i.ID).Find(&entries)
+	var adjustments []Adjustment
+	a.DB.Where("invoice_id = ?", i.ID).Find(&adjustments)
 
-// InitializeSQLite allows us to initialize our application and connect to the local database
-// This handler will hold on to our database operations throughout the lifetime of the application
-func (a *App) InitializeSQLite() {
-	newLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
-		logger.Config{
-			SlowThreshold:             time.Second, // Slow SQL threshold
-			LogLevel:                  logger.Info, // Log level
-			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,        // Don't include params in the SQL log
-			Colorful:                  true,        // Disable color
-		},
-	)
-
-	db, err := gorm.Open(sqlite.Open("cronos.db"), &gorm.Config{Logger: newLogger})
-	if err != nil {
-		panic("failed to connect database")
+	for _, entry := range entries {
+		if entry.State != EntryStateVoid.String() {
+			totalHours += entry.Duration().Hours()
+			totalFees += a.GetFee(&entry)
+		}
 	}
-	a.DB = db
-}
-
-// InitializeLocal allows us to initialize our application and connect to the cloud database
-func (a *App) InitializeLocal(user, password, connection, database string) {
-	newLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
-		logger.Config{
-			SlowThreshold:             time.Second, // Slow SQL threshold
-			LogLevel:                  logger.Info, // Log level
-			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,        // Don't include params in the SQL log
-			Colorful:                  true,        // Disable color
-		},
-	)
-	port := "3306"
-	dbURI := fmt.Sprintf("host=127.0.0.1 user=%s password=%s port=%s database=%s sslmode=disable TimeZone=UTC", user, password, port, database)
-	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{Logger: newLogger})
-
-	if err != nil {
-		fmt.Println(err)
+	for _, adjustment := range i.Adjustments {
+		totalAdjustments += adjustment.Amount
 	}
-	a.DB = db
+	i.TotalHours = totalHours
+	i.TotalFees = totalFees
+	i.TotalAdjustments = totalAdjustments
+	i.TotalAmount = totalFees + i.TotalAdjustments
+	a.DB.Omit(clause.Associations).Save(&i)
 }
 
-// InitializeCloud allows us to initialize a connection to the cloud database
-// while on google app engine
-func (a *App) InitializeCloud(dbURI string) {
-	newLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
-		logger.Config{
-			SlowThreshold:             time.Second, // Slow SQL threshold
-			LogLevel:                  logger.Info, // Log level
-			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,        // Don't include params in the SQL log
-			Colorful:                  true,        // Disable color
-		},
-	)
-	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{
-		Logger:                                   newLogger,
-		DisableForeignKeyConstraintWhenMigrating: true})
+type InvoiceLineItem struct {
+	BillingCode    string  `json:"billing_code"`
+	Project        string  `json:"project"`
+	Hours          float64 `json:"hours"`
+	HoursFormatted string  `json:"hours_formatted"`
+	Rate           float64 `json:"rate"`
+	RateFormatted  string  `json:"rate_formatted"`
+	Total          float64 `json:"total"`
+}
+type invoiceEntry struct {
+	dateString     string
+	billingCode    string
+	staff          string
+	description    string
+	hours          float64
+	hoursFormatted string
+}
 
-	if err != nil {
-		fmt.Println(err)
+func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItem {
+	var invoiceLineItems []InvoiceLineItem
+	var entries []Entry
+	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").Where("invoice_id = ?", i.ID).Find(&entries)
+	for _, entry := range entries {
+		// If a line item exists for the billing code, add the hours to the line item
+		// otherwise create a new line item for the billing code
+		// We must populate the first line item
+		if len(invoiceLineItems) == 0 {
+			invoiceLineItems = append(invoiceLineItems, InvoiceLineItem{
+				BillingCode: entry.BillingCode.Code,
+				Project:     entry.BillingCode.Name,
+				Hours:       entry.Duration().Hours(),
+				Rate:        entry.BillingCode.Rate.Amount,
+			})
+			continue
+		}
+		for i, _ := range invoiceLineItems {
+			if invoiceLineItems[i].BillingCode == entry.BillingCode.Code {
+				additionalHours := entry.Duration().Hours()
+				invoiceLineItems[i].Hours += additionalHours
+				break
+			} else {
+				invoiceLineItems = append(invoiceLineItems, InvoiceLineItem{
+					BillingCode: entry.BillingCode.Code,
+					Project:     entry.BillingCode.Name,
+					Hours:       entry.Duration().Hours(),
+					Rate:        entry.BillingCode.Rate.Amount,
+				})
+			}
+		}
 	}
-	a.DB = db
+	for i, _ := range invoiceLineItems {
+		invoiceLineItems[i].Total = invoiceLineItems[i].Hours * invoiceLineItems[i].Rate
+		invoiceLineItems[i].HoursFormatted = fmt.Sprintf("%.2f", invoiceLineItems[i].Hours)
+		invoiceLineItems[i].RateFormatted = fmt.Sprintf("%.2f", invoiceLineItems[i].Rate)
+	}
+
+	return invoiceLineItems
 }
 
-// Calling the Migrate
-func (a *App) Migrate() {
-	// Migrate the schema
-	_ = a.DB.AutoMigrate(&User{})
-	_ = a.DB.AutoMigrate(&Employee{})
-	_ = a.DB.AutoMigrate(&Client{})
-	_ = a.DB.AutoMigrate(&Account{})
-	_ = a.DB.AutoMigrate(&Rate{})
-	_ = a.DB.AutoMigrate(&Project{})
-	_ = a.DB.AutoMigrate(&Entry{})
-	_ = a.DB.AutoMigrate(&BillingCode{})
-	_ = a.DB.AutoMigrate(&Journal{})
-	_ = a.DB.AutoMigrate(&Invoice{})
+func (a *App) GetInvoiceEntries(i *Invoice) []invoiceEntry {
+	var invoiceEntries []invoiceEntry
+	var entries []Entry
+	a.DB.Preload("BillingCode").Preload("Employee").Where("invoice_id = ?", i.ID).Order("start asc").Find(&entries)
+	for _, entry := range entries {
+		invoiceEntries = append(invoiceEntries, invoiceEntry{
+			dateString:     entry.Start.Format("01/02/2006"),
+			billingCode:    entry.BillingCode.Code,
+			staff:          entry.Employee.FirstName + " " + entry.Employee.LastName,
+			description:    entry.Notes,
+			hours:          entry.Duration().Hours(),
+			hoursFormatted: fmt.Sprintf("%.2f", entry.Duration().Hours()),
+		})
+	}
+	return invoiceEntries
+}
+
+func (i *Invoice) GetInvoiceFilename() string {
+	filename := strings.Replace(i.Name, " ", "_", -1)
+	filename = strings.Replace(filename, ":", "", -1)
+	filename = strings.Replace(filename, "/", ".", -1)
+	return filename
 }
 
 type ApiEntry struct {
@@ -397,6 +441,7 @@ type DraftEntry struct {
 	Fee           float64 `json:"fee"`
 	EmployeeName  string  `json:"user_name"`
 	EmployeeRole  string  `json:"user_role"`
+	State         string  `json:"state"`
 }
 
 func (a *App) GetDraftEntry(e *Entry) DraftEntry {
@@ -415,23 +460,44 @@ func (a *App) GetDraftEntry(e *Entry) DraftEntry {
 		Fee:           a.GetFee(e),
 		EmployeeName:  employee.FirstName + " " + employee.LastName,
 		EmployeeRole:  employee.Title,
+		State:         e.State,
 	}
 	return draftEntry
 }
 
 type DraftInvoice struct {
-	InvoiceID   uint         `json:"invoice_id"`
-	InvoiceName string       `json:"invoice_name"`
-	ProjectID   uint         `json:"project_id"`
-	ProjectName string       `json:"project_name"`
-	PeriodStart string       `json:"period_start"`
-	PeriodEnd   string       `json:"period_end"`
-	LineItems   []DraftEntry `json:"line_items"`
-	TotalHours  float64      `json:"total_hours"`
-	TotalFees   float64      `json:"total_fees"`
+	InvoiceID    uint         `json:"invoice_id"`
+	InvoiceName  string       `json:"invoice_name"`
+	ProjectID    uint         `json:"project_id"`
+	ProjectName  string       `json:"project_name"`
+	PeriodStart  string       `json:"period_start"`
+	PeriodEnd    string       `json:"period_end"`
+	LineItems    []DraftEntry `json:"line_items"`
+	TotalHours   float64      `json:"total_hours"`
+	TotalFees    float64      `json:"total_fees"`
+	PeriodClosed bool         `json:"period_closed"`
+}
+
+type AcceptedInvoice struct {
+	InvoiceID      uint              `json:"invoice_id"`
+	InvoiceName    string            `json:"invoice_name"`
+	ProjectID      uint              `json:"project_id"`
+	ProjectName    string            `json:"project_name"`
+	PeriodStart    string            `json:"period_start"`
+	PeriodEnd      string            `json:"period_end"`
+	LineItemsCount int               `json:"line_items_count"`
+	TotalHours     float64           `json:"total_hours"`
+	TotalFees      float64           `json:"total_fees"`
+	State          string            `json:"state"`
+	SentAt         string            `json:"sent_at"`
+	DueAt          string            `json:"due_at"`
+	ClosedAt       string            `json:"closed_at"`
+	File           string            `json:"file"`
+	LineItems      []InvoiceLineItem `json:"line_items"`
 }
 
 func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
+	a.UpdateInvoiceTotals(i)
 	draftInvoice := DraftInvoice{
 		InvoiceID:   i.ID,
 		InvoiceName: i.Name,
@@ -439,16 +505,35 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		ProjectName: i.Project.Name,
 		PeriodStart: i.PeriodStart.In(time.UTC).Format("01/02/2006"),
 		PeriodEnd:   i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
+		TotalHours:  i.TotalHours,
+		TotalFees:   i.TotalFees,
 	}
-	hourCounter := 0.0
-	feeCounter := 0.0
 	for _, entry := range i.Entries {
 		draftEntry := a.GetDraftEntry(&entry)
-		hourCounter += draftEntry.DurationHours
-		feeCounter += draftEntry.Fee
 		draftInvoice.LineItems = append(draftInvoice.LineItems, draftEntry)
 	}
-	draftInvoice.TotalHours = hourCounter
-	draftInvoice.TotalFees = feeCounter
+	draftInvoice.PeriodClosed = i.PeriodEnd.In(time.UTC).Before(time.Now())
 	return draftInvoice
+}
+
+func (a *App) GetAcceptedInvoice(i *Invoice) AcceptedInvoice {
+	a.UpdateInvoiceTotals(i)
+	acceptedInvoice := AcceptedInvoice{
+		InvoiceID:      i.ID,
+		InvoiceName:    i.Name,
+		ProjectID:      i.ProjectID,
+		ProjectName:    i.Project.Name,
+		PeriodStart:    i.PeriodStart.In(time.UTC).Format("01/02/2006"),
+		PeriodEnd:      i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
+		LineItemsCount: len(i.Entries),
+		State:          i.State,
+		SentAt:         i.SentAt.In(time.UTC).Format("01/02/2006"),
+		DueAt:          i.DueAt.In(time.UTC).Format("01/02/2006"),
+		ClosedAt:       i.ClosedAt.In(time.UTC).Format("01/02/2006"),
+		File:           i.GCSFile,
+		TotalHours:     i.TotalHours,
+		TotalFees:      i.TotalFees,
+	}
+	acceptedInvoice.LineItems = a.GetInvoiceLineItems(i)
+	return acceptedInvoice
 }

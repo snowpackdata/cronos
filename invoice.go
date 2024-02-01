@@ -1,7 +1,11 @@
 package cronos
 
 import (
+	"cloud.google.com/go/storage"
+	"context"
 	"errors"
+	"io"
+	"os"
 	"time"
 )
 
@@ -18,7 +22,7 @@ var ErrEntryDateOutOfRange = errors.New("entry date is out of range for project"
 func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 	// We need a timestamp to determine the start and end of the month
 	startOfMonth := time.Date(creationDate.Year(), creationDate.Month(), 1, 0, 0, 0, 0, time.UTC)
-	endOfMonth := startOfMonth.AddDate(0, 1, 0)
+	endOfMonth := startOfMonth.AddDate(0, 1, 0).AddDate(0, 0, -1)
 	// Retrieve the project from the database
 	var project Project
 	a.DB.Where("ID = ?", projectID).First(&project)
@@ -29,7 +33,7 @@ func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 	var newARInvoice Invoice
 	var newAPInvoice Invoice
 	newARInvoice = Invoice{
-		Name:        project.Name + " : " + startOfMonth.Format("01/02/2006") + " - " + endOfMonth.Format("01/02/2006"),
+		Name:        project.Name + ": " + startOfMonth.Format("01/02/2006") + "-" + endOfMonth.Format("01/02/2006"),
 		ProjectID:   projectID,
 		PeriodStart: startOfMonth,
 		PeriodEnd:   endOfMonth,
@@ -179,5 +183,53 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 		entry.State = EntryStateDraft.String()
 		return nil
 	}
+	return nil
+}
+
+// SaveInvoiceToGCS saves the invoice to GCS
+func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
+	GCS_BUCKET := os.Getenv("GCS_BUCKET")
+	GCP_PROJECT := os.Getenv("GCP_PROJECT")
+	// Generate the invoice
+	localFilePath := a.GenerateInvoicePDF(invoice)
+	// Save the invoice to GCS
+	client := a.InitializeStorageClient(GCP_PROJECT, GCS_BUCKET)
+	ctx := context.Background()
+	// Open local file
+	f, err := os.Open(localFilePath)
+	if err != nil {
+		return err
+	}
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+
+		}
+	}(f)
+	// Create a bucket handle
+	bucket := client.Bucket(GCS_BUCKET)
+	// Create a new object and write its contents to the bucket
+	filename := GenerateSecureFilename(invoice.GetInvoiceFilename()) + ".pdf"
+	objectName := "invoices/" + filename
+	wc := bucket.Object(objectName).NewWriter(ctx)
+	if _, err = io.Copy(wc, f); err != nil {
+		return err
+	}
+	if err := wc.Close(); err != nil {
+		return err
+	}
+	// Set the object to be publicly accessible
+	acl := bucket.Object(objectName).ACL()
+	if err := acl.Set(ctx, storage.AllUsers, storage.RoleReader); err != nil {
+		return err
+	}
+
+	// Delete the local file
+	if err := os.Remove(localFilePath); err != nil {
+		return err
+	}
+	// save the public invoice URL to the database
+	invoice.GCSFile = "https://storage.googleapis.com/" + GCS_BUCKET + "/" + objectName
+	a.DB.Save(&invoice)
 	return nil
 }
