@@ -1,0 +1,36 @@
+name: Tag Version on Merge
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  tag-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.16
+      
+      - name: Get latest tag
+        id: get_tag
+        run: echo "::set-output name=tag::$(git describe --tags --abbrev=0)"
+      
+      - name: Bump version
+        id: bump_version
+        run: echo "::set-output name=new_tag::$(echo ${{ steps.get_tag.outputs.tag }} | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')"
+      
+      - name: Tag repository
+        id: tag_repo
+        run: git tag ${{ steps.bump_version.outputs.new_tag }}
+
+      - name: Push tag
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tags: ${{ steps.bump_version.outputs.new_tag }}
