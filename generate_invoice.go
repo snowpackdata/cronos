@@ -30,6 +30,7 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	// 1. Overall invoice summary grouped at the billing code level
 	lineItems := a.GetInvoiceLineItems(invoice)
 	entryItems := a.GetInvoiceEntries(invoice)
+	adjustments := a.GetInvoiceAdjustments(invoice)
 
 	var project Project
 	var account Account
@@ -124,7 +125,7 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	lineHt := 10.0
 	const colNumber = 5
 	header := [colNumber]string{"Billing Code", "Project", "Hours", "Rate ($)", "Total ($)"}
-	colWidth := [colNumber]float64{50.0, 60.0, 25.0, 25.0, 40.0}
+	colWidth := [colNumber]float64{40.0, 70.0, 25.0, 25.0, 40.0}
 
 	// Headers
 	pdf.SetFontStyle("B")
@@ -148,12 +149,38 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 		total := fmt.Sprintf("%.2f", val.Hours*val.Rate)
 
 		pdf.CellFormat(colWidth[0], lineHt, billingCode, "1", 0, "CM", true, 0, "")
-		pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "CM", true, 0, "")
+		pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", true, 0, "")
 		pdf.CellFormat(colWidth[2], lineHt, hours, "1", 0, "CM", true, 0, "")
 		pdf.CellFormat(colWidth[3], lineHt, "$ "+rate, "1", 0, "CM", true, 0, "")
 		pdf.CellFormat(colWidth[4], lineHt, "$ "+total, "1", 0, "RM", true, 0, "")
 		pdf.Ln(-1)
 	}
+	// add adjustments if they exist, text should be italic
+	if len(adjustments) > 0 {
+		for rowJ := 0; rowJ < len(adjustments); rowJ++ {
+			pdf.SetFontStyle("I")
+			val := adjustments[rowJ]
+			var adjustmentType string
+			var adjustmentMultiplier float64
+			if val.Type == AdjustmentTypeCredit.String() {
+				adjustmentType = "CREDIT"
+				adjustmentMultiplier = -1.0
+			} else {
+				adjustmentType = "FEE"
+				adjustmentMultiplier = 1.0
+			}
+			description := val.Notes
+			amount := fmt.Sprintf("%.2f", val.Amount*adjustmentMultiplier)
+			pdf.CellFormat(colWidth[0], lineHt, adjustmentType, "1", 0, "CM", true, 0, "")
+			pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", true, 0, "")
+			pdf.CellFormat(colWidth[2], lineHt, "", "1", 0, "CM", true, 0, "")
+			pdf.CellFormat(colWidth[3], lineHt, "", "1", 0, "LM", true, 0, "")
+			pdf.CellFormat(colWidth[4], lineHt, "$ "+amount, "1", 0, "RM", true, 0, "")
+			pdf.Ln(-1)
+		}
+	}
+
+	// Generate the total Rows
 
 	// Calculate the subtotal
 	pdf.SetFontStyle("B")
@@ -162,14 +189,27 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 		leftIndent += colWidth[i]
 	}
 
-	grandTotal := fmt.Sprintf("%.2f", invoice.TotalFees)
+	totalFees := fmt.Sprintf("%.2f", invoice.TotalFees)
 	pdf.SetX(marginX + leftIndent)
-	pdf.CellFormat(colWidth[3], lineHt, "Invoice Total", "1", 0, "LM", true, 0, "")
+	pdf.CellFormat(colWidth[3], lineHt, "Fees", "1", 0, "LM", true, 0, "")
+	pdf.CellFormat(colWidth[4], lineHt, "$ "+totalFees, "1", 0, "RM", true, 0, "")
+	pdf.Ln(lineHt)
+
+	totalAdjustments := fmt.Sprintf("%.2f", invoice.TotalAdjustments)
+	pdf.SetX(marginX + leftIndent)
+	pdf.CellFormat(colWidth[3], lineHt, "Adjustments", "1", 0, "LM", true, 0, "")
+	pdf.CellFormat(colWidth[4], lineHt, "$ "+totalAdjustments, "1", 0, "RM", true, 0, "")
+	pdf.Ln(lineHt)
+
+	grandTotal := fmt.Sprintf("%.2f", invoice.TotalAmount)
+	pdf.SetX(marginX + leftIndent)
+	pdf.CellFormat(colWidth[3], lineHt, "Total Due", "1", 0, "LM", true, 0, "")
 	pdf.CellFormat(colWidth[4], lineHt, "$ "+grandTotal, "1", 0, "RM", true, 0, "")
-	pdf.Ln(-1)
+	pdf.Ln(lineHt)
 
 	pdf.SetFontStyle("")
 	pdf.Ln(lineBreak)
+
 	pdf.Cell(safeAreaW, lineHeight, "See second page for detailed timesheet entry breakdown.")
 
 	// Add a second page for individual entries

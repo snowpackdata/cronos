@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// The following are all boilerplate methods and objects for
+// standard interactions and comparisons with the database
+
 type UserRole string
 
 func (s UserRole) String() string {
@@ -52,6 +55,18 @@ func (s InvoiceType) String() string {
 	return string(s)
 }
 
+type AdjustmentType string
+
+func (s AdjustmentType) String() string {
+	return string(s)
+}
+
+type AdjustmentState string
+
+func (s AdjustmentState) String() string {
+	return string(s)
+}
+
 const (
 	HOUR                      = 60.0
 	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
@@ -88,6 +103,15 @@ const (
 
 	InvoiceTypeAR InvoiceType = "INVOICE_TYPE_ACCOUNTS_RECEIVABLE"
 	InvoiceTypeAP InvoiceType = "INVOICE_TYPE_ACCOUNTS_PAYABLE"
+
+	AdjustmentTypeCredit AdjustmentType = "ADJUSTMENT_TYPE_CREDIT"
+	AdjustmentTypeFee    AdjustmentType = "ADJUSTMENT_TYPE_FEE"
+
+	AdjustmentStateDraft    AdjustmentState = "ADJUSTMENT_STATE_DRAFT"
+	AdjustmentStateApproved AdjustmentState = "ADJUSTMENT_STATE_APPROVED"
+	AdjustmentStateSent     AdjustmentState = "ADJUSTMENT_STATE_SENT"
+	AdjustmentStatePaid     AdjustmentState = "ADJUSTMENT_STATE_PAID"
+	AdjustmentStateVoid     AdjustmentState = "ADJUSTMENT_STATE_VOID"
 )
 
 type User struct {
@@ -243,8 +267,9 @@ type Invoice struct {
 type Adjustment struct {
 	gorm.Model
 	InvoiceID uint    `json:"invoice_id"`
-	Invoice   Invoice `json:"invoice"`
+	Invoice   Invoice `json:"-"`
 	Type      string  `json:"type"`
+	State     string  `json:"state"`
 	Amount    float64 `json:"amount"`
 	Notes     string  `json:"notes"`
 }
@@ -295,8 +320,16 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 			totalFees += a.GetFee(&entry)
 		}
 	}
-	for _, adjustment := range i.Adjustments {
-		totalAdjustments += adjustment.Amount
+	var multiplier float64
+	for _, adjustment := range adjustments {
+		if adjustment.Type == AdjustmentTypeCredit.String() {
+			multiplier = -1.0
+		} else {
+			multiplier = 1.0
+		}
+		if adjustment.State != AdjustmentStateVoid.String() {
+			totalAdjustments += adjustment.Amount * multiplier
+		}
 	}
 	i.TotalHours = totalHours
 	i.TotalFees = totalFees
@@ -379,6 +412,12 @@ func (a *App) GetInvoiceEntries(i *Invoice) []invoiceEntry {
 		})
 	}
 	return invoiceEntries
+}
+
+func (a *App) GetInvoiceAdjustments(i *Invoice) []Adjustment {
+	var adjustments []Adjustment
+	a.DB.Where("invoice_id = ? and state != ?", i.ID, AdjustmentStateVoid.String()).Find(&adjustments)
+	return adjustments
 }
 
 func (i *Invoice) GetInvoiceFilename() string {
@@ -465,16 +504,19 @@ func (a *App) GetDraftEntry(e *Entry) DraftEntry {
 }
 
 type DraftInvoice struct {
-	InvoiceID    uint         `json:"ID"`
-	InvoiceName  string       `json:"invoice_name"`
-	ProjectID    uint         `json:"project_id"`
-	ProjectName  string       `json:"project_name"`
-	PeriodStart  string       `json:"period_start"`
-	PeriodEnd    string       `json:"period_end"`
-	LineItems    []DraftEntry `json:"line_items"`
-	TotalHours   float64      `json:"total_hours"`
-	TotalFees    float64      `json:"total_fees"`
-	PeriodClosed bool         `json:"period_closed"`
+	InvoiceID        uint         `json:"ID"`
+	InvoiceName      string       `json:"invoice_name"`
+	ProjectID        uint         `json:"project_id"`
+	ProjectName      string       `json:"project_name"`
+	PeriodStart      string       `json:"period_start"`
+	PeriodEnd        string       `json:"period_end"`
+	LineItems        []DraftEntry `json:"line_items"`
+	Adjustments      []Adjustment `json:"adjustments"`
+	TotalHours       float64      `json:"total_hours"`
+	TotalFees        float64      `json:"total_fees"`
+	TotalAdjustments float64      `json:"total_adjustments"`
+	TotalAmount      float64      `json:"total_amount"`
+	PeriodClosed     bool         `json:"period_closed"`
 }
 
 type AcceptedInvoice struct {
@@ -498,19 +540,35 @@ type AcceptedInvoice struct {
 func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 	a.UpdateInvoiceTotals(i)
 	draftInvoice := DraftInvoice{
-		InvoiceID:   i.ID,
-		InvoiceName: i.Name,
-		ProjectID:   i.ProjectID,
-		ProjectName: i.Project.Name,
-		PeriodStart: i.PeriodStart.In(time.UTC).Format("01/02/2006"),
-		PeriodEnd:   i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
-		TotalHours:  i.TotalHours,
-		TotalFees:   i.TotalFees,
+		InvoiceID:        i.ID,
+		InvoiceName:      i.Name,
+		ProjectID:        i.ProjectID,
+		ProjectName:      i.Project.Name,
+		PeriodStart:      i.PeriodStart.In(time.UTC).Format("01/02/2006"),
+		PeriodEnd:        i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
+		TotalHours:       i.TotalHours,
+		TotalFees:        i.TotalFees,
+		TotalAdjustments: i.TotalAdjustments,
+		TotalAmount:      i.TotalFees + i.TotalAdjustments,
 	}
 	for _, entry := range i.Entries {
 		draftEntry := a.GetDraftEntry(&entry)
 		draftInvoice.LineItems = append(draftInvoice.LineItems, draftEntry)
 	}
+	a.DB.Where("invoice_id = ?", i.ID).Find(&draftInvoice.Adjustments)
+	var totalAdjustments float64
+	for i, _ := range draftInvoice.Adjustments {
+		multiplicationFactor := 1.0
+		if draftInvoice.Adjustments[i].Type == AdjustmentTypeCredit.String() {
+			multiplicationFactor = -1.0
+		}
+		if draftInvoice.Adjustments[i].State != AdjustmentStateVoid.String() {
+			totalAdjustments += draftInvoice.Adjustments[i].Amount * multiplicationFactor
+		}
+
+	}
+	draftInvoice.TotalAdjustments = totalAdjustments
+	draftInvoice.TotalAmount = draftInvoice.TotalFees + draftInvoice.TotalAdjustments
 	draftInvoice.PeriodClosed = i.PeriodEnd.In(time.UTC).Before(time.Now())
 	return draftInvoice
 }
