@@ -226,6 +226,13 @@ type Entry struct {
 	Invoice       Invoice     `json:"invoice"`
 	InvoiceID     uint        `json:"invoice_id"`
 	State         string      `json:"state"`
+	Fee           int         `json:"fee"`
+}
+
+func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
+	// recalculate the fee
+	e.Fee = int(e.GetFee(tx)*100)
+	return nil
 }
 
 func (e *Entry) AfterDelete(tx *gorm.DB) (err error) {
@@ -292,14 +299,16 @@ func (e *Entry) Duration() time.Duration {
 }
 
 // GetFee finds the applicable fee in USD for a particular entry rounded to the given minute
-func (a *App) GetFee(e *Entry) float64 {
+func (e *Entry) GetFee(tx *gorm.DB) float64 {
 	var billingCode BillingCode
-	a.DB.Preload("Rate").Where("id = ?", e.BillingCodeID).First(&billingCode)
+	var rate Rate
+	tx.Where("id = ?", e.BillingCodeID).First(&billingCode)
+	tx.Where("id = ?", billingCode.RateID).First(&rate)
 	durationMinutes := e.Duration().Minutes()
 	roundingFactor := float64(billingCode.RoundedTo) / HOUR
 	hours := float64(durationMinutes) / HOUR
 	roundedHours := float64(int(hours/roundingFactor)) * roundingFactor
-	fee := roundedHours * billingCode.Rate.Amount
+	fee := roundedHours * rate.Amount
 	return fee
 }
 
@@ -307,7 +316,7 @@ func (a *App) GetFee(e *Entry) float64 {
 // associated with the invoice. This saves us from having to recalculate the totals
 func (a *App) UpdateInvoiceTotals(i *Invoice) {
 	var totalHours float64
-	var totalFees float64
+	var totalFeesInt int
 	var totalAdjustments float64
 	var entries []Entry
 	a.DB.Where("invoice_id = ?", i.ID).Find(&entries)
@@ -317,7 +326,7 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 	for _, entry := range entries {
 		if entry.State != EntryStateVoid.String() {
 			totalHours += entry.Duration().Hours()
-			totalFees += a.GetFee(&entry)
+			totalFeesInt += entry.Fee
 		}
 	}
 	var multiplier float64
@@ -332,9 +341,9 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 		}
 	}
 	i.TotalHours = totalHours
-	i.TotalFees = totalFees
+	i.TotalFees = float64(totalFeesInt/100)
 	i.TotalAdjustments = totalAdjustments
-	i.TotalAmount = totalFees + i.TotalAdjustments
+	i.TotalAmount = i.TotalFees + i.TotalAdjustments
 	a.DB.Omit(clause.Associations).Save(&i)
 }
 
@@ -444,6 +453,7 @@ type ApiEntry struct {
 	DurationHours  float64   `json:"duration_hours"`
 	StartDayOfWeek string    `json:"start_day_of_week"`
 	StartIndex     float64   `json:"start_index"`
+	State 		string    `json:"state"`
 }
 
 func (e *Entry) GetAPIEntry() ApiEntry {
@@ -495,7 +505,7 @@ func (a *App) GetDraftEntry(e *Entry) DraftEntry {
 		Notes:         e.Notes,
 		StartDate:     e.Start.In(time.UTC).Format("January 2"),
 		DurationHours: e.Duration().Hours(),
-		Fee:           a.GetFee(e),
+		Fee:           float64(e.Fee) / 100.0,
 		EmployeeName:  employee.FirstName + " " + employee.LastName,
 		EmployeeRole:  employee.Title,
 		State:         e.State,
