@@ -12,14 +12,13 @@ func (a *App) RegisterClient(email string, accountId uint) error {
 	user := User{Email: email}
 	if a.DB.Model(&user).Where("email = ?", email).Updates(&user).RowsAffected == 0 {
 		a.DB.Create(&user)
-		a.DB.Create(&Client{User: user})
 	} else {
 		return ErrUserAlreadyExists
 	}
 	user.Password = DEFAULT_PASSWORD
 	user.Role = UserRoleClient.String()
 	user.AccountID = accountId
-	a.DB.Save(user)
+	a.DB.Save(&user)
 	return a.EmailFromAdmin(EmailTypeRegisterClient, email)
 }
 

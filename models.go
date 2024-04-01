@@ -67,6 +67,12 @@ func (s AdjustmentState) String() string {
 	return string(s)
 }
 
+type JournalAccountType string
+
+func (s JournalAccountType) String() string {
+	return string(s)
+}
+
 const (
 	HOUR                      = 60.0
 	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
@@ -85,8 +91,11 @@ const (
 	RateTypeExternalNonBillable      RateType = "RATE_TYPE_EXTERNAL_CLIENT_NON_BILLABLE"
 	RateTypeInternalProject          RateType = "RATE_TYPE_INTERNAL_PROJECT"
 
-	BillingFrequencyMonthly BillingFrequency = "BILLING_TYPE_MONTHLY"
-	BillingFrequencyProject BillingFrequency = "BILLING_TYPE_PROJECT"
+	BillingFrequencyMonthly   BillingFrequency = "BILLING_TYPE_MONTHLY"
+	BillingFrequencyProject   BillingFrequency = "BILLING_TYPE_PROJECT"
+	BillingFrequencyBiweekly  BillingFrequency = "BILLING_TYPE_BIWEEKLY"
+	BillingFrequencyWeekly    BillingFrequency = "BILLING_TYPE_WEEKLY"
+	BillingFrequencyBiMonthly BillingFrequency = "BILLING_TYPE_BIMONTHLY"
 
 	EntryStateUnaffiliated EntryState = "ENTRY_STATE_UNAFFILIATED"
 	EntryStateDraft        EntryState = "ENTRY_STATE_DRAFT"
@@ -112,6 +121,13 @@ const (
 	AdjustmentStateSent     AdjustmentState = "ADJUSTMENT_STATE_SENT"
 	AdjustmentStatePaid     AdjustmentState = "ADJUSTMENT_STATE_PAID"
 	AdjustmentStateVoid     AdjustmentState = "ADJUSTMENT_STATE_VOID"
+
+	AccountARClientBillable JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_BILLABLE"
+	AccountAPStaffPayroll   JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_PAYROLL"
+	AccountARIncome         JournalAccountType = "ACCOUNTS_RECEIVABLE_INCOME"
+	AccountAPDiscount       JournalAccountType = "ACCOUNTS_PAYABLE_EXPENSE_DISCOUNT"
+	AccountAPStaffBonus     JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_BONUS"
+	AccountARClientFee      JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_FEE"
 )
 
 type User struct {
@@ -219,10 +235,8 @@ type Entry struct {
 	Start         time.Time   `json:"start"`
 	End           time.Time   `json:"end"`
 	Internal      bool        `json:"internal" gorm:"index:idx_employee_internal"`
-	LinkedEntryID *uint       `json:"linked_entry_id"`
-	LinkedEntry   *Entry      `json:"-"`
-	JournalID     uint        `json:"journal_id"`
-	Journal       Journal     `json:"journal"`
+	Bill          Bill        `json:"bill"`
+	BillID        uint        `json:"bill_id"`
 	Invoice       Invoice     `json:"invoice"`
 	InvoiceID     uint        `json:"invoice_id"`
 	State         string      `json:"state"`
@@ -231,13 +245,8 @@ type Entry struct {
 
 func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
 	// recalculate the fee
-	e.Fee = int(e.GetFee(tx)*100)
+	e.Fee = int(e.GetFee(tx) * 100)
 	return nil
-}
-
-func (e *Entry) AfterDelete(tx *gorm.DB) (err error) {
-	tx.Clauses(clause.Returning{}).Where("linked_entry_id = ? and delete_at is null", e.ID).Update("deleted_at", gorm.Expr("NOW()"))
-	return
 }
 
 // Invoice is a record that is used to track the status of a billable invoice either as AR/AP.
@@ -262,6 +271,7 @@ type Invoice struct {
 	TotalFees        float64      `json:"total_fees"`
 	TotalAdjustments float64      `json:"total_adjustments"`
 	TotalAmount      float64      `json:"total_amount"`
+	JournalID        uint         `json:"journal_id"`
 	GCSFile          string       `json:"file"`
 }
 
@@ -275,19 +285,48 @@ type Adjustment struct {
 	gorm.Model
 	InvoiceID uint    `json:"invoice_id"`
 	Invoice   Invoice `json:"-"`
+	Bill      Bill    `json:"-"`
+	BillID    uint    `json:"bill_id"`
 	Type      string  `json:"type"`
 	State     string  `json:"state"`
 	Amount    float64 `json:"amount"`
 	Notes     string  `json:"notes"`
 }
 
-// Journal is a preemptive object that we can use to split work across separate accounting Journals,
-// this may refer specifically to internal vs external billable in the short term, however we may add
-// additional journals in the future. This facilitates simple reporting and accounting at the ledger level.
+// Bill
+// This is a simple object that we can use to track the total hours and fees for an employee
+// over a set period of time. While the entries may be tied to individual projects, the bills are directly
+// linked to the employees.
+type Bill struct {
+	gorm.Model
+	Name             string       `json:"name"`
+	UserID           uint         `json:"user_id"`
+	User             User         `json:"user"`
+	PeriodStart      time.Time    `json:"period_start"`
+	PeriodEnd        time.Time    `json:"period_end"`
+	Entries          []Entry      `json:"entries"`
+	Adjustments      []Adjustment `json:"adjustments"`
+	AcceptedAt       time.Time    `json:"accepted_at"`
+	TotalHours       float64      `json:"total_hours"`
+	TotalFees        int          `json:"total_fees"`
+	TotalAdjustments float64      `json:"total_adjustments"`
+	TotalAmount      int          `json:"total_amount"`
+	GCSFile          string       `json:"file"`
+}
+
+// Journal refers to a single entry in a journal, this is a single line item that is used to track
+// the debits and credits for a specific account.
 type Journal struct {
 	gorm.Model
-	Name    string `json:"name"`
-	Entries []*Entry
+	Account    string  `json:"account"`
+	SubAccount string  `json:"sub_account"`
+	Invoice    Invoice `json:"invoice"`
+	InvoiceID  uint    `json:"invoice_id"`
+	Bill       Bill    `json:"bill"`
+	BillID     uint    `json:"bill_id"`
+	Memo       string  `json:"memo"`
+	Debit      int64   `json:"debit"`
+	Credit     int64   `json:"credit"`
 }
 
 // OBJECT METHODS
@@ -341,7 +380,7 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 		}
 	}
 	i.TotalHours = totalHours
-	i.TotalFees = float64(totalFeesInt/100)
+	i.TotalFees = float64(totalFeesInt / 100)
 	i.TotalAdjustments = totalAdjustments
 	i.TotalAmount = i.TotalFees + i.TotalAdjustments
 	a.DB.Omit(clause.Associations).Save(&i)
@@ -453,7 +492,7 @@ type ApiEntry struct {
 	DurationHours  float64   `json:"duration_hours"`
 	StartDayOfWeek string    `json:"start_day_of_week"`
 	StartIndex     float64   `json:"start_index"`
-	State 		string    `json:"state"`
+	State          string    `json:"state"`
 }
 
 func (e *Entry) GetAPIEntry() ApiEntry {
@@ -603,4 +642,92 @@ func (a *App) GetAcceptedInvoice(i *Invoice) AcceptedInvoice {
 	}
 	acceptedInvoice.LineItems = a.GetInvoiceLineItems(i)
 	return acceptedInvoice
+}
+
+func (a *App) GenerateBills(i *Invoice) {
+	userBillingCodeMap := make(map[uint]map[uint]float64)
+	for _, entry := range i.Entries {
+		if entry.State == EntryStateVoid.String() {
+			continue
+		}
+		// first check if the user exists in the map, if not then add them
+		if _, ok := userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID]; !ok {
+			// if the users and billing code do not exist, add them
+			bc := make(map[uint]float64)
+			bc[entry.BillingCodeID] = entry.Duration().Minutes()
+			userBillingCodeMap[entry.EmployeeID] = bc
+		} else {
+			// otherwise add the fee to the existing fee
+			userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
+		}
+	}
+	for user, billingCodes := range userBillingCodeMap {
+		var userObj User
+		a.DB.Where("id = ?", user).First(&userObj)
+		var hours float64
+		var fee int
+		for billingCode, hours := range billingCodes {
+			// sum up the hours for the billing code
+			var billingCodeObj BillingCode
+			a.DB.Where("id = ?", billingCode).First(&billingCodeObj)
+			floatFee := hours * billingCodeObj.InternalRate.Amount
+			fee += int(floatFee * 100)
+			hours += hours
+		}
+		// create a bill object
+		bill := Bill{
+			UserID:      user,
+			PeriodStart: i.PeriodStart,
+			PeriodEnd:   i.PeriodEnd,
+			TotalHours:  hours,
+			TotalFees:   fee,
+			TotalAmount: fee,
+		}
+		a.DB.Create(&bill)
+		// Now add a journal entry to reflect the bill
+		journal := Journal{
+			Account:    AccountAPStaffPayroll.String(),
+			SubAccount: userObj.Email,
+			Debit:      int64(fee),
+			Credit:     0,
+			Memo:       "Staff Payroll",
+			BillID:     bill.ID,
+		}
+		a.DB.Create(&journal)
+		// Finally update the entries to reflect the bill
+		for _, entry := range i.Entries {
+			if entry.EmployeeID == user {
+				entry.BillID = bill.ID
+				a.DB.Save(&entry)
+			}
+		}
+	}
+}
+
+func (a *App) AddJournalEntries(i *Invoice) {
+	// First we need to add the entries for the total fee of the invoice
+	var project Project
+	a.DB.Preload("Account").Where("id = ?", i.ProjectID).First(&project)
+	journal := Journal{
+		Account:    AccountARClientBillable.String(),
+		SubAccount: i.Project.Account.LegalName,
+		Debit:      0,
+		Credit:     int64(i.TotalFees * 100),
+		Memo:       i.Name,
+		InvoiceID:  i.ID,
+	}
+	a.DB.Create(&journal)
+	// Associate the invoice
+	i.JournalID = journal.ID
+	a.DB.Save(&i)
+	// Now we need to add an entry for any adjustments
+	adjustmentJournal := Journal{
+		Account:    AccountAPDiscount.String(),
+		SubAccount: i.Project.Account.LegalName,
+		Debit:      int64(i.TotalAdjustments * 100),
+		Credit:     0,
+		Memo:       i.Name,
+		InvoiceID:  i.ID,
+	}
+	a.DB.Create(&adjustmentJournal)
 }

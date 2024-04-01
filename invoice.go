@@ -25,31 +25,48 @@ func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 	// Retrieve the project from the database
 	var project Project
 	a.DB.Where("ID = ?", projectID).First(&project)
-	// next retrieve any currently pending invoices.
+	// next retrieve any past invoices.
 	var invoices []Invoice
-	a.DB.Preload("Entries").Order("period_end desc").Where("project_id = ? AND state = ?", projectID, InvoiceStateDraft).Find(&invoices)
-	// By default we'll create the AP invoice from the start of the current month to the end of the month
+	a.DB.Order("period_end desc").Where("project_id = ? and state != ?", projectID, InvoiceStateVoid).Find(&invoices)
 	var newARInvoice Invoice
 	newARInvoice = Invoice{
-		Name:        project.Name + ": " + startOfMonth.Format("01.02.2006") + "-" + endOfMonth.Format("01.02.2006"),
-		ProjectID:   projectID,
-		PeriodStart: startOfMonth,
-		PeriodEnd:   endOfMonth,
-		State:       InvoiceStateDraft.String(),
-		Type:        InvoiceTypeAR.String(),
+		ProjectID: projectID,
+		State:     InvoiceStateDraft.String(),
+		Type:      InvoiceTypeAR.String(),
 	}
-	// if the projects are billed on a project basis, we'll update the start and end date to match the project
-	if project.BillingFrequency == BillingFrequencyProject.String() {
+	switch project.BillingFrequency {
+	case BillingFrequencyProject.String():
 		newARInvoice.PeriodStart = project.ActiveStart
 		newARInvoice.PeriodEnd = project.ActiveEnd
-	}
-	// if there are currently other draft invoices, we'll confirm that there are no overlaps between the previously created
-	// invoices and the new invoices. If there are overlaps we will generate an error and move on. Otherwise, we'll
-	// move their state to pending along with associated entries.
-	for _, invoice := range invoices {
-		if invoice.PeriodEnd.After(newARInvoice.PeriodStart) && (invoice.State != InvoiceStateDraft.String() || invoice.State != InvoiceStateVoid.String()) {
-			return ErrInvoiceOverlap
+		newARInvoice.Name = project.Name + ": " + project.ActiveStart.Format("01.02.2006") + "-" + project.ActiveEnd.Format("01.02.2006")
+	case BillingFrequencyMonthly.String():
+		newARInvoice.PeriodStart = startOfMonth
+		newARInvoice.PeriodEnd = endOfMonth
+		newARInvoice.Name = project.Name + ": " + startOfMonth.Format("01.02.2006") + "-" + endOfMonth.Format("01.02.2006")
+	case BillingFrequencyBiweekly.String():
+		// retrieve the ending date of the last invoice
+		if len(invoices) > 0 {
+			newARInvoice.PeriodStart = invoices[0].PeriodEnd.AddDate(0, 0, 1)
+		} else {
+			// make the start date the beginning of this week
+			weekday := creationDate.Weekday()
+			preCleanedDate := creationDate.AddDate(0, 0, -int(weekday))
+			newARInvoice.PeriodStart = time.Date(preCleanedDate.Year(), preCleanedDate.Month(), preCleanedDate.Day(), 0, 0, 0, 0, time.UTC)
 		}
+		newARInvoice.PeriodEnd = newARInvoice.PeriodStart.AddDate(0, 0, 13)
+		newARInvoice.Name = project.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
+	case BillingFrequencyWeekly.String():
+		// retrieve the ending date of the last invoice
+		if len(invoices) > 0 {
+			newARInvoice.PeriodStart = invoices[0].PeriodEnd.AddDate(0, 0, 1)
+		} else {
+			// make the start date the beginning of this week
+			weekday := creationDate.Weekday()
+			preCleanedDate := creationDate.AddDate(0, 0, -int(weekday))
+			newARInvoice.PeriodStart = time.Date(preCleanedDate.Year(), preCleanedDate.Month(), preCleanedDate.Day(), 0, 0, 0, 0, time.UTC)
+		}
+		newARInvoice.PeriodEnd = newARInvoice.PeriodStart.AddDate(0, 0, 6)
+		newARInvoice.Name = project.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
 	}
 	// If there are no errors, we'll create the new invoices and save them to the database
 	a.DB.Create(&newARInvoice)
@@ -128,8 +145,7 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	}
 	// Retrieve the appropriate invoice
 	var eligibleInvoices []Invoice
-	a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
-
+	a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ? order by period_end desc", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
 	// If there are no eligible invoices, we'll create a new one
 	if len(eligibleInvoices) == 0 {
 		err := a.CreateInvoice(projectID, entry.Start)

@@ -7,12 +7,6 @@ const AccountsPayable = "SNOWPACK_ACCOUNTS_PAYABLE"
 const CostOfGoodsSold = "SNOWPACK_COGS"
 
 func (a *App) SeedDatabase() {
-	journals := []Journal{
-		Journal{Name: AccountsReceivable},
-		Journal{Name: AccountsPayable},
-		Journal{Name: CostOfGoodsSold},
-	}
-	_ = a.DB.Create(&journals)
 
 	// Create Users
 	users := []User{
