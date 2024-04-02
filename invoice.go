@@ -167,7 +167,7 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	if invoice.ID == 0 {
 		entry.State = EntryStateUnaffiliated.String()
 	} else {
-		entry.InvoiceID = invoice.ID
+		entry.InvoiceID = &invoice.ID
 		entry.State = EntryStateDraft.String()
 	}
 	a.DB.Save(&entry)

@@ -1,0 +1,38 @@
+package cronos
+
+import (
+	"cloud.google.com/go/storage"
+	"context"
+)
+
+// SaveBillToGCS saves the invoice to GCS
+func (a *App) SaveBillToGCS(bill *Bill) error {
+	ctx := context.Background()
+	// Generate the invoice
+	// The output must be stored as a list of bytes in-memory becasue of the readonly filesystem in GAE
+	pdfBytes := a.GenerateBillPDF(bill)
+	// Save the invoice to GCS
+	client := a.InitializeStorageClient(a.Project, a.Bucket)
+
+	// Create a bucket handle
+	bucket := client.Bucket(a.Bucket)
+	// Create a new object and write its contents to the bucket
+	filename := GenerateSecureFilename(bill.GetBillFilename()) + ".pdf"
+	objectName := "bills/" + filename
+	writer := bucket.Object(objectName).NewWriter(ctx)
+	if _, err := writer.Write(pdfBytes); err != nil {
+		return err
+	}
+	writer.Close()
+
+	// Set the object to be publicly accessible
+	acl := bucket.Object(objectName).ACL()
+	if err := acl.Set(ctx, storage.AllUsers, storage.RoleReader); err != nil {
+		return err
+	}
+
+	// save the public invoice URL to the database
+	bill.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
+	a.DB.Save(&bill)
+	return nil
+}

@@ -236,9 +236,9 @@ type Entry struct {
 	End           time.Time   `json:"end"`
 	Internal      bool        `json:"internal" gorm:"index:idx_employee_internal"`
 	Bill          Bill        `json:"bill"`
-	BillID        uint        `json:"bill_id"`
+	BillID        *uint       `json:"bill_id"`
 	Invoice       Invoice     `json:"invoice"`
-	InvoiceID     uint        `json:"invoice_id"`
+	InvoiceID     *uint       `json:"invoice_id"`
 	State         string      `json:"state"`
 	Fee           int         `json:"fee"`
 }
@@ -271,7 +271,7 @@ type Invoice struct {
 	TotalFees        float64      `json:"total_fees"`
 	TotalAdjustments float64      `json:"total_adjustments"`
 	TotalAmount      float64      `json:"total_amount"`
-	JournalID        uint         `json:"journal_id"`
+	JournalID        *uint        `json:"journal_id"`
 	GCSFile          string       `json:"file"`
 }
 
@@ -283,10 +283,10 @@ type Invoice struct {
 // invoice as a line item.
 type Adjustment struct {
 	gorm.Model
-	InvoiceID uint    `json:"invoice_id"`
+	InvoiceID *uint   `json:"invoice_id"`
 	Invoice   Invoice `json:"-"`
 	Bill      Bill    `json:"-"`
-	BillID    uint    `json:"bill_id"`
+	BillID    *uint   `json:"bill_id"`
 	Type      string  `json:"type"`
 	State     string  `json:"state"`
 	Amount    float64 `json:"amount"`
@@ -300,8 +300,8 @@ type Adjustment struct {
 type Bill struct {
 	gorm.Model
 	Name             string       `json:"name"`
-	UserID           uint         `json:"user_id"`
-	User             User         `json:"user"`
+	EmployeeID       uint         `json:"user_id"`
+	Employee         Employee     `json:"user"`
 	PeriodStart      time.Time    `json:"period_start"`
 	PeriodEnd        time.Time    `json:"period_end"`
 	Entries          []Entry      `json:"entries"`
@@ -321,9 +321,9 @@ type Journal struct {
 	Account    string  `json:"account"`
 	SubAccount string  `json:"sub_account"`
 	Invoice    Invoice `json:"invoice"`
-	InvoiceID  uint    `json:"invoice_id"`
+	InvoiceID  *uint   `json:"invoice_id"`
 	Bill       Bill    `json:"bill"`
-	BillID     uint    `json:"bill_id"`
+	BillID     *uint   `json:"bill_id"`
 	Memo       string  `json:"memo"`
 	Debit      int64   `json:"debit"`
 	Credit     int64   `json:"credit"`
@@ -343,6 +343,20 @@ func (e *Entry) GetFee(tx *gorm.DB) float64 {
 	var rate Rate
 	tx.Where("id = ?", e.BillingCodeID).First(&billingCode)
 	tx.Where("id = ?", billingCode.RateID).First(&rate)
+	durationMinutes := e.Duration().Minutes()
+	roundingFactor := float64(billingCode.RoundedTo) / HOUR
+	hours := float64(durationMinutes) / HOUR
+	roundedHours := float64(int(hours/roundingFactor)) * roundingFactor
+	fee := roundedHours * rate.Amount
+	return fee
+}
+
+// GetInternalFee gets the applicable fee in USD for an entry rounded to the minute
+func (e *Entry) GetInternalFee(tx *gorm.DB) float64 {
+	var billingCode BillingCode
+	var rate Rate
+	tx.Where("id = ?", e.BillingCodeID).First(&billingCode)
+	tx.Where("id = ?", billingCode.InternalRateID).First(&rate)
 	durationMinutes := e.Duration().Minutes()
 	roundingFactor := float64(billingCode.RoundedTo) / HOUR
 	hours := float64(durationMinutes) / HOUR
@@ -470,6 +484,13 @@ func (a *App) GetInvoiceAdjustments(i *Invoice) []Adjustment {
 
 func (i *Invoice) GetInvoiceFilename() string {
 	filename := strings.Replace(i.Name, " ", "_", -1)
+	filename = strings.Replace(filename, ":", "", -1)
+	filename = strings.Replace(filename, "/", ".", -1)
+	return filename
+}
+
+func (b *Bill) GetBillFilename() string {
+	filename := strings.Replace(b.Name, " ", "_", -1)
 	filename = strings.Replace(filename, ":", "", -1)
 	filename = strings.Replace(filename, "/", ".", -1)
 	return filename
@@ -662,21 +683,22 @@ func (a *App) GenerateBills(i *Invoice) {
 		}
 	}
 	for user, billingCodes := range userBillingCodeMap {
-		var userObj User
+		var userObj Employee
 		a.DB.Where("id = ?", user).First(&userObj)
 		var hours float64
 		var fee int
-		for billingCode, hours := range billingCodes {
+		for billingCode, loopMin := range billingCodes {
 			// sum up the hours for the billing code
 			var billingCodeObj BillingCode
-			a.DB.Where("id = ?", billingCode).First(&billingCodeObj)
-			floatFee := hours * billingCodeObj.InternalRate.Amount
+			a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
+			floatFee := (loopMin / 60) * billingCodeObj.InternalRate.Amount
 			fee += int(floatFee * 100)
-			hours += hours
+			hours += (loopMin / 60)
 		}
 		// create a bill object
 		bill := Bill{
-			UserID:      user,
+			Name:        "Payroll Bill for " + i.PeriodStart.Format("01/02/2006") + " - " + i.PeriodEnd.Format("01/02/2006"),
+			EmployeeID:  user,
 			PeriodStart: i.PeriodStart,
 			PeriodEnd:   i.PeriodEnd,
 			TotalHours:  hours,
@@ -684,20 +706,24 @@ func (a *App) GenerateBills(i *Invoice) {
 			TotalAmount: fee,
 		}
 		a.DB.Create(&bill)
+		err := a.SaveBillToGCS(&bill)
+		if err != nil {
+			fmt.Println(err)
+		}
 		// Now add a journal entry to reflect the bill
 		journal := Journal{
 			Account:    AccountAPStaffPayroll.String(),
-			SubAccount: userObj.Email,
+			SubAccount: userObj.FirstName + " " + userObj.LastName,
 			Debit:      int64(fee),
 			Credit:     0,
 			Memo:       "Staff Payroll",
-			BillID:     bill.ID,
+			BillID:     &bill.ID,
 		}
 		a.DB.Create(&journal)
 		// Finally update the entries to reflect the bill
 		for _, entry := range i.Entries {
 			if entry.EmployeeID == user {
-				entry.BillID = bill.ID
+				entry.BillID = &bill.ID
 				a.DB.Save(&entry)
 			}
 		}
@@ -714,20 +740,20 @@ func (a *App) AddJournalEntries(i *Invoice) {
 		Debit:      0,
 		Credit:     int64(i.TotalFees * 100),
 		Memo:       i.Name,
-		InvoiceID:  i.ID,
+		InvoiceID:  &i.ID,
 	}
 	a.DB.Create(&journal)
 	// Associate the invoice
-	i.JournalID = journal.ID
+	i.JournalID = &journal.ID
 	a.DB.Save(&i)
 	// Now we need to add an entry for any adjustments
 	adjustmentJournal := Journal{
 		Account:    AccountAPDiscount.String(),
 		SubAccount: i.Project.Account.LegalName,
-		Debit:      int64(i.TotalAdjustments * 100),
+		Debit:      int64(uint(i.TotalAdjustments) * 100),
 		Credit:     0,
 		Memo:       i.Name,
-		InvoiceID:  i.ID,
+		InvoiceID:  &i.ID,
 	}
 	a.DB.Create(&adjustmentJournal)
 }
