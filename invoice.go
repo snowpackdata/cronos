@@ -46,7 +46,8 @@ func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 	case BillingFrequencyBiweekly.String():
 		// retrieve the ending date of the last invoice
 		if len(invoices) > 0 {
-			newARInvoice.PeriodStart = invoices[0].PeriodEnd.AddDate(0, 0, 1)
+			preCleanedStart := invoices[0].PeriodEnd.AddDate(0, 0, 1)
+			newARInvoice.PeriodStart = time.Date(preCleanedStart.Year(), preCleanedStart.Month(), preCleanedStart.Day(), 0, 0, 0, 0, time.UTC)
 		} else {
 			// make the start date the beginning of this week
 			weekday := creationDate.Weekday()
@@ -58,7 +59,8 @@ func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 	case BillingFrequencyWeekly.String():
 		// retrieve the ending date of the last invoice
 		if len(invoices) > 0 {
-			newARInvoice.PeriodStart = invoices[0].PeriodEnd.AddDate(0, 0, 1)
+			preCleanedStart := invoices[0].PeriodEnd.AddDate(0, 0, 1)
+			newARInvoice.PeriodStart = time.Date(preCleanedStart.Year(), preCleanedStart.Month(), preCleanedStart.Day(), 0, 0, 0, 0, time.UTC)
 		} else {
 			// make the start date the beginning of this week
 			weekday := creationDate.Weekday()
@@ -145,7 +147,7 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	}
 	// Retrieve the appropriate invoice
 	var eligibleInvoices []Invoice
-	a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ? order by period_end desc", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
+	a.DB.Order("period_end desc").Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
 	// If there are no eligible invoices, we'll create a new one
 	if len(eligibleInvoices) == 0 {
 		err := a.CreateInvoice(projectID, entry.Start)
