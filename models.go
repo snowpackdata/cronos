@@ -2,12 +2,13 @@ package cronos
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
 	_ "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"strings"
-	"time"
 )
 
 // The following are all boilerplate methods and objects for
@@ -497,43 +498,48 @@ func (b *Bill) GetBillFilename() string {
 }
 
 type ApiEntry struct {
-	EntryID        uint      `json:"entry_id"`
-	ProjectID      uint      `json:"project_id"`
-	BillingCodeID  uint      `json:"billing_code_id"`
-	BillingCode    string    `json:"billing_code"`
-	Start          time.Time `json:"start"`
-	End            time.Time `json:"end"`
-	Notes          string    `json:"notes"`
-	StartDate      string    `json:"start_date"`
-	StartHour      int       `json:"start_hour"`
-	StartMinute    int       `json:"start_minute"`
-	EndDate        string    `json:"end_date"`
-	EndHour        int       `json:"end_hour"`
-	EndMinute      int       `json:"end_minute"`
-	DurationHours  float64   `json:"duration_hours"`
-	StartDayOfWeek string    `json:"start_day_of_week"`
-	StartIndex     float64   `json:"start_index"`
-	State          string    `json:"state"`
+	EntryID         uint      `json:"entry_id"`
+	ProjectID       uint      `json:"project_id"`
+	BillingCodeID   uint      `json:"billing_code_id"`
+	BillingCode     string    `json:"billing_code"`
+	BillingCodeName string    `json:"billing_code_name"`
+	Start           time.Time `json:"start"`
+	End             time.Time `json:"end"`
+	Notes           string    `json:"notes"`
+	StartDate       string    `json:"start_date"`
+	StartHour       int       `json:"start_hour"`
+	StartMinute     int       `json:"start_minute"`
+	EndDate         string    `json:"end_date"`
+	EndHour         int       `json:"end_hour"`
+	EndMinute       int       `json:"end_minute"`
+	DurationHours   float64   `json:"duration_hours"`
+	StartDayOfWeek  string    `json:"start_day_of_week"`
+	StartIndex      float64   `json:"start_index"`
+	State           string    `json:"state"`
+	Fee             float64   `json:"fee"`
 }
 
 func (e *Entry) GetAPIEntry() ApiEntry {
 	apiEntry := ApiEntry{
-		EntryID:        e.ID,
-		ProjectID:      e.ProjectID,
-		BillingCodeID:  e.BillingCodeID,
-		BillingCode:    e.BillingCode.Code,
-		Start:          e.Start.In(time.UTC),
-		End:            e.End.In(time.UTC),
-		Notes:          e.Notes,
-		StartDate:      e.Start.In(time.UTC).Format("2006-01-02"),
-		StartHour:      e.Start.In(time.UTC).Hour(),
-		StartMinute:    e.Start.Minute(),
-		EndDate:        e.End.In(time.UTC).Format("2006-01-02"),
-		EndHour:        e.End.In(time.UTC).Hour(),
-		EndMinute:      e.End.Minute(),
-		DurationHours:  e.Duration().Hours(),
-		StartDayOfWeek: e.Start.In(time.UTC).Weekday().String(),
-		StartIndex:     float64(e.Start.In(time.UTC).Hour()) + (float64(e.Start.Minute()) / 60.0),
+		EntryID:         e.ID,
+		ProjectID:       e.ProjectID,
+		BillingCodeID:   e.BillingCodeID,
+		BillingCode:     e.BillingCode.Code,
+		BillingCodeName: e.BillingCode.Name,
+		Start:           e.Start.In(time.UTC),
+		End:             e.End.In(time.UTC),
+		Notes:           e.Notes,
+		StartDate:       e.Start.In(time.UTC).Format("2006-01-02"),
+		StartHour:       e.Start.In(time.UTC).Hour(),
+		StartMinute:     e.Start.Minute(),
+		EndDate:         e.End.In(time.UTC).Format("2006-01-02"),
+		EndHour:         e.End.In(time.UTC).Hour(),
+		EndMinute:       e.End.Minute(),
+		DurationHours:   e.Duration().Hours(),
+		StartDayOfWeek:  e.Start.In(time.UTC).Weekday().String(),
+		StartIndex:      float64(e.Start.In(time.UTC).Hour()) + (float64(e.Start.Minute()) / 60.0),
+		State:           e.State,
+		Fee:             float64(e.Fee) / 100.0,
 	}
 	return apiEntry
 }
