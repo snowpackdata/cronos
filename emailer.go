@@ -39,6 +39,9 @@ type Email struct {
 
 func (e *Email) HTMLContent() string {
 	filename := EmailTemplateFolder + "/" + e.htmlFile
+	if e.htmlFile == "" {
+		return ""
+	}
 	t, err := template.New(e.htmlFile).ParseFiles(filename)
 	if err != nil {
 		log.Println("Error parsing template file")
@@ -73,6 +76,19 @@ func (a *App) EmailFromAdmin(emailType EmailType, address string) error {
 			htmlFile:       emailType.String(),
 		}
 	}
+	from := mail.NewEmail(email.SenderName, email.SenderEmail)
+	to := mail.NewEmail(email.RecipientName, email.RecipientEmail)
+	message := mail.NewSingleEmail(from, email.Subject, to, email.PlainTextContent, email.HTMLContent())
+	client := sendgrid.NewSendClient(os.Getenv("SENDGRID_API_KEY"))
+	response, err := client.Send(message)
+	if err != nil {
+		return errors.Wrap(err, "error sending email")
+	}
+	log.Println(response.StatusCode)
+	return nil
+}
+
+func (a *App) EmailUsersAlert(email *Email) error {
 	from := mail.NewEmail(email.SenderName, email.SenderEmail)
 	to := mail.NewEmail(email.RecipientName, email.RecipientEmail)
 	message := mail.NewSingleEmail(from, email.Subject, to, email.PlainTextContent, email.HTMLContent())

@@ -32,6 +32,12 @@ func (s BillingFrequency) String() string {
 	return string(s)
 }
 
+type BudgetPeriod string
+
+func (s BudgetPeriod) String() string {
+	return string(s)
+}
+
 type RateType string
 
 func (s RateType) String() string {
@@ -98,12 +104,17 @@ const (
 	BillingFrequencyWeekly    BillingFrequency = "BILLING_TYPE_WEEKLY"
 	BillingFrequencyBiMonthly BillingFrequency = "BILLING_TYPE_BIMONTHLY"
 
-	EntryStateUnaffiliated EntryState = "ENTRY_STATE_UNAFFILIATED"
-	EntryStateDraft        EntryState = "ENTRY_STATE_DRAFT"
-	EntryStateApproved     EntryState = "ENTRY_STATE_APPROVED"
-	EntryStateSent         EntryState = "ENTRY_STATE_SENT"
-	EntryStatePaid         EntryState = "ENTRY_STATE_PAID"
-	EntryStateVoid         EntryState = "ENTRY_STATE_VOID"
+	BudgetPeriodWeekly  BudgetPeriod = "BUDGET_PERIOD_WEEKLY"
+	BudgetPeriodMonthly BudgetPeriod = "BUDGET_PERIOD_MONTHLY"
+	BudgetPeriodProject BudgetPeriod = "BUDGET_PERIOD_PROJECT"
+
+	EntryStateUnaffiliated     EntryState = "ENTRY_STATE_UNAFFILIATED"
+	EntryStateDraft            EntryState = "ENTRY_STATE_DRAFT"
+	EntryStateApprovalRequired EntryState = "ENTRY_STATE_APPROVAL_REQUIRED"
+	EntryStateApproved         EntryState = "ENTRY_STATE_APPROVED"
+	EntryStateSent             EntryState = "ENTRY_STATE_SENT"
+	EntryStatePaid             EntryState = "ENTRY_STATE_PAID"
+	EntryStateVoid             EntryState = "ENTRY_STATE_VOID"
 
 	InvoiceStateDraft    InvoiceState = "INVOICE_STATE_DRAFT"
 	InvoiceStateApproved InvoiceState = "INVOICE_STATE_APPROVED"
@@ -210,19 +221,22 @@ type Project struct {
 
 type BillingCode struct {
 	gorm.Model
-	Name           string    `json:"name"`
-	RateType       string    `json:"type"`
-	Category       string    `json:"category"`
-	Code           string    `gorm:"unique" json:"code"`
-	RoundedTo      int       `gorm:"default:15" json:"rounded_to"`
-	ProjectID      uint      `json:"project"`
-	ActiveStart    time.Time `json:"active_start"`
-	ActiveEnd      time.Time `json:"active_end"`
-	RateID         uint      `json:"rate_id"`
-	Rate           Rate      `json:"rate"`
-	InternalRateID uint      `json:"internal_rate_id"`
-	InternalRate   Rate      `json:"internal_rate"`
-	Entries        []Entry   `json:"entries"`
+	Name             string    `json:"name"`
+	RateType         string    `json:"type"`
+	Category         string    `json:"category"`
+	Code             string    `gorm:"unique" json:"code"`
+	RoundedTo        int       `gorm:"default:15" json:"rounded_to"`
+	ProjectID        uint      `json:"project"`
+	ActiveStart      time.Time `json:"active_start"`
+	ActiveEnd        time.Time `json:"active_end"`
+	RateID           uint      `json:"rate_id"`
+	Rate             Rate      `json:"rate"`
+	InternalRateID   uint      `json:"internal_rate_id"`
+	InternalRate     Rate      `json:"internal_rate"`
+	Entries          []Entry   `json:"entries"`
+	TotalBudgetHours int       `json:"total_budget_hours"`
+	PeriodBudgetType string    `json:"period_budget_type"`
+	PeriodBudget     float64   `json:"weekly_budget_hours"`
 }
 type Entry struct {
 	gorm.Model
@@ -500,6 +514,7 @@ func (b *Bill) GetBillFilename() string {
 type ApiEntry struct {
 	EntryID         uint      `json:"entry_id"`
 	ProjectID       uint      `json:"project_id"`
+	ProjectName     string    `json:"project_name"`
 	BillingCodeID   uint      `json:"billing_code_id"`
 	BillingCode     string    `json:"billing_code"`
 	BillingCodeName string    `json:"billing_code_name"`
@@ -523,6 +538,7 @@ func (e *Entry) GetAPIEntry() ApiEntry {
 	apiEntry := ApiEntry{
 		EntryID:         e.ID,
 		ProjectID:       e.ProjectID,
+		ProjectName:     e.Project.Name,
 		BillingCodeID:   e.BillingCodeID,
 		BillingCode:     e.BillingCode.Code,
 		BillingCodeName: e.BillingCode.Name,
