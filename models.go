@@ -423,34 +423,37 @@ func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItem {
 	var invoiceLineItems []InvoiceLineItem
 	var entries []Entry
 	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").Where("invoice_id = ? AND state != ?", i.ID, EntryStateVoid.String()).Find(&entries)
+
+	// Create a map to index line items
+	billingCodeMap := make(map[string]InvoiceLineItem)
+
+	// Populate the list of line items
 	for _, entry := range entries {
-		// If a line item exists for the billing code, add the hours to the line item
-		// otherwise create a new line item for the billing code
-		// We must populate the first line item
-		if len(invoiceLineItems) == 0 {
-			invoiceLineItems = append(invoiceLineItems, InvoiceLineItem{
+		billingCode := entry.BillingCode.Code
+		if lineItem, exists := billingCodeMap[billingCode]; exists {
+			// Update the existing line item
+			lineItem.Hours += entry.Duration().Hours()
+			lineItem.Total = lineItem.Hours * lineItem.Rate
+			billingCodeMap[billingCode] = lineItem
+		} else {
+			// Create a new line item
+			billingCodeMap[billingCode] = InvoiceLineItem{
 				BillingCode: entry.BillingCode.Code,
 				Project:     entry.BillingCode.Name,
 				Hours:       entry.Duration().Hours(),
 				Rate:        entry.BillingCode.Rate.Amount,
-			})
-			continue
-		}
-		for i, _ := range invoiceLineItems {
-			if invoiceLineItems[i].BillingCode == entry.BillingCode.Code {
-				additionalHours := entry.Duration().Hours()
-				invoiceLineItems[i].Hours += additionalHours
-				break
-			} else {
-				invoiceLineItems = append(invoiceLineItems, InvoiceLineItem{
-					BillingCode: entry.BillingCode.Code,
-					Project:     entry.BillingCode.Name,
-					Hours:       entry.Duration().Hours(),
-					Rate:        entry.BillingCode.Rate.Amount,
-				})
+				Total:       entry.Duration().Hours() * entry.BillingCode.Rate.Amount,
 			}
 		}
 	}
+
+	// Convert the map values to a slice
+	for _, lineItem := range billingCodeMap {
+		lineItem.HoursFormatted = fmt.Sprintf("%.2f", lineItem.Hours)
+		lineItem.RateFormatted = fmt.Sprintf("%.2f", lineItem.Rate)
+		invoiceLineItems = append(invoiceLineItems, lineItem)
+	}
+
 	for i, _ := range invoiceLineItems {
 		invoiceLineItems[i].Total = invoiceLineItems[i].Hours * invoiceLineItems[i].Rate
 		invoiceLineItems[i].HoursFormatted = fmt.Sprintf("%.2f", invoiceLineItems[i].Hours)
