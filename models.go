@@ -330,6 +330,32 @@ type Journal struct {
 	Credit     int64   `json:"credit"`
 }
 
+// WEBSITE SPECIFIC MODULES
+
+// Survey is a simple object that we can use to track the responses to a survey
+type Survey struct {
+	gorm.Model
+	SurveyType string `json:"survey_type"`
+	Email      string `json:"email"`
+	Completed  bool   `json:"completed"`
+}
+
+// SurveyResponse is a response to a survey question
+type SurveyResponse struct {
+	gorm.Model
+	SurveyID         uint   `json:"survey_id"`
+	Survey           Survey `json:"survey"`
+	Step             int    `json:"step"`
+	Question         string `json:"question"`
+	AnswerType       string `json:"answer_type"`
+	StructuredAnswer string `json:"answer"`
+	FreeformAnswer   string `json:"freeform_answer"`
+}
+
+// ENUM FOR SURVEY TYPES
+// ENUM FOR ANSWER TYPES
+// MAYBE ENUM FOR QUESTIONS?
+
 // OBJECT METHODS
 
 // Duration finds the length of an Entry as a duration object
