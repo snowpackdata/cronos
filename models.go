@@ -335,9 +335,10 @@ type Journal struct {
 // Survey is a simple object that we can use to track the responses to a survey
 type Survey struct {
 	gorm.Model
-	SurveyType string `json:"survey_type"`
-	Email      string `json:"email"`
-	Completed  bool   `json:"completed"`
+	SurveyType      string           `json:"survey_type"`
+	Email           string           `json:"email"`
+	Completed       bool             `json:"completed"`
+	SurveyResponses []SurveyResponse `json:"survey_responses"`
 }
 
 // SurveyResponse is a response to a survey question
