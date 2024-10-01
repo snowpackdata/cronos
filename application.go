@@ -117,6 +117,8 @@ func (a *App) Migrate() {
 	_ = a.DB.AutoMigrate(&Journal{})
 	_ = a.DB.AutoMigrate(&Invoice{})
 	_ = a.DB.AutoMigrate(&Adjustment{})
+	_ = a.DB.AutoMigrate(&Survey{})
+	_ = a.DB.AutoMigrate(&SurveyResponse{})
 }
 
 // GenerateSecureFilename generates a hash from the filename of an invoice
