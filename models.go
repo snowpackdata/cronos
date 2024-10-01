@@ -336,12 +336,14 @@ type Journal struct {
 type Survey struct {
 	gorm.Model
 	SurveyType      string           `json:"survey_type"`
-	Email           string           `json:"email"`
+	UserEmail       string           `json:"user_email"`
+	UserRole        string           `json:"user_role"`
+	CompanyName     string           `json:"company_name"`
 	Completed       bool             `json:"completed"`
 	SurveyResponses []SurveyResponse `json:"survey_responses"`
 }
 
-// SurveyResponse is a response to a survey question
+// SurveyResponse is a response to a survey question. There may be any number of these
 type SurveyResponse struct {
 	gorm.Model
 	SurveyID         uint   `json:"survey_id"`
@@ -352,10 +354,6 @@ type SurveyResponse struct {
 	StructuredAnswer string `json:"answer"`
 	FreeformAnswer   string `json:"freeform_answer"`
 }
-
-// ENUM FOR SURVEY TYPES
-// ENUM FOR ANSWER TYPES
-// MAYBE ENUM FOR QUESTIONS?
 
 // OBJECT METHODS
 
