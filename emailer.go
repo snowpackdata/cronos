@@ -2,23 +2,25 @@ package cronos
 
 import (
 	"bytes"
-	"github.com/pkg/errors"
-	"github.com/sendgrid/sendgrid-go"
-	"github.com/sendgrid/sendgrid-go/helpers/mail"
 	"html/template"
 	"log"
 	"os"
+
+	"github.com/pkg/errors"
+	"github.com/sendgrid/sendgrid-go"
+	"github.com/sendgrid/sendgrid-go/helpers/mail"
 )
 
 type EmailType string
 
 const (
-	EmailTemplateFolder               = "./templates/emails"
-	EmailTypeRegisterClient EmailType = "register_client.html"
-	EmailTypeRegisterStaff  EmailType = "register_staff.html"
-	EmailTypeResetPassword  EmailType = "reset_password.html"
-	EmailTypeChangePassword EmailType = "change_password.html"
-	EmailTypeWelcome        EmailType = "welcome.html"
+	EmailTemplateFolder                   = "./templates/emails"
+	EmailTypeRegisterClient     EmailType = "register_client.html"
+	EmailTypeRegisterStaff      EmailType = "register_staff.html"
+	EmailTypeResetPassword      EmailType = "reset_password.html"
+	EmailTypeChangePassword     EmailType = "change_password.html"
+	EmailTypeWelcome            EmailType = "welcome.html"
+	EmailTypeSurveyConfirmation EmailType = "survey_confirmation.html"
 )
 
 func (s EmailType) String() string {
@@ -70,6 +72,14 @@ func (a *App) EmailFromAdmin(emailType EmailType, address string) error {
 			SenderEmail:    "accounts@snowpack-data.io",
 			RecipientEmail: address,
 			Subject:        "Welcome to Snowpack Data",
+			htmlFile:       emailType.String(),
+		}
+	case EmailTypeSurveyConfirmation:
+		email = Email{
+			SenderName:     "Snowpack-Data",
+			SenderEmail:    "accounts@snowpack-data.io",
+			RecipientEmail: address,
+			Subject:        "We Received your Survey Response",
 			htmlFile:       emailType.String(),
 		}
 	}
