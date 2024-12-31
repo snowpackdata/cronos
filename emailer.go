@@ -94,3 +94,16 @@ func (a *App) EmailFromAdmin(emailType EmailType, address string) error {
 	log.Println(response.StatusCode)
 	return nil
 }
+
+func (a *App) SendTextEmail(email Email) error {
+	from := mail.NewEmail(email.SenderName, email.SenderEmail)
+	to := mail.NewEmail(email.RecipientName, email.RecipientEmail)
+	message := mail.NewSingleEmail(from, email.Subject, to, email.PlainTextContent, email.PlainTextContent)
+	client := sendgrid.NewSendClient(os.Getenv("SENDGRID_API_KEY"))
+	response, err := client.Send(message)
+	if err != nil {
+		return errors.Wrap(err, "error sending email")
+	}
+	log.Println(response.StatusCode)
+	return nil
+}
