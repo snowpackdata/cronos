@@ -2,6 +2,7 @@ package cronos
 
 import (
 	"fmt"
+	"github.com/pkg/errors"
 	"strings"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+var NoEligibleBill = errors.New("no eligible bill found")
 
 // The following are all boilerplate methods and objects for
 // standard interactions and comparisons with the database
@@ -699,8 +702,23 @@ func (a *App) GetAcceptedInvoice(i *Invoice) AcceptedInvoice {
 	return acceptedInvoice
 }
 
+// GetLatestBillIfExists returns the latest bill for a user if they have an active bill open
+// otherwise it returns an error that indicates that they do not have an active bill
+func (a *App) GetLatestBillIfExists(userID uint) (Bill, error) {
+	var bill Bill
+	// An active bill is one that has not been accepted, voided, or paid
+	// and is active within the current month
+	a.DB.Where("accepted_at is null and employee_id = ?", userID).Order("period_end desc").First(&bill)
+	if bill.Name == "" {
+		return Bill{}, NoEligibleBill
+	}
+	return bill, nil
+}
+
 func (a *App) GenerateBills(i *Invoice) {
 	userBillingCodeMap := make(map[uint]map[uint]float64)
+	// Add up each of the fees for a user and billing code
+	// and cache the value
 	for _, entry := range i.Entries {
 		if entry.State == EntryStateVoid.String() {
 			continue
@@ -716,6 +734,7 @@ func (a *App) GenerateBills(i *Invoice) {
 			userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
 		}
 	}
+	// Now we need to iterate over the map and create or add to the bill for each user
 	for user, billingCodes := range userBillingCodeMap {
 		var userObj Employee
 		a.DB.Where("id = ?", user).First(&userObj)
@@ -729,31 +748,33 @@ func (a *App) GenerateBills(i *Invoice) {
 			fee += int(floatFee * 100)
 			hours += (loopMin / 60)
 		}
-		// create a bill object
-		bill := Bill{
-			Name:        "Payroll Bill for " + i.PeriodStart.Format("01/02/2006") + " - " + i.PeriodEnd.Format("01/02/2006"),
-			EmployeeID:  user,
-			PeriodStart: i.PeriodStart,
-			PeriodEnd:   i.PeriodEnd,
-			TotalHours:  hours,
-			TotalFees:   fee,
-			TotalAmount: fee,
+		// See if there is an existing bill for the user
+		var bill Bill
+		var err error
+		bill, err = a.GetLatestBillIfExists(user)
+		// If there is no bill, then create a new one for the user for this month
+		firstOfMonth := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
+		lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
+		if err != nil && errors.Is(err, NoEligibleBill) {
+			bill = Bill{
+				Name:        "Payroll Bill for " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
+				EmployeeID:  user,
+				PeriodStart: firstOfMonth,
+				PeriodEnd:   lastOfMonth,
+				TotalHours:  0,
+				TotalFees:   0,
+				TotalAmount: 0,
+			}
+			a.DB.Create(&bill)
 		}
-		a.DB.Create(&bill)
-		err := a.SaveBillToGCS(&bill)
+		// Add the fees to the existing bill
+		bill.TotalHours += hours
+		bill.TotalFees += fee
+		bill.TotalAmount += fee
+		err = a.SaveBillToGCS(&bill)
 		if err != nil {
 			fmt.Println(err)
 		}
-		// Now add a journal entry to reflect the bill
-		journal := Journal{
-			Account:    AccountAPStaffPayroll.String(),
-			SubAccount: userObj.FirstName + " " + userObj.LastName,
-			Debit:      int64(fee),
-			Credit:     0,
-			Memo:       "Staff Payroll",
-			BillID:     &bill.ID,
-		}
-		a.DB.Create(&journal)
 		// Finally update the entries to reflect the bill
 		for _, entry := range i.Entries {
 			if entry.EmployeeID == user {
@@ -764,13 +785,33 @@ func (a *App) GenerateBills(i *Invoice) {
 	}
 }
 
+func (a *App) MarkBillPaid(b *Bill) {
+	b.AcceptedAt = time.Now()
+	a.DB.Save(&b)
+
+	// Get the User
+	var userObj Employee
+	a.DB.Where("id = ?", b.EmployeeID).First(&userObj)
+	// Now add a journal entry to reflect the bill
+	journal := Journal{
+		Account:    AccountAPStaffPayroll.String(),
+		SubAccount: userObj.FirstName + " " + userObj.LastName,
+		Debit:      int64(b.TotalFees),
+		Credit:     0,
+		Memo:       b.Name,
+		BillID:     &b.ID,
+	}
+	a.DB.Create(&journal)
+
+}
+
 func (a *App) AddJournalEntries(i *Invoice) {
 	// First we need to add the entries for the total fee of the invoice
 	var project Project
 	a.DB.Preload("Account").Where("id = ?", i.ProjectID).First(&project)
 	journal := Journal{
 		Account:    AccountARClientBillable.String(),
-		SubAccount: i.Project.Account.LegalName,
+		SubAccount: project.Account.LegalName,
 		Debit:      0,
 		Credit:     int64(i.TotalFees * 100),
 		Memo:       i.Name,
@@ -781,13 +822,16 @@ func (a *App) AddJournalEntries(i *Invoice) {
 	i.JournalID = &journal.ID
 	a.DB.Save(&i)
 	// Now we need to add an entry for any adjustments
-	adjustmentJournal := Journal{
-		Account:    AccountAPDiscount.String(),
-		SubAccount: i.Project.Account.LegalName,
-		Debit:      int64(uint(i.TotalAdjustments) * 100),
-		Credit:     0,
-		Memo:       i.Name,
-		InvoiceID:  &i.ID,
+	if i.TotalAdjustments != 0 {
+		adjustmentJournal := Journal{
+			Account:    AccountARClientFee.String(),
+			SubAccount: project.Account.LegalName,
+			Debit:      0,
+			Credit:     int64(i.TotalAdjustments * 100),
+			Memo:       i.Name,
+			InvoiceID:  &i.ID,
+		}
+		a.DB.Create(&adjustmentJournal)
 	}
-	a.DB.Create(&adjustmentJournal)
+	return
 }
