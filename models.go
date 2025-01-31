@@ -2,9 +2,10 @@ package cronos
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
 	_ "gorm.io/driver/postgres"
@@ -708,7 +709,7 @@ func (a *App) GetLatestBillIfExists(userID uint) (Bill, error) {
 	var bill Bill
 	// An active bill is one that has not been accepted, voided, or paid
 	// and is active within the current month
-	a.DB.Where("accepted_at is null and employee_id = ?", userID).Order("period_end desc").First(&bill)
+	a.DB.Where("accepted_at < '2020-01-01' and employee_id = ?", userID).Order("period_end desc").First(&bill)
 	if bill.Name == "" {
 		return Bill{}, NoEligibleBill
 	}
@@ -771,6 +772,7 @@ func (a *App) GenerateBills(i *Invoice) {
 		bill.TotalHours += hours
 		bill.TotalFees += fee
 		bill.TotalAmount += fee
+		a.DB.Save(&bill)
 		err = a.SaveBillToGCS(&bill)
 		if err != nil {
 			fmt.Println(err)
