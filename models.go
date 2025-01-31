@@ -2,10 +2,9 @@ package cronos
 
 import (
 	"fmt"
+	"github.com/pkg/errors"
 	"strings"
 	"time"
-
-	"github.com/pkg/errors"
 
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
 	_ "gorm.io/driver/postgres"
@@ -266,7 +265,7 @@ type Invoice struct {
 	PeriodEnd        time.Time    `json:"period_end"`
 	Entries          []Entry      `json:"entries"`
 	Adjustments      []Adjustment `json:"adjustments"`
-	AcceptedAt       *time.Time   `json:"accepted_at"`
+	AcceptedAt       time.Time    `json:"accepted_at"`
 	SentAt           time.Time    `json:"sent_at"`
 	DueAt            time.Time    `json:"due_at"`
 	ClosedAt         time.Time    `json:"closed_at"`
@@ -311,7 +310,7 @@ type Bill struct {
 	PeriodEnd        time.Time    `json:"period_end"`
 	Entries          []Entry      `json:"entries"`
 	Adjustments      []Adjustment `json:"adjustments"`
-	AcceptedAt       *time.Time   `json:"accepted_at"`
+	AcceptedAt       time.Time    `json:"accepted_at"`
 	TotalHours       float64      `json:"total_hours"`
 	TotalFees        int          `json:"total_fees"`
 	TotalAdjustments float64      `json:"total_adjustments"`
