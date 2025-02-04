@@ -9,7 +9,7 @@ import (
 func (a *App) SaveBillToGCS(bill *Bill) error {
 	ctx := context.Background()
 	// Generate the invoice
-	// The output must be stored as a list of bytes in-memory becasue of the readonly filesystem in GAE
+	// The output must be stored as a list of bytes in-memory because of the readonly filesystem in GAE
 	pdfBytes := a.GenerateBillPDF(bill)
 	// Save the invoice to GCS
 	client := a.InitializeStorageClient(a.Project, a.Bucket)
@@ -17,7 +17,7 @@ func (a *App) SaveBillToGCS(bill *Bill) error {
 	// Create a bucket handle
 	bucket := client.Bucket(a.Bucket)
 	// Create a new object and write its contents to the bucket
-	filename := GenerateSecureFilename(bill.GetBillFilename()) + ".pdf"
+	filename := bill.GetBillFilename() + ".pdf"
 	objectName := "bills/" + filename
 	writer := bucket.Object(objectName).NewWriter(ctx)
 	if _, err := writer.Write(pdfBytes); err != nil {
@@ -34,5 +34,14 @@ func (a *App) SaveBillToGCS(bill *Bill) error {
 	// save the public invoice URL to the database
 	bill.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
 	a.DB.Save(&bill)
+	return nil
+}
+
+// RegeneratePDF regenerates the PDF for a bill, we will call this when a bill is updated
+func (a *App) RegeneratePDF(bill *Bill) error {
+	err := a.SaveBillToGCS(bill)
+	if err != nil {
+		panic(err)
+	}
 	return nil
 }
