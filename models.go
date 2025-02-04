@@ -310,7 +310,8 @@ type Bill struct {
 	PeriodEnd        time.Time    `json:"period_end"`
 	Entries          []Entry      `json:"entries"`
 	Adjustments      []Adjustment `json:"adjustments"`
-	AcceptedAt       time.Time    `json:"accepted_at"`
+	AcceptedAt       *time.Time   `json:"accepted_at"`
+	ClosedAt         *time.Time   `json:"closed_at"`
 	TotalHours       float64      `json:"total_hours"`
 	TotalFees        int          `json:"total_fees"`
 	TotalAdjustments float64      `json:"total_adjustments"`
@@ -518,6 +519,10 @@ func (i *Invoice) GetInvoiceFilename() string {
 	filename := strings.Replace(i.Name, " ", "_", -1)
 	filename = strings.Replace(filename, ":", "", -1)
 	filename = strings.Replace(filename, "/", ".", -1)
+	filename = strings.Replace(filename, "(", "", -1)
+	filename = strings.Replace(filename, ")", "", -1)
+	filename = strings.Replace(filename, ",", "", -1)
+	filename = strings.Replace(filename, "'", "", -1)
 	return filename
 }
 
@@ -525,6 +530,10 @@ func (b *Bill) GetBillFilename() string {
 	filename := strings.Replace(b.Name, " ", "_", -1)
 	filename = strings.Replace(filename, ":", "", -1)
 	filename = strings.Replace(filename, "/", ".", -1)
+	filename = strings.Replace(filename, "(", "", -1)
+	filename = strings.Replace(filename, ")", "", -1)
+	filename = strings.Replace(filename, ",", "", -1)
+	filename = strings.Replace(filename, "'", "", -1)
 	return filename
 }
 
@@ -708,7 +717,7 @@ func (a *App) GetLatestBillIfExists(userID uint) (Bill, error) {
 	var bill Bill
 	// An active bill is one that has not been accepted, voided, or paid
 	// and is active within the current month
-	a.DB.Where("accepted_at is null and employee_id = ?", userID).Order("period_end desc").First(&bill)
+	a.DB.Where("closed_at is null and employee_id = ?", userID).Order("period_end desc").First(&bill)
 	if bill.Name == "" {
 		return Bill{}, NoEligibleBill
 	}
@@ -756,8 +765,10 @@ func (a *App) GenerateBills(i *Invoice) {
 		firstOfMonth := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
 		lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
 		if err != nil && errors.Is(err, NoEligibleBill) {
+			// Create a new bill for the user
+			// First We need the user's name
 			bill = Bill{
-				Name:        "Payroll Bill for " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
+				Name:        "Payroll " + userObj.FirstName + " " + userObj.LastName + " " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
 				EmployeeID:  user,
 				PeriodStart: firstOfMonth,
 				PeriodEnd:   lastOfMonth,
@@ -771,22 +782,26 @@ func (a *App) GenerateBills(i *Invoice) {
 		bill.TotalHours += hours
 		bill.TotalFees += fee
 		bill.TotalAmount += fee
-		err = a.SaveBillToGCS(&bill)
-		if err != nil {
-			fmt.Println(err)
-		}
-		// Finally update the entries to reflect the bill
+		a.DB.Save(&bill)
+
+		// Update the entries to associate with the bill
 		for _, entry := range i.Entries {
 			if entry.EmployeeID == user {
 				entry.BillID = &bill.ID
 				a.DB.Save(&entry)
 			}
 		}
+		// Save the bill
+		err = a.SaveBillToGCS(&bill)
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 }
 
 func (a *App) MarkBillPaid(b *Bill) {
-	b.AcceptedAt = time.Now()
+	nowTime := time.Now()
+	b.ClosedAt = &nowTime
 	a.DB.Save(&b)
 
 	// Get the User
