@@ -439,6 +439,16 @@ type InvoiceLineItem struct {
 	RateFormatted  string  `json:"rate_formatted"`
 	Total          float64 `json:"total"`
 }
+
+type BillLineItem struct {
+	BillingCode     string  `json:"billing_code"`
+	BillingCodeCode string  `json:"billing_code_code"`
+	Hours           float64 `json:"hours"`
+	HoursFormatted  string  `json:"hours_formatted"`
+	Rate            float64 `json:"rate"`
+	RateFormatted   string  `json:"rate_formatted"`
+	Total           float64 `json:"total"`
+}
 type invoiceEntry struct {
 	dateString     string
 	billingCode    string
@@ -849,4 +859,48 @@ func (a *App) AddJournalEntries(i *Invoice) {
 		a.DB.Create(&adjustmentJournal)
 	}
 	return
+}
+
+func (a *App) GetBillLineItems(b *Bill) []BillLineItem {
+	var billLineItems []BillLineItem
+	var entries []Entry
+	a.DB.Preload("BillingCode").Preload("BillingCode.InternalRate").Where("bill_id = ? AND state != ?", b.ID, EntryStateVoid.String()).Find(&entries)
+
+	// Create a map to index line items
+	billingCodeMap := make(map[string]BillLineItem)
+
+	// Populate the list of line items
+	for _, entry := range entries {
+		billingCode := entry.BillingCode.Code
+		if lineItem, exists := billingCodeMap[billingCode]; exists {
+			// Update the existing line item
+			lineItem.Hours += entry.Duration().Hours()
+			lineItem.Total = lineItem.Hours * lineItem.Rate
+			billingCodeMap[billingCode] = lineItem
+		} else {
+			// Create a new line item
+			billingCodeMap[billingCode] = BillLineItem{
+				BillingCode:     entry.BillingCode.Name,
+				BillingCodeCode: entry.BillingCode.Code,
+				Hours:           entry.Duration().Hours(),
+				Rate:            entry.BillingCode.InternalRate.Amount,
+				Total:           entry.Duration().Hours() * entry.BillingCode.InternalRate.Amount,
+			}
+		}
+	}
+
+	// Convert the map values to a slice
+	for _, lineItem := range billingCodeMap {
+		lineItem.HoursFormatted = fmt.Sprintf("%.2f", lineItem.Hours)
+		lineItem.RateFormatted = fmt.Sprintf("%.2f", lineItem.Rate)
+		billLineItems = append(billLineItems, lineItem)
+	}
+
+	for i, _ := range billLineItems {
+		billLineItems[i].Total = billLineItems[i].Hours * billLineItems[i].Rate
+		billLineItems[i].HoursFormatted = fmt.Sprintf("%.2f", billLineItems[i].Hours)
+		billLineItems[i].RateFormatted = fmt.Sprintf("%.2f", billLineItems[i].Rate)
+	}
+
+	return billLineItems
 }

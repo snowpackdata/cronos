@@ -17,8 +17,8 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	// 3. Associated Billable/Client Information
 	// 4. Summary of Totals and Subtotals
 
-	// 1. Overall invoice summary grouped at the billing code level
-	//lineItems := a.GetInvoiceLineItems(invoice)
+	//1. Overall invoice summary grouped at the billing code level
+	lineItems := a.GetBillLineItems(bill)
 	//entryItems := a.GetInvoiceEntries(invoice)
 	//adjustments := a.GetInvoiceAdjustments(invoice)
 
@@ -35,7 +35,7 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	safeAreaW := pageW - 2*marginX
 
 	// Build the header
-	pdf.ImageOptions("./assets/img/graph-logo.png", 10, 10, 30, 15, false, gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}, 0, "")
+	pdf.ImageOptions("./branding/logo/logo-large-light.png", 10, 0, 30, 30, false, gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}, 0, "")
 	pdf.SetFont(defaultFont, "B", 16)
 	_, lineHeight := pdf.GetFontSize()
 	currentY := pdf.GetY() + lineHeight + gapY
@@ -45,10 +45,10 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	leftY := pdf.GetY() + lineHeight + gapY
 
 	// Build invoice word on right
-	pdf.SetFont(defaultFont, "B", 16)
+	pdf.SetFont(defaultFont, "B", 14)
 	_, lineHeight = pdf.GetFontSize()
 	pdf.SetXY(80, currentY-lineHeight)
-	pdf.MultiCell(120, 10, "INTERNAL INVOICE\n "+bill.Name, "0", "R", false)
+	pdf.MultiCell(120, 10, "Payroll Bill\n "+bill.Name, "0", "R", false)
 
 	newY := leftY
 	if (pdf.GetY() + gapY) > newY {
@@ -90,7 +90,7 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	// Right hand side info, invoice no & invoice date
 	invoiceDetailW := float64(30)
 	pdf.SetXY(safeAreaW/2+30, newY)
-	pdf.Cell(invoiceDetailW, lineHeight, "Invoice No:")
+	pdf.Cell(invoiceDetailW, lineHeight, "Bill No:")
 	pdf.Cell(invoiceDetailW, lineHeight, InvoiceNumber)
 	pdf.Ln(lineBreak)
 	pdf.SetX(safeAreaW/2 + 30)
@@ -106,9 +106,9 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	pdf.SetFontSize(10.0)
 	pdf.SetXY(marginX, endOfInvoiceDetailY+10.0)
 	lineHt := 10.0
-	const colNumber = 4
-	header := [colNumber]string{"Name", "Item", "Hours", "Total ($)"}
-	colWidth := [colNumber]float64{50.0, 100.0, 25.0, 25.0}
+	const colNumber = 5
+	header := [colNumber]string{"Code", "Description", "Hours", "Rate", "Total ($)"}
+	colWidth := [colNumber]float64{40.0, 80.0, 25.0, 25.0, 30.0}
 
 	// Headers
 	pdf.SetFontStyle("B")
@@ -123,16 +123,19 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	// Table data
 	pdf.SetFontStyle("")
 
-	for rowJ := 0; rowJ < 1; rowJ++ {
-		name := employee.FirstName + " " + employee.LastName
-		item := bill.Name
-		hours := fmt.Sprintf("%.2f", bill.TotalHours)
-		total := fmt.Sprintf("%.2f", float64(bill.TotalAmount)/100)
+	for rowJ := 0; rowJ < len(lineItems); rowJ++ {
+		val := lineItems[rowJ]
+		billingCode := val.BillingCodeCode
+		description := val.BillingCode
+		hours := val.HoursFormatted
+		rate := val.RateFormatted
+		total := fmt.Sprintf("%.2f", val.Total)
 
-		pdf.CellFormat(colWidth[0], lineHt, name, "1", 0, "LM", true, 0, "")
-		pdf.CellFormat(colWidth[1], lineHt, item, "1", 0, "LM", true, 0, "")
-		pdf.CellFormat(colWidth[2], lineHt, hours, "1", 0, "RM", true, 0, "")
-		pdf.CellFormat(colWidth[3], lineHt, "$ "+total, "1", 0, "RM", true, 0, "")
+		pdf.CellFormat(colWidth[0], lineHt, billingCode, "1", 0, "CM", true, 0, "")
+		pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", true, 0, "")
+		pdf.CellFormat(colWidth[2], lineHt, hours, "1", 0, "CM", true, 0, "")
+		pdf.CellFormat(colWidth[3], lineHt, "$ "+rate, "1", 0, "CM", true, 0, "")
+		pdf.CellFormat(colWidth[4], lineHt, "$ "+total, "1", 0, "RM", true, 0, "")
 		pdf.Ln(-1)
 	}
 
@@ -141,20 +144,14 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	// Calculate the subtotal
 	pdf.SetFontStyle("B")
 	leftIndent := 0.0
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		leftIndent += colWidth[i]
 	}
 
-	totalFees := fmt.Sprintf("%.2f", float64(bill.TotalFees)/100)
-	pdf.SetX(marginX + leftIndent)
-	pdf.CellFormat(colWidth[2], lineHt, "Fees", "1", 0, "LM", true, 0, "")
-	pdf.CellFormat(colWidth[3], lineHt, "$ "+totalFees, "1", 0, "RM", true, 0, "")
-	pdf.Ln(lineHt)
-
 	grandTotal := fmt.Sprintf("%.2f", float64(bill.TotalAmount)/100)
 	pdf.SetX(marginX + leftIndent)
-	pdf.CellFormat(colWidth[2], lineHt, "Total Due", "1", 0, "LM", true, 0, "")
-	pdf.CellFormat(colWidth[3], lineHt, "$ "+grandTotal, "1", 0, "RM", true, 0, "")
+	pdf.CellFormat(colWidth[3], lineHt, "Total Due", "1", 0, "LM", true, 0, "")
+	pdf.CellFormat(colWidth[4], lineHt, "$ "+grandTotal, "1", 0, "RM", true, 0, "")
 	pdf.Ln(lineHt)
 
 	pdf.SetFontStyle("")

@@ -12,7 +12,7 @@ import (
 // Set Constants for the invoice PDF
 const defaultFont = "Helvetica"
 const defaultFromName = "Snowpack Data LLC"
-const defaultFromAddress = "262 Dolores Street, San Francisco CA 94103"
+const defaultFromAddress = "2261 Market Street STE 22279, San Francisco CA 94114"
 const defaultContact = "billing@snowpack-data.io"
 const headerWidth = 40.0
 const headerHeight = 10.0
@@ -47,7 +47,7 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	safeAreaW := pageW - 2*marginX
 
 	// Build the header
-	pdf.ImageOptions("./assets/img/graph-logo.png", 10, 10, 30, 15, false, gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}, 0, "")
+	pdf.ImageOptions("./branding/logo/logo-large-light.png", 10, 0, 30, 30, false, gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}, 0, "")
 	pdf.SetFont(defaultFont, "B", 16)
 	_, lineHeight := pdf.GetFontSize()
 	currentY := pdf.GetY() + lineHeight + gapY
