@@ -3,6 +3,12 @@ package cronos
 import (
 	"cloud.google.com/go/storage"
 	"context"
+	"crypto/rsa"
+	"fmt"
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/oauth2/google"
+	"log"
+	"time"
 )
 
 // SaveBillToGCS saves the invoice to GCS
@@ -30,7 +36,12 @@ func (a *App) SaveBillToGCS(bill *Bill) error {
 	if err := acl.Set(ctx, storage.AllUsers, storage.RoleReader); err != nil {
 		return err
 	}
-
+	attrsToUpdate := storage.ObjectAttrsToUpdate{
+		CacheControl: "no-cache, max-age=0, must-revalidate",
+	}
+	if _, err := bucket.Object(objectName).Update(ctx, attrsToUpdate); err != nil {
+		log.Fatalf("Failed to update object: %v", err)
+	}
 	// save the public invoice URL to the database
 	bill.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
 	a.DB.Save(&bill)
