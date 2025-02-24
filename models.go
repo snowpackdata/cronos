@@ -3,6 +3,7 @@ package cronos
 import (
 	"fmt"
 	"github.com/pkg/errors"
+	"math"
 	"strings"
 	"time"
 
@@ -695,7 +696,12 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 	}
 	draftInvoice.TotalAdjustments = totalAdjustments
 	draftInvoice.TotalAmount = draftInvoice.TotalFees + draftInvoice.TotalAdjustments
-	draftInvoice.PeriodClosed = i.PeriodEnd.In(time.UTC).Before(time.Now())
+	// Round to the nearest cent
+	draftInvoice.TotalHours = math.Round(draftInvoice.TotalHours*100) / 100
+	draftInvoice.TotalFees = math.Round(draftInvoice.TotalFees*100) / 100
+	draftInvoice.TotalAdjustments = math.Round(draftInvoice.TotalAdjustments*100) / 100
+	draftInvoice.TotalAmount = math.Round(draftInvoice.TotalAmount*100) / 100
+	draftInvoice.PeriodClosed = i.PeriodEnd.In(time.UTC).Before(time.Now()
 	return draftInvoice
 }
 
@@ -790,6 +796,7 @@ func (a *App) GenerateBills(i *Invoice) {
 		}
 		// Add the fees to the existing bill
 		bill.TotalHours += hours
+		bill.TotalHours = math.Round(bill.TotalHours*100) / 100
 		bill.TotalFees += fee
 		bill.TotalAmount += fee
 		a.DB.Save(&bill)
