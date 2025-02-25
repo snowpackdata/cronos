@@ -160,7 +160,7 @@ func (a *App) SendInvoice(invoiceID uint) error {
 // MarkInvoicePaid pays the invoice and transitions it to the "paid" state
 func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	var invoice Invoice
-	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
+	a.DB.Preload("Entries").Preload("Project").Where("ID = ?", invoiceID).First(&invoice)
 	if invoice.State != InvoiceStateSent.String() {
 		return InvalidPriorState
 	}
@@ -171,6 +171,13 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 		a.DB.Save(&entry)
 	}
 	a.DB.Save(&invoice)
+
+	// Generate bills for the invoice
+	a.GenerateBills(&invoice)
+
+	// Add commissions to bills if applicable
+	a.AddCommissionsToBills(&invoice)
+
 	return nil
 }
 
@@ -325,4 +332,93 @@ func (a *App) BackfillEntriesForAccount(accountID string) {
 		a.BackfillEntriesForProject(fmt.Sprintf("%d", project.ID))
 	}
 	return
+}
+
+// AddCommissionsToBills adds commission entries to bills for eligible staff members
+func (a *App) AddCommissionsToBills(invoice *Invoice) {
+	// Skip if the project doesn't exist
+	if invoice.Project.ID == 0 {
+		return
+	}
+
+	// Load the full project with AE and SDR relationships
+	var project Project
+	a.DB.Preload("AE").Preload("SDR").Where("ID = ?", invoice.ProjectID).First(&project)
+
+	// Skip if project type is not set or if neither AE nor SDR is assigned
+	if project.ProjectType == "" || (project.AEID == nil && project.SDRID == nil) {
+		return
+	}
+
+	// Process AE commission if applicable
+	if project.AEID != nil && project.AE != nil {
+		a.processCommission(&project, CommissionRoleAE.String(), *project.AEID, project.AE.FirstName+" "+project.AE.LastName)
+	}
+
+	// Process SDR commission if applicable
+	if project.SDRID != nil && project.SDR != nil {
+		a.processCommission(&project, CommissionRoleSDR.String(), *project.SDRID, project.SDR.FirstName+" "+project.SDR.LastName)
+	}
+}
+
+// processCommission creates a commission entry and adds it to the staff member's bill
+func (a *App) processCommission(project *Project, role string, staffID uint, staffName string) {
+	// Calculate commission amount
+	commissionAmount := a.CalculateCommissionAmount(project, role)
+
+	// Skip if commission amount is zero
+	if commissionAmount <= 0 {
+		return
+	}
+
+	// Get the latest bill for the staff member
+	bill, err := a.GetLatestBillIfExists(staffID)
+
+	// If no bill exists, create a new one
+	firstOfMonth := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
+	lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
+
+	if err != nil && errors.Is(err, NoEligibleBill) {
+		// Get the staff member
+		var employee Employee
+		a.DB.Where("id = ?", staffID).First(&employee)
+
+		// Create a new bill
+		bill = Bill{
+			Name:        "Payroll " + employee.FirstName + " " + employee.LastName + " " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
+			EmployeeID:  staffID,
+			PeriodStart: firstOfMonth,
+			PeriodEnd:   lastOfMonth,
+			TotalHours:  0,
+			TotalFees:   0,
+			TotalAmount: 0,
+		}
+		a.DB.Create(&bill)
+	}
+
+	// Create the commission entry
+	commission := Commission{
+		StaffID:     staffID,
+		Role:        role,
+		Amount:      commissionAmount,
+		BillID:      bill.ID,
+		ProjectID:   project.ID,
+		ProjectName: project.Name,
+		ProjectType: project.ProjectType,
+		Paid:        false,
+	}
+
+	// Save the commission
+	a.DB.Create(&commission)
+
+	// Update the bill totals
+	bill.TotalCommissions += commissionAmount
+	bill.TotalAmount += commissionAmount
+	a.DB.Save(&bill)
+
+	// Regenerate the bill PDF
+	err = a.SaveBillToGCS(&bill)
+	if err != nil {
+		log.Printf("Error saving bill to GCS: %v", err)
+	}
 }

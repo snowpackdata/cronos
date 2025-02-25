@@ -79,6 +79,18 @@ func (s JournalAccountType) String() string {
 	return string(s)
 }
 
+type ProjectType string
+
+func (s ProjectType) String() string {
+	return string(s)
+}
+
+type CommissionRole string
+
+func (s CommissionRole) String() string {
+	return string(s)
+}
+
 const (
 	HOUR                      = 60.0
 	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
@@ -96,6 +108,12 @@ const (
 	RateTypeExternalBillable         RateType = "RATE_TYPE_EXTERNAL_CLIENT_BILLABLE"
 	RateTypeExternalNonBillable      RateType = "RATE_TYPE_EXTERNAL_CLIENT_NON_BILLABLE"
 	RateTypeInternalProject          RateType = "RATE_TYPE_INTERNAL_PROJECT"
+
+	ProjectTypeNew      ProjectType = "PROJECT_TYPE_NEW"
+	ProjectTypeExisting ProjectType = "PROJECT_TYPE_EXISTING"
+
+	CommissionRoleAE  CommissionRole = "COMMISSION_ROLE_AE"
+	CommissionRoleSDR CommissionRole = "COMMISSION_ROLE_SDR"
 
 	BillingFrequencyMonthly   BillingFrequency = "BILLING_TYPE_MONTHLY"
 	BillingFrequencyProject   BillingFrequency = "BILLING_TYPE_PROJECT"
@@ -134,6 +152,31 @@ const (
 	AccountAPDiscount       JournalAccountType = "ACCOUNTS_PAYABLE_EXPENSE_DISCOUNT"
 	AccountAPStaffBonus     JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_BONUS"
 	AccountARClientFee      JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_FEE"
+
+	// Commission rate constants
+	// These rates are percentages (0.05 = 5%)
+	AECommissionRateNewSmall  = 0.05 // Projects under $10,000
+	AECommissionRateNewMedium = 0.07 // Projects $10,000 - $50,000
+	AECommissionRateNewLarge  = 0.10 // Projects over $50,000
+
+	// AE Commission Rates for Existing Business
+	AECommissionRateExistingSmall  = 0.03 // Projects under $10,000
+	AECommissionRateExistingMedium = 0.05 // Projects $10,000 - $50,000
+	AECommissionRateExistingLarge  = 0.07 // Projects over $50,000
+
+	// SDR Commission Rates for New Business
+	SDRCommissionRateNewSmall  = 0.02 // Projects under $10,000
+	SDRCommissionRateNewMedium = 0.03 // Projects $10,000 - $50,000
+	SDRCommissionRateNewLarge  = 0.05 // Projects over $50,000
+
+	// SDR Commission Rates for Existing Business
+	SDRCommissionRateExistingSmall  = 0.01 // Projects under $10,000
+	SDRCommissionRateExistingMedium = 0.02 // Projects $10,000 - $50,000
+	SDRCommissionRateExistingLarge  = 0.03 // Projects over $50,000
+
+	// Deal size thresholds (in dollars)
+	DealSizeSmallThreshold  = 10000
+	DealSizeMediumThreshold = 50000
 )
 
 type User struct {
@@ -204,17 +247,23 @@ type Project struct {
 	// often with specific time period. A rate will have a specific billing code
 	// associated with the project.
 	gorm.Model
-	Name          string        `json:"name"`
-	AccountID     uint          `json:"account_id"`
-	Account       Account       `json:"account"`
-	ActiveStart   time.Time     `json:"active_start"`
-	ActiveEnd     time.Time     `json:"active_end"`
-	BudgetHours   int           `json:"budget_hours"`
-	BudgetDollars int           `json:"budget_dollars"`
-	Internal      bool          `json:"internal"`
-	BillingCodes  []BillingCode `json:"billing_codes"`
-	Entries       []Entry       `json:"entries"`
-	Invoices      []Invoice     `json:"invoices"`
+	Name             string        `json:"name"`
+	AccountID        uint          `json:"account_id"`
+	Account          Account       `json:"account"`
+	ActiveStart      time.Time     `json:"active_start"`
+	ActiveEnd        time.Time     `json:"active_end"`
+	BudgetHours      int           `json:"budget_hours"`
+	BudgetDollars    int           `json:"budget_dollars"`
+	Internal         bool          `json:"internal"`
+	BillingCodes     []BillingCode `json:"billing_codes"`
+	Entries          []Entry       `json:"entries"`
+	Invoices         []Invoice     `json:"invoices"`
+	BillingFrequency string        `json:"billing_frequency"`
+	ProjectType      string        `json:"project_type"`
+	AEID             *uint         `json:"ae_id"`
+	AE               *Employee     `json:"ae"`
+	SDRID            *uint         `json:"sdr_id"`
+	SDR              *Employee     `json:"sdr"`
 }
 
 type BillingCode struct {
@@ -305,6 +354,21 @@ type Adjustment struct {
 	Notes     string  `json:"notes"`
 }
 
+// Commission represents a commission payment to a staff member
+type Commission struct {
+	gorm.Model
+	StaffID     uint     `json:"staff_id"`
+	Staff       Employee `json:"staff"`
+	Role        string   `json:"role"`
+	Amount      int      `json:"amount"`
+	BillID      uint     `json:"bill_id"`
+	Bill        Bill     `json:"bill" gorm:"foreignKey:BillID"`
+	ProjectID   uint     `json:"project_id"`
+	ProjectName string   `json:"project_name"`
+	ProjectType string   `json:"project_type"`
+	Paid        bool     `json:"paid"`
+}
+
 // Bill
 // This is a simple object that we can use to track the total hours and fees for an employee
 // over a set period of time. While the entries may be tied to individual projects, the bills are directly
@@ -318,11 +382,13 @@ type Bill struct {
 	PeriodEnd        time.Time    `json:"period_end"`
 	Entries          []Entry      `json:"entries"`
 	Adjustments      []Adjustment `json:"adjustments"`
+	Commissions      []Commission `json:"commissions" gorm:"foreignKey:BillID"`
 	AcceptedAt       *time.Time   `json:"accepted_at"`
 	ClosedAt         *time.Time   `json:"closed_at"`
 	TotalHours       float64      `json:"total_hours"`
 	TotalFees        int          `json:"total_fees"`
 	TotalAdjustments float64      `json:"total_adjustments"`
+	TotalCommissions int          `json:"total_commissions"`
 	TotalAmount      int          `json:"total_amount"`
 	GCSFile          string       `json:"file"`
 }
@@ -963,4 +1029,77 @@ func (a *App) GetBillLineItems(b *Bill) []BillLineItem {
 	}
 
 	return billLineItems
+}
+
+// CalculateCommissionRate determines the appropriate commission rate based on role, project type, and deal size
+func (a *App) CalculateCommissionRate(role string, projectType string, dealSize int) float64 {
+	isNew := projectType == ProjectTypeNew.String()
+	isAE := role == CommissionRoleAE.String()
+
+	// Determine deal size category
+	var sizeCategory string
+	if dealSize < DealSizeSmallThreshold {
+		sizeCategory = "Small"
+	} else if dealSize < DealSizeMediumThreshold {
+		sizeCategory = "Medium"
+	} else {
+		sizeCategory = "Large"
+	}
+
+	// Return appropriate rate based on role, project type, and deal size
+	if isAE {
+		if isNew {
+			switch sizeCategory {
+			case "Small":
+				return AECommissionRateNewSmall
+			case "Medium":
+				return AECommissionRateNewMedium
+			case "Large":
+				return AECommissionRateNewLarge
+			}
+		} else {
+			switch sizeCategory {
+			case "Small":
+				return AECommissionRateExistingSmall
+			case "Medium":
+				return AECommissionRateExistingMedium
+			case "Large":
+				return AECommissionRateExistingLarge
+			}
+		}
+	} else { // SDR
+		if isNew {
+			switch sizeCategory {
+			case "Small":
+				return SDRCommissionRateNewSmall
+			case "Medium":
+				return SDRCommissionRateNewMedium
+			case "Large":
+				return SDRCommissionRateNewLarge
+			}
+		} else {
+			switch sizeCategory {
+			case "Small":
+				return SDRCommissionRateExistingSmall
+			case "Medium":
+				return SDRCommissionRateExistingMedium
+			case "Large":
+				return SDRCommissionRateExistingLarge
+			}
+		}
+	}
+
+	// Default fallback (should never reach here)
+	return 0
+}
+
+// CalculateCommissionAmount calculates the commission amount based on the project and role
+func (a *App) CalculateCommissionAmount(project *Project, role string) int {
+	// Get the commission rate
+	rate := a.CalculateCommissionRate(role, project.ProjectType, project.BudgetDollars)
+
+	// Calculate commission amount (in cents)
+	commissionAmount := int(float64(project.BudgetDollars) * rate * 100)
+
+	return commissionAmount
 }
