@@ -848,48 +848,85 @@ func (a *App) GetLatestBillIfExists(userID uint) (Bill, error) {
 }
 
 func (a *App) GenerateBills(i *Invoice) {
+	log.Printf("Starting GenerateBills for invoice ID: %d", i.ID)
+
 	userBillingCodeMap := make(map[uint]map[uint]float64)
+	userEntryMap := make(map[uint][]Entry)
+	entriesProcessed := 0
+	entriesSkipped := 0
+
 	// Add up each of the fees for a user and billing code
-	// and cache the value
+	// and cache the value, but only for entries that don't already have a bill
 	for _, entry := range i.Entries {
+		// Skip void entries and entries that already have a bill
 		if entry.State == EntryStateVoid.String() {
+			entriesSkipped++
 			continue
 		}
-		// first check if the user exists in the map, if not then add them
-		if _, ok := userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID]; !ok {
-			// if the users and billing code do not exist, add them
-			bc := make(map[uint]float64)
-			bc[entry.BillingCodeID] = entry.Duration().Minutes()
-			userBillingCodeMap[entry.EmployeeID] = bc
-		} else {
-			// otherwise add the fee to the existing fee
-			userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
+
+		if entry.BillID != nil && *entry.BillID > 0 {
+			log.Printf("Skipping entry ID %d - already associated with bill ID %d", entry.ID, *entry.BillID)
+			entriesSkipped++
+			continue
 		}
+
+		// Initialize the billing code map for this user if it doesn't exist
+		if _, ok := userBillingCodeMap[entry.EmployeeID]; !ok {
+			userBillingCodeMap[entry.EmployeeID] = make(map[uint]float64)
+			userEntryMap[entry.EmployeeID] = []Entry{}
+		}
+
+		// Add the entry's minutes to the map
+		userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
+
+		// Keep track of this entry for later association with the bill
+		userEntryMap[entry.EmployeeID] = append(userEntryMap[entry.EmployeeID], entry)
+		entriesProcessed++
 	}
+
+	log.Printf("Processing %d entries, skipped %d entries with existing bill associations", entriesProcessed, entriesSkipped)
+
+	if entriesProcessed == 0 {
+		log.Printf("No entries to process for invoice ID: %d, all entries already have bill associations", i.ID)
+		return
+	}
+
 	// Now we need to iterate over the map and create or add to the bill for each user
 	for user, billingCodes := range userBillingCodeMap {
 		var userObj Employee
 		a.DB.Where("id = ?", user).First(&userObj)
+		log.Printf("Processing bill for employee: %s %s (ID: %d)", userObj.FirstName, userObj.LastName, user)
+
 		var hours float64
 		var fee int
+
+		// Calculate the total hours and fee for this user
 		for billingCode, loopMin := range billingCodes {
 			// sum up the hours for the billing code
 			var billingCodeObj BillingCode
 			a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
-			floatFee := (loopMin / 60) * billingCodeObj.InternalRate.Amount
+
+			// Convert minutes to hours and multiply by the internal rate
+			hourAmount := loopMin / 60
+			floatFee := hourAmount * billingCodeObj.InternalRate.Amount
 			fee += int(floatFee * 100)
-			hours += (loopMin / 60)
+			hours += hourAmount
+
+			log.Printf("  Billing code %d: %.2f hours, fee: $%.2f", billingCode, hourAmount, floatFee)
 		}
+
 		// See if there is an existing bill for the user
 		var bill Bill
 		var err error
 		bill, err = a.GetLatestBillIfExists(user)
+
 		// If there is no bill, then create a new one for the user for this month
 		firstOfMonth := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
 		lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
+
 		if err != nil && errors.Is(err, NoEligibleBill) {
 			// Create a new bill for the user
-			// First We need the user's name
+			log.Printf("Creating new bill for employee ID: %d", user)
 			bill = Bill{
 				Name:        "Payroll " + userObj.FirstName + " " + userObj.LastName + " " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
 				EmployeeID:  user,
@@ -899,34 +936,133 @@ func (a *App) GenerateBills(i *Invoice) {
 				TotalFees:   0,
 				TotalAmount: 0,
 			}
-			a.DB.Create(&bill)
+			if err := a.DB.Create(&bill).Error; err != nil {
+				log.Printf("Error creating bill: %v", err)
+				continue
+			}
+			log.Printf("Created new bill ID: %d", bill.ID)
+		} else {
+			log.Printf("Using existing bill ID: %d", bill.ID)
 		}
-		// Add the fees to the existing bill
-		bill.TotalHours += hours
-		bill.TotalHours = math.Round(bill.TotalHours*100) / 100
-		bill.TotalFees += fee
-		bill.TotalAmount += fee
-		a.DB.Save(&bill)
 
 		// Update the entries to associate with the bill
-		for _, entry := range i.Entries {
-			if entry.EmployeeID == user {
-				entry.BillID = &bill.ID
-				a.DB.Save(&entry)
+		entriesUpdated := 0
+		for _, entry := range userEntryMap[user] {
+			entry.BillID = &bill.ID
+			result := a.DB.Save(&entry)
+			if result.Error != nil {
+				log.Printf("Error associating entry ID %d with bill ID %d: %v", entry.ID, bill.ID, result.Error)
+			} else {
+				entriesUpdated++
 			}
 		}
-		// Save the bill
+		log.Printf("Associated %d entries with bill ID: %d", entriesUpdated, bill.ID)
+
+		// Recalculate bill totals from all entries in the database
+		a.RecalculateBillTotals(&bill)
+
+		// Save the bill to GCS
 		err = a.SaveBillToGCS(&bill)
 		if err != nil {
-			fmt.Println(err)
+			log.Printf("Error saving bill to GCS: %v", err)
+		} else {
+			log.Printf("Successfully saved bill PDF to GCS for bill ID: %d", bill.ID)
 		}
+	}
+
+	log.Printf("Completed GenerateBills for invoice ID: %d", i.ID)
+}
+
+// RecalculateBillTotals recalculates the total hours, fees, and amounts for a bill
+// based on all associated entries in the database
+func (a *App) RecalculateBillTotals(bill *Bill) {
+	log.Printf("Recalculating totals for bill ID: %d", bill.ID)
+
+	// Reset totals
+	bill.TotalHours = 0
+	bill.TotalFees = 0
+
+	// Get all non-void entries for this bill
+	var entries []Entry
+	if err := a.DB.Preload("BillingCode").Preload("BillingCode.InternalRate").
+		Where("bill_id = ? AND state != ?", bill.ID, EntryStateVoid.String()).
+		Find(&entries).Error; err != nil {
+		log.Printf("Error loading entries for bill ID %d: %v", bill.ID, err)
+		return
+	}
+
+	log.Printf("Found %d valid entries for bill ID: %d", len(entries), bill.ID)
+
+	// Calculate totals from entries
+	for _, entry := range entries {
+		bill.TotalHours += entry.Duration().Hours()
+
+		// Ensure we have the internal rate
+		if entry.BillingCode.InternalRate.ID == 0 {
+			var internalRate Rate
+			if err := a.DB.Where("id = ?", entry.BillingCode.InternalRateID).First(&internalRate).Error; err != nil {
+				log.Printf("Error loading internal rate for billing code %d: %v", entry.BillingCodeID, err)
+				continue
+			}
+			entry.BillingCode.InternalRate = internalRate
+		}
+
+		hourAmount := entry.Duration().Hours()
+		fee := int(hourAmount * entry.BillingCode.InternalRate.Amount * 100)
+		bill.TotalFees += fee
+
+		log.Printf("  Entry ID %d: %.2f hours, fee: $%.2f", entry.ID, hourAmount, float64(fee)/100)
+	}
+
+	// Get all non-void adjustments for this bill
+	var adjustments []Adjustment
+	if err := a.DB.Where("bill_id = ? AND state != ?", bill.ID, AdjustmentStateVoid.String()).Find(&adjustments).Error; err != nil {
+		log.Printf("Error loading adjustments for bill ID %d: %v", bill.ID, err)
+	}
+
+	// Calculate total adjustments
+	totalAdjustmentsAmount := 0
+	for _, adjustment := range adjustments {
+		multiplier := 1
+		if adjustment.Type == AdjustmentTypeCredit.String() {
+			multiplier = -1
+		}
+
+		adjustmentAmount := int(adjustment.Amount*100) * multiplier
+		totalAdjustmentsAmount += adjustmentAmount
+
+		log.Printf("  Adjustment ID %d: $%.2f", adjustment.ID, float64(adjustmentAmount)/100)
+	}
+
+	// Update the total amount
+	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount))
+	bill.TotalHours = math.Round(bill.TotalHours*100) / 100
+
+	log.Printf("Bill totals recalculated - Hours: %.2f, Fees: $%.2f, Total: $%.2f",
+		bill.TotalHours, float64(bill.TotalFees)/100, float64(bill.TotalAmount)/100)
+
+	// Save the bill
+	if err := a.DB.Save(&bill).Error; err != nil {
+		log.Printf("Error saving bill with updated totals: %v", err)
+	} else {
+		log.Printf("Successfully saved bill ID %d with updated totals", bill.ID)
 	}
 }
 
 func (a *App) MarkBillPaid(b *Bill) {
+	// Recalculate bill totals first to ensure accurate values
+	a.RecalculateBillTotals(b)
+
+	// Now mark the bill as paid
 	nowTime := time.Now()
 	b.ClosedAt = &nowTime
-	a.DB.Save(&b)
+
+	// Save the updated bill
+	if err := a.DB.Save(&b).Error; err != nil {
+		log.Printf("Error saving bill as paid: %v", err)
+		return
+	}
+	log.Printf("Bill ID %d marked as paid with accurate totals", b.ID)
 
 	// Get the User
 	var userObj Employee
@@ -935,13 +1071,16 @@ func (a *App) MarkBillPaid(b *Bill) {
 	journal := Journal{
 		Account:    AccountAPStaffPayroll.String(),
 		SubAccount: userObj.FirstName + " " + userObj.LastName,
-		Debit:      int64(b.TotalFees),
+		Debit:      int64(b.TotalAmount), // Use the total amount which includes fees, commissions, and adjustments
 		Credit:     0,
 		Memo:       b.Name,
 		BillID:     &b.ID,
 	}
-	a.DB.Create(&journal)
-
+	if err := a.DB.Create(&journal).Error; err != nil {
+		log.Printf("Error creating journal entry for bill: %v", err)
+	} else {
+		log.Printf("Created journal entry for bill ID %d with amount $%.2f", b.ID, float64(b.TotalAmount)/100)
+	}
 }
 
 func (a *App) AddJournalEntries(i *Invoice) {
