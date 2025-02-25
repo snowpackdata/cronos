@@ -1,11 +1,13 @@
 package cronos
 
 import (
-	"cloud.google.com/go/storage"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
+
+	"cloud.google.com/go/storage"
 )
 
 var ErrInvoiceOverlap = errors.New("new invoice overlaps with existing invoice")
@@ -18,31 +20,68 @@ var ErrEntryDateOutOfRange = errors.New("entry date is out of range for project"
 // month, the invoice will transition to the "pending" state until it's manually approved and
 // sent to the client. This function serves the purpose of generating the draft invoice, and transitioning
 // and previous draft invoices to the "pending" state.
-func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
+func (a *App) CreateInvoice(accountID uint, projectID *uint, creationDate time.Time) error {
 	// We need a timestamp to determine the start and end of the month
 	startOfMonth := time.Date(creationDate.Year(), creationDate.Month(), 1, 0, 0, 0, 0, time.UTC)
 	endOfMonth := startOfMonth.AddDate(0, 1, 0).Add(-time.Nanosecond)
-	// Retrieve the project from the database
-	var project Project
-	a.DB.Where("ID = ?", projectID).First(&project)
-	// next retrieve any past invoices.
+
+	// Retrieve the account from the database
+	var account Account
+	a.DB.Where("ID = ?", accountID).First(&account)
+
+	// next retrieve any past invoices for this account
 	var invoices []Invoice
-	a.DB.Order("period_end desc").Where("project_id = ? and state != ?", projectID, InvoiceStateVoid).Find(&invoices)
+	if projectID != nil && !account.ProjectsSingleInvoice {
+		// If separate invoices per project is enabled, query by both account and project
+		a.DB.Order("period_end desc").Where("account_id = ? AND project_id = ? and state != ?", accountID, *projectID, InvoiceStateVoid).Find(&invoices)
+	} else {
+		// Otherwise query only by account
+		a.DB.Order("period_end desc").Where("account_id = ? and state != ?", accountID, InvoiceStateVoid).Find(&invoices)
+	}
+
+	// Create new invoice
 	var newARInvoice Invoice
 	newARInvoice = Invoice{
-		ProjectID: projectID,
+		AccountID: accountID,
+		Account:   account,
 		State:     InvoiceStateDraft.String(),
 		Type:      InvoiceTypeAR.String(),
 	}
-	switch project.BillingFrequency {
+
+	// If we're creating a project-specific invoice
+	if projectID != nil && !account.ProjectsSingleInvoice {
+		var project Project
+		a.DB.Where("ID = ?", *projectID).First(&project)
+		newARInvoice.ProjectID = *projectID
+		newARInvoice.Project = project
+	}
+
+	// Set billing period based on account's billing frequency
+	switch account.BillingFrequency {
 	case BillingFrequencyProject.String():
-		newARInvoice.PeriodStart = project.ActiveStart
-		newARInvoice.PeriodEnd = project.ActiveEnd
-		newARInvoice.Name = project.Name + ": " + project.ActiveStart.Format("01.02.2006") + "-" + project.ActiveEnd.Format("01.02.2006")
+		// For project-based billing, set the period to the project's start and end dates
+		if projectID != nil {
+			var project Project
+			a.DB.Where("ID = ?", *projectID).First(&project)
+			newARInvoice.PeriodStart = project.ActiveStart
+			newARInvoice.PeriodEnd = project.ActiveEnd
+			newARInvoice.Name = account.Name + " - " + project.Name + ": " + project.ActiveStart.Format("01.02.2006") + "-" + project.ActiveEnd.Format("01.02.2006")
+		} else {
+			// If no project specified for project-based billing on single invoice, use current month
+			newARInvoice.PeriodStart = startOfMonth
+			newARInvoice.PeriodEnd = endOfMonth
+			newARInvoice.Name = account.Name + ": " + startOfMonth.Format("01.02.2006") + "-" + endOfMonth.Format("01.02.2006")
+		}
 	case BillingFrequencyMonthly.String():
 		newARInvoice.PeriodStart = startOfMonth
 		newARInvoice.PeriodEnd = endOfMonth
-		newARInvoice.Name = project.Name + ": " + startOfMonth.Format("01.02.2006") + "-" + endOfMonth.Format("01.02.2006")
+		if projectID != nil && !account.ProjectsSingleInvoice {
+			var project Project
+			a.DB.Where("ID = ?", *projectID).First(&project)
+			newARInvoice.Name = account.Name + " - " + project.Name + ": " + startOfMonth.Format("01.02.2006") + "-" + endOfMonth.Format("01.02.2006")
+		} else {
+			newARInvoice.Name = account.Name + ": " + startOfMonth.Format("01.02.2006") + "-" + endOfMonth.Format("01.02.2006")
+		}
 	case BillingFrequencyBiweekly.String():
 		// retrieve the ending date of the last invoice
 		if len(invoices) > 0 {
@@ -55,7 +94,13 @@ func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 			newARInvoice.PeriodStart = time.Date(preCleanedDate.Year(), preCleanedDate.Month(), preCleanedDate.Day(), 0, 0, 0, 0, time.UTC)
 		}
 		newARInvoice.PeriodEnd = newARInvoice.PeriodStart.AddDate(0, 0, 13)
-		newARInvoice.Name = project.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
+		if projectID != nil && !account.ProjectsSingleInvoice {
+			var project Project
+			a.DB.Where("ID = ?", *projectID).First(&project)
+			newARInvoice.Name = account.Name + " - " + project.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
+		} else {
+			newARInvoice.Name = account.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
+		}
 	case BillingFrequencyWeekly.String():
 		// retrieve the ending date of the last invoice
 		if len(invoices) > 0 {
@@ -68,9 +113,15 @@ func (a *App) CreateInvoice(projectID uint, creationDate time.Time) error {
 			newARInvoice.PeriodStart = time.Date(preCleanedDate.Year(), preCleanedDate.Month(), preCleanedDate.Day(), 0, 0, 0, 0, time.UTC)
 		}
 		newARInvoice.PeriodEnd = newARInvoice.PeriodStart.AddDate(0, 0, 6)
-		newARInvoice.Name = project.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
+		if projectID != nil && !account.ProjectsSingleInvoice {
+			var project Project
+			a.DB.Where("ID = ?", *projectID).First(&project)
+			newARInvoice.Name = account.Name + " - " + project.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
+		} else {
+			newARInvoice.Name = account.Name + ": " + newARInvoice.PeriodStart.Format("01.02.2006") + "-" + newARInvoice.PeriodEnd.Format("01.02.2006")
+		}
 	}
-	// If there are no errors, we'll create the new invoices and save them to the database
+	// Create the new invoice in the database
 	a.DB.Create(&newARInvoice)
 	return nil
 }
@@ -94,11 +145,14 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 // SendInvoice sends the invoice to the client and transitions it to the "sent" state
 func (a *App) SendInvoice(invoiceID uint) error {
 	var invoice Invoice
-	a.DB.Where("ID = ?", invoiceID).First(&invoice)
+	a.DB.Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
 	if invoice.State != InvoiceStateApproved.String() {
 		return InvalidPriorState
 	}
 	invoice.State = InvoiceStateSent.String()
+	invoice.SentAt = time.Now()
+	// Set the due date based on invoice date (e.g., net 30)
+	invoice.DueAt = invoice.SentAt.AddDate(0, 0, 30) // Default to 30 days
 	a.DB.Save(&invoice)
 	return nil
 }
@@ -106,11 +160,12 @@ func (a *App) SendInvoice(invoiceID uint) error {
 // MarkInvoicePaid pays the invoice and transitions it to the "paid" state
 func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	var invoice Invoice
-	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
 	if invoice.State != InvoiceStateSent.String() {
 		return InvalidPriorState
 	}
 	invoice.State = InvoiceStatePaid.String()
+	invoice.ClosedAt = time.Now()
 	for _, entry := range invoice.Entries {
 		entry.State = EntryStatePaid.String()
 		a.DB.Save(&entry)
@@ -122,7 +177,7 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 // VoidInvoice cancels the invoice and transitions it to the "void" state along with any associated entries
 func (a *App) VoidInvoice(invoiceID uint) error {
 	var invoice Invoice
-	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
 	// Invoice can be voided at any point
 	invoice.State = InvoiceStateVoid.String()
 	for _, entry := range invoice.Entries {
@@ -139,23 +194,55 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	if entry.Internal == true {
 		return nil
 	}
+
+	// Retrieve the project
 	var project Project
 	a.DB.Where("ID = ?", projectID).First(&project)
+
 	// Ensure that the entry date is within the project active start and end dates
 	if entry.Start.Before(project.ActiveStart) || entry.Start.After(project.ActiveEnd) {
 		return ErrEntryDateOutOfRange
 	}
+
+	// Get the account associated with the project
+	var account Account
+	a.DB.Where("ID = ?", project.AccountID).First(&account)
+
 	// Retrieve the appropriate invoice
 	var eligibleInvoices []Invoice
-	a.DB.Order("period_end desc").Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
+
+	// Check if this account uses separate invoices per project
+	if account.ProjectsSingleInvoice {
+		// Single invoice for all projects - look for account-level invoice
+		a.DB.Order("period_end desc").Where("account_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?",
+			project.AccountID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
+	} else {
+		// Separate invoices per project - look for project-specific invoice
+		a.DB.Order("period_end desc").Where("account_id = ? AND project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?",
+			project.AccountID, projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
+	}
+
 	// If there are no eligible invoices, we'll create a new one
 	if len(eligibleInvoices) == 0 {
-		err := a.CreateInvoice(projectID, entry.Start)
+		var projectIDPtr *uint
+		if !account.ProjectsSingleInvoice {
+			projectIDPtr = &projectID
+		}
+		err := a.CreateInvoice(project.AccountID, projectIDPtr, entry.Start)
 		if err != nil {
 			return err
 		}
-		a.DB.Where("project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?", projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
+
+		// Query again for the new invoice
+		if account.ProjectsSingleInvoice {
+			a.DB.Order("period_end desc").Where("account_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?",
+				project.AccountID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
+		} else {
+			a.DB.Order("period_end desc").Where("account_id = ? AND project_id = ? AND type = ? AND period_start <= ? AND period_end >= ? and state = ?",
+				project.AccountID, projectID, InvoiceTypeAR.String(), entry.Start, entry.End, InvoiceStateDraft.String()).Find(&eligibleInvoices)
+		}
 	}
+
 	// We now need to provide a way to select the appropriate invoice if there are multiple. We'll do this via waterfall method.
 	// If there is a pending invoice we'll add it to that, allowing us to edit invoices before they are sent. Otherwise, we'll
 	// add it to the draft invoice. We are assuming that we cannot add entries to invoices that have already been approved or sent.
@@ -166,12 +253,14 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 			break
 		}
 	}
+
 	if invoice.ID == 0 {
 		entry.State = EntryStateUnaffiliated.String()
 	} else {
 		entry.InvoiceID = &invoice.ID
 		entry.State = EntryStateDraft.String()
 	}
+
 	a.DB.Save(&entry)
 	return nil
 }
@@ -208,7 +297,7 @@ func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 	return nil
 }
 
-// BackfillEntriesForProject backfills entries to the invoice they belong on
+// BackfillEntriesForProject backfills entries to the invoice they belong on for a specific project
 func (a *App) BackfillEntriesForProject(projectID string) {
 	var entries []Entry
 	a.DB.Where("project_id = ?", projectID).Find(&entries)
@@ -217,6 +306,17 @@ func (a *App) BackfillEntriesForProject(projectID string) {
 		if err != nil {
 			log.Println(err)
 		}
+	}
+	return
+}
+
+// BackfillEntriesForAccount backfills all entries for all projects in an account
+func (a *App) BackfillEntriesForAccount(accountID string) {
+	var projects []Project
+	a.DB.Where("account_id = ?", accountID).Find(&projects)
+
+	for _, project := range projects {
+		a.BackfillEntriesForProject(fmt.Sprintf("%d", project.ID))
 	}
 	return
 }
