@@ -701,7 +701,7 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 	draftInvoice.TotalFees = math.Round(draftInvoice.TotalFees*100) / 100
 	draftInvoice.TotalAdjustments = math.Round(draftInvoice.TotalAdjustments*100) / 100
 	draftInvoice.TotalAmount = math.Round(draftInvoice.TotalAmount*100) / 100
-	draftInvoice.PeriodClosed = i.PeriodEnd.In(time.UTC).Before(time.Now()
+	draftInvoice.PeriodClosed = i.PeriodEnd.In(time.UTC).Before(time.Now())
 	return draftInvoice
 }
 
