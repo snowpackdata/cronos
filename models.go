@@ -181,6 +181,7 @@ type Account struct {
 	Website               string    `json:"website"`
 	Clients               []User    `json:"clients"`
 	Projects              []Project `json:"projects"`
+	Invoices              []Invoice `json:"invoices"`
 	BillingFrequency      string    `json:"billing_frequency"`
 	BudgetHours           int       `json:"budget_hours"`
 	BudgetDollars         int       `json:"budget_dollars"`
@@ -266,7 +267,7 @@ type Invoice struct {
 	Name             string       `json:"name"`
 	AccountID        uint         `json:"account_id"`
 	Account          Account      `json:"account"`
-	ProjectID        uint         `json:"project_id"`
+	ProjectID        *uint        `json:"project_id"`
 	Project          Project      `json:"project"`
 	PeriodStart      time.Time    `json:"period_start"`
 	PeriodEnd        time.Time    `json:"period_end"`
@@ -700,11 +701,11 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 	}
 
 	// Handle project information if available
-	if i.ProjectID != 0 {
+	if i.ProjectID != nil {
 		if i.Project.ID == 0 {
-			a.DB.Where("id = ?", i.ProjectID).First(&i.Project)
+			a.DB.Where("id = ?", *i.ProjectID).First(&i.Project)
 		}
-		draftInvoice.ProjectID = i.ProjectID
+		draftInvoice.ProjectID = *i.ProjectID
 		draftInvoice.ProjectName = i.Project.Name
 	}
 
@@ -757,11 +758,11 @@ func (a *App) GetAcceptedInvoice(i *Invoice) AcceptedInvoice {
 	}
 
 	// Handle project information if available
-	if i.ProjectID != 0 {
+	if i.ProjectID != nil {
 		if i.Project.ID == 0 {
-			a.DB.Where("id = ?", i.ProjectID).First(&i.Project)
+			a.DB.Where("id = ?", *i.ProjectID).First(&i.Project)
 		}
-		acceptedInvoice.ProjectID = i.ProjectID
+		acceptedInvoice.ProjectID = *i.ProjectID
 		acceptedInvoice.ProjectName = i.Project.Name
 	}
 
@@ -883,10 +884,19 @@ func (a *App) MarkBillPaid(b *Bill) {
 func (a *App) AddJournalEntries(i *Invoice) {
 	// First we need to add the entries for the total fee of the invoice
 	var project Project
-	a.DB.Preload("Account").Where("id = ?", i.ProjectID).First(&project)
+	var account Account
+
+	if i.ProjectID != nil && *i.ProjectID != 0 {
+		a.DB.Preload("Account").Where("id = ?", *i.ProjectID).First(&project)
+		account = project.Account
+	} else {
+		// If no project is associated, load the account directly
+		a.DB.Where("id = ?", i.AccountID).First(&account)
+	}
+
 	journal := Journal{
 		Account:    AccountARClientBillable.String(),
-		SubAccount: project.Account.LegalName,
+		SubAccount: account.LegalName,
 		Debit:      0,
 		Credit:     int64(i.TotalFees * 100),
 		Memo:       i.Name,
@@ -900,7 +910,7 @@ func (a *App) AddJournalEntries(i *Invoice) {
 	if i.TotalAdjustments != 0 {
 		adjustmentJournal := Journal{
 			Account:    AccountARClientFee.String(),
-			SubAccount: project.Account.LegalName,
+			SubAccount: account.LegalName,
 			Debit:      0,
 			Credit:     int64(i.TotalAdjustments * 100),
 			Memo:       i.Name,

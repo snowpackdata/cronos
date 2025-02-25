@@ -52,7 +52,7 @@ func (a *App) CreateInvoice(accountID uint, projectID *uint, creationDate time.T
 	if projectID != nil && !account.ProjectsSingleInvoice {
 		var project Project
 		a.DB.Where("ID = ?", *projectID).First(&project)
-		newARInvoice.ProjectID = *projectID
+		newARInvoice.ProjectID = projectID
 		newARInvoice.Project = project
 	}
 
@@ -262,6 +262,12 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	}
 
 	a.DB.Save(&entry)
+
+	// Update invoice totals after associating the entry
+	if invoice.ID != 0 {
+		a.UpdateInvoiceTotals(&invoice)
+	}
+
 	return nil
 }
 
