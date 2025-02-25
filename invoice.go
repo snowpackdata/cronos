@@ -205,6 +205,17 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	invoice.State = InvoiceStatePaid.String()
 	invoice.ClosedAt = time.Now()
 
+	// First save the invoice state to ensure it's properly updated
+	// Use explicit db.Model().Update() to ensure only the state and closedAt are updated
+	if err := a.DB.Model(&invoice).Updates(map[string]interface{}{
+		"state":     invoice.State,
+		"closed_at": invoice.ClosedAt,
+	}).Error; err != nil {
+		log.Printf("Error updating invoice state: %v", err)
+		return err
+	}
+	log.Printf("Successfully updated invoice state to PAID in the database")
+
 	log.Printf("Updating %d entries to paid state", len(invoice.Entries))
 	entriesUpdated := 0
 	for i := range invoice.Entries {
@@ -219,12 +230,24 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	}
 	log.Printf("Successfully updated %d/%d entries to paid state", entriesUpdated, len(invoice.Entries))
 
+	// Save all invoice changes now
 	result := a.DB.Save(&invoice)
 	if result.Error != nil {
 		log.Printf("Error saving invoice: %v", result.Error)
 		return result.Error
 	}
-	log.Printf("Saved invoice ID: %d with paid state", invoice.ID)
+	log.Printf("Saved all invoice ID: %d changes", invoice.ID)
+
+	// Verify invoice state was properly saved
+	var verifyInvoice Invoice
+	if err := a.DB.Where("ID = ?", invoice.ID).First(&verifyInvoice).Error; err != nil {
+		log.Printf("Error verifying invoice state: %v", err)
+	} else {
+		log.Printf("Verified invoice state: %s", verifyInvoice.State)
+		if verifyInvoice.State != InvoiceStatePaid.String() {
+			log.Printf("WARNING: Invoice state not properly saved!")
+		}
+	}
 
 	// Generate bills for the invoice
 	log.Printf("Generating bills for invoice ID: %d", invoice.ID)
@@ -473,12 +496,35 @@ func (a *App) processProjectCommission(invoice *Invoice, projectID uint) {
 		return
 	}
 
-	log.Printf("Project type: %s, Budget: $%d", project.ProjectType, project.BudgetDollars)
+	// Calculate the invoice amount for this specific project
+	var projectInvoiceTotal float64 = 0
+
+	// If it's a direct project invoice, use the invoice total
+	if invoice.ProjectID != nil && *invoice.ProjectID == projectID {
+		projectInvoiceTotal = invoice.TotalFees
+		log.Printf("Using direct invoice total for project %d: $%.2f", projectID, projectInvoiceTotal)
+	} else {
+		// Otherwise, sum the fees from entries for this specific project
+		for _, entry := range invoice.Entries {
+			if entry.ProjectID == projectID && entry.State != EntryStateVoid.String() {
+				projectInvoiceTotal += float64(entry.Fee) / 100.0
+			}
+		}
+		log.Printf("Calculated invoice total for project %d from entries: $%.2f", projectID, projectInvoiceTotal)
+	}
+
+	// Skip if invoice amount is zero
+	if projectInvoiceTotal <= 0 {
+		log.Printf("Skipping commission: Invoice amount is zero for project ID: %d", project.ID)
+		return
+	}
+
+	log.Printf("Project type: %s, Invoice amount: $%.2f", project.ProjectType, projectInvoiceTotal)
 
 	// Process AE commission if applicable
 	if project.AEID != nil && project.AE != nil {
 		log.Printf("Processing AE commission for %s %s (ID: %d)", project.AE.FirstName, project.AE.LastName, *project.AEID)
-		a.processCommission(&project, CommissionRoleAE.String(), *project.AEID, project.AE.FirstName+" "+project.AE.LastName)
+		a.processCommission(&project, CommissionRoleAE.String(), *project.AEID, project.AE.FirstName+" "+project.AE.LastName, projectInvoiceTotal)
 	} else if project.AEID != nil {
 		log.Printf("Warning: AE ID %d is set but AE data not loaded", *project.AEID)
 		var employee Employee
@@ -486,14 +532,14 @@ func (a *App) processProjectCommission(invoice *Invoice, projectID uint) {
 			log.Printf("Error loading AE: %v", err)
 		} else {
 			log.Printf("Processing AE commission for %s %s (ID: %d)", employee.FirstName, employee.LastName, *project.AEID)
-			a.processCommission(&project, CommissionRoleAE.String(), *project.AEID, employee.FirstName+" "+employee.LastName)
+			a.processCommission(&project, CommissionRoleAE.String(), *project.AEID, employee.FirstName+" "+employee.LastName, projectInvoiceTotal)
 		}
 	}
 
 	// Process SDR commission if applicable
 	if project.SDRID != nil && project.SDR != nil {
 		log.Printf("Processing SDR commission for %s %s (ID: %d)", project.SDR.FirstName, project.SDR.LastName, *project.SDRID)
-		a.processCommission(&project, CommissionRoleSDR.String(), *project.SDRID, project.SDR.FirstName+" "+project.SDR.LastName)
+		a.processCommission(&project, CommissionRoleSDR.String(), *project.SDRID, project.SDR.FirstName+" "+project.SDR.LastName, projectInvoiceTotal)
 	} else if project.SDRID != nil {
 		log.Printf("Warning: SDR ID %d is set but SDR data not loaded", *project.SDRID)
 		var employee Employee
@@ -501,17 +547,17 @@ func (a *App) processProjectCommission(invoice *Invoice, projectID uint) {
 			log.Printf("Error loading SDR: %v", err)
 		} else {
 			log.Printf("Processing SDR commission for %s %s (ID: %d)", employee.FirstName, employee.LastName, *project.SDRID)
-			a.processCommission(&project, CommissionRoleSDR.String(), *project.SDRID, employee.FirstName+" "+employee.LastName)
+			a.processCommission(&project, CommissionRoleSDR.String(), *project.SDRID, employee.FirstName+" "+employee.LastName, projectInvoiceTotal)
 		}
 	}
 }
 
 // processCommission creates a commission entry and adds it to the staff member's bill
-func (a *App) processCommission(project *Project, role string, staffID uint, staffName string) {
+func (a *App) processCommission(project *Project, role string, staffID uint, staffName string, invoiceTotal float64) {
 	log.Printf("Starting processCommission for %s (ID: %d), role: %s", staffName, staffID, role)
 
-	// Calculate commission amount
-	commissionAmount := a.CalculateCommissionAmount(project, role)
+	// Calculate commission amount using the invoice total
+	commissionAmount := a.CalculateCommissionAmount(project, role, invoiceTotal)
 	log.Printf("Calculated commission amount for %s: $%.2f", staffName, float64(commissionAmount)/100)
 
 	// Skip if commission amount is zero

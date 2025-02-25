@@ -157,28 +157,23 @@ const (
 
 	// Commission rate constants
 	// These rates are percentages (0.05 = 5%)
-	AECommissionRateNewSmall  = 0.05 // Projects under $10,000
-	AECommissionRateNewMedium = 0.07 // Projects $10,000 - $50,000
-	AECommissionRateNewLarge  = 0.10 // Projects over $50,000
+	AECommissionRateNewSmall = 0.08 // Projects under $10,000
+	AECommissionRateNewLarge = 0.12 // Projects over $50,000
 
 	// AE Commission Rates for Existing Business
-	AECommissionRateExistingSmall  = 0.03 // Projects under $10,000
-	AECommissionRateExistingMedium = 0.05 // Projects $10,000 - $50,000
-	AECommissionRateExistingLarge  = 0.07 // Projects over $50,000
+	AECommissionRateExistingSmall = 0.032 // Projects under $10,000
+	AECommissionRateExistingLarge = 0.072 // Projects over $50,000
 
 	// SDR Commission Rates for New Business
-	SDRCommissionRateNewSmall  = 0.02 // Projects under $10,000
-	SDRCommissionRateNewMedium = 0.03 // Projects $10,000 - $50,000
-	SDRCommissionRateNewLarge  = 0.05 // Projects over $50,000
+	SDRCommissionRateNewSmall = 0.02 // Projects under $10,000
+	SDRCommissionRateNewLarge = 0.03 // Projects over $50,000
 
 	// SDR Commission Rates for Existing Business
-	SDRCommissionRateExistingSmall  = 0.01 // Projects under $10,000
-	SDRCommissionRateExistingMedium = 0.02 // Projects $10,000 - $50,000
-	SDRCommissionRateExistingLarge  = 0.03 // Projects over $50,000
+	SDRCommissionRateExistingSmall = 0.008 // Projects under $10,000
+	SDRCommissionRateExistingLarge = 0.018 // Projects over $50,000
 
 	// Deal size thresholds (in dollars)
-	DealSizeSmallThreshold  = 10000
-	DealSizeMediumThreshold = 50000
+	DealSizeSmallThreshold = 100000
 )
 
 type User struct {
@@ -1045,8 +1040,6 @@ func (a *App) CalculateCommissionRate(role string, projectType string, dealSize 
 	var sizeCategory string
 	if dealSize < DealSizeSmallThreshold {
 		sizeCategory = "Small"
-	} else if dealSize < DealSizeMediumThreshold {
-		sizeCategory = "Medium"
 	} else {
 		sizeCategory = "Large"
 	}
@@ -1057,41 +1050,29 @@ func (a *App) CalculateCommissionRate(role string, projectType string, dealSize 
 	// Return appropriate rate based on role, project type, and deal size
 	if isAE {
 		if isNew {
-			switch sizeCategory {
-			case "Small":
+			if sizeCategory == "Small" {
 				rate = AECommissionRateNewSmall
-			case "Medium":
-				rate = AECommissionRateNewMedium
-			case "Large":
+			} else {
 				rate = AECommissionRateNewLarge
 			}
 		} else {
-			switch sizeCategory {
-			case "Small":
+			if sizeCategory == "Small" {
 				rate = AECommissionRateExistingSmall
-			case "Medium":
-				rate = AECommissionRateExistingMedium
-			case "Large":
+			} else {
 				rate = AECommissionRateExistingLarge
 			}
 		}
 	} else { // SDR
 		if isNew {
-			switch sizeCategory {
-			case "Small":
+			if sizeCategory == "Small" {
 				rate = SDRCommissionRateNewSmall
-			case "Medium":
-				rate = SDRCommissionRateNewMedium
-			case "Large":
+			} else {
 				rate = SDRCommissionRateNewLarge
 			}
 		} else {
-			switch sizeCategory {
-			case "Small":
+			if sizeCategory == "Small" {
 				rate = SDRCommissionRateExistingSmall
-			case "Medium":
-				rate = SDRCommissionRateExistingMedium
-			case "Large":
+			} else {
 				rate = SDRCommissionRateExistingLarge
 			}
 		}
@@ -1102,18 +1083,56 @@ func (a *App) CalculateCommissionRate(role string, projectType string, dealSize 
 }
 
 // CalculateCommissionAmount calculates the commission amount based on the project and role
-func (a *App) CalculateCommissionAmount(project *Project, role string) int {
+func (a *App) CalculateCommissionAmount(project *Project, role string, invoiceTotal float64) int {
+	// Calculate total project value based on invoice amount
+	totalProjectValue := int(invoiceTotal)
+
+	log.Printf("Commission calculation for invoice amount: $%d", totalProjectValue)
+
 	// Get the commission rate
-	rate := a.CalculateCommissionRate(role, project.ProjectType, project.BudgetDollars)
+	rate := a.CalculateCommissionRate(role, project.ProjectType, totalProjectValue)
 
 	// Log the commission calculation details
-	log.Printf("Commission calculation - Role: %s, Project Type: %s, Budget: $%d, Rate: %.2f%%",
-		role, project.ProjectType, project.BudgetDollars, rate*100)
+	log.Printf("Commission calculation - Role: %s, Project Type: %s, Invoice Total: $%d, Rate: %.2f%%",
+		role, project.ProjectType, totalProjectValue, rate*100)
 
 	// Calculate commission amount (in cents)
-	commissionAmount := int(float64(project.BudgetDollars) * rate * 100)
+	commissionAmount := int(float64(totalProjectValue) * rate * 100)
 
 	log.Printf("Calculated commission amount: $%.2f", float64(commissionAmount)/100)
 
 	return commissionAmount
+}
+
+// calculateMonths calculates the number of whole months between two dates
+func calculateMonths(start, end time.Time) int {
+	months := (end.Year()-start.Year())*12 + int(end.Month()-start.Month())
+	// Round up if there are days remaining
+	if end.Day() > start.Day() {
+		months++
+	}
+	if months < 1 {
+		return 1 // Minimum of 1 month
+	}
+	return months
+}
+
+// calculateWeeks calculates the number of whole weeks between two dates
+func calculateWeeks(start, end time.Time) int {
+	days := int(end.Sub(start).Hours() / 24)
+	weeks := (days + 6) / 7 // Round up to nearest week
+	if weeks < 1 {
+		return 1 // Minimum of 1 week
+	}
+	return weeks
+}
+
+// calculateBiWeeks calculates the number of bi-weekly periods between two dates
+func calculateBiWeeks(start, end time.Time) int {
+	days := int(end.Sub(start).Hours() / 24)
+	biweeks := (days + 13) / 14 // Round up to nearest bi-week (14 days)
+	if biweeks < 1 {
+		return 1 // Minimum of 1 bi-week
+	}
+	return biweeks
 }
