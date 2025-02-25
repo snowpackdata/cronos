@@ -109,6 +109,7 @@ func (a *App) Migrate() {
 	_ = a.DB.AutoMigrate(&User{})
 	_ = a.DB.AutoMigrate(&Employee{})
 	_ = a.DB.AutoMigrate(&Client{})
+	_ = a.DB.AutoMigrate(&Commission{})
 	_ = a.DB.AutoMigrate(&Account{})
 	_ = a.DB.AutoMigrate(&Rate{})
 	_ = a.DB.AutoMigrate(&Project{})

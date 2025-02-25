@@ -8,6 +8,8 @@ import (
 
 	"github.com/pkg/errors"
 
+	"log"
+
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
 	_ "gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -1036,6 +1038,9 @@ func (a *App) CalculateCommissionRate(role string, projectType string, dealSize 
 	isNew := projectType == ProjectTypeNew.String()
 	isAE := role == CommissionRoleAE.String()
 
+	log.Printf("Commission rate calculation - Role: %s, Project Type: %s, Deal Size: $%d",
+		role, projectType, dealSize)
+
 	// Determine deal size category
 	var sizeCategory string
 	if dealSize < DealSizeSmallThreshold {
@@ -1046,51 +1051,54 @@ func (a *App) CalculateCommissionRate(role string, projectType string, dealSize 
 		sizeCategory = "Large"
 	}
 
+	log.Printf("Deal size category: %s", sizeCategory)
+
+	var rate float64
 	// Return appropriate rate based on role, project type, and deal size
 	if isAE {
 		if isNew {
 			switch sizeCategory {
 			case "Small":
-				return AECommissionRateNewSmall
+				rate = AECommissionRateNewSmall
 			case "Medium":
-				return AECommissionRateNewMedium
+				rate = AECommissionRateNewMedium
 			case "Large":
-				return AECommissionRateNewLarge
+				rate = AECommissionRateNewLarge
 			}
 		} else {
 			switch sizeCategory {
 			case "Small":
-				return AECommissionRateExistingSmall
+				rate = AECommissionRateExistingSmall
 			case "Medium":
-				return AECommissionRateExistingMedium
+				rate = AECommissionRateExistingMedium
 			case "Large":
-				return AECommissionRateExistingLarge
+				rate = AECommissionRateExistingLarge
 			}
 		}
 	} else { // SDR
 		if isNew {
 			switch sizeCategory {
 			case "Small":
-				return SDRCommissionRateNewSmall
+				rate = SDRCommissionRateNewSmall
 			case "Medium":
-				return SDRCommissionRateNewMedium
+				rate = SDRCommissionRateNewMedium
 			case "Large":
-				return SDRCommissionRateNewLarge
+				rate = SDRCommissionRateNewLarge
 			}
 		} else {
 			switch sizeCategory {
 			case "Small":
-				return SDRCommissionRateExistingSmall
+				rate = SDRCommissionRateExistingSmall
 			case "Medium":
-				return SDRCommissionRateExistingMedium
+				rate = SDRCommissionRateExistingMedium
 			case "Large":
-				return SDRCommissionRateExistingLarge
+				rate = SDRCommissionRateExistingLarge
 			}
 		}
 	}
 
-	// Default fallback (should never reach here)
-	return 0
+	log.Printf("Selected commission rate: %.2f%%", rate*100)
+	return rate
 }
 
 // CalculateCommissionAmount calculates the commission amount based on the project and role
@@ -1098,8 +1106,14 @@ func (a *App) CalculateCommissionAmount(project *Project, role string) int {
 	// Get the commission rate
 	rate := a.CalculateCommissionRate(role, project.ProjectType, project.BudgetDollars)
 
+	// Log the commission calculation details
+	log.Printf("Commission calculation - Role: %s, Project Type: %s, Budget: $%d, Rate: %.2f%%",
+		role, project.ProjectType, project.BudgetDollars, rate*100)
+
 	// Calculate commission amount (in cents)
 	commissionAmount := int(float64(project.BudgetDollars) * rate * 100)
+
+	log.Printf("Calculated commission amount: $%.2f", float64(commissionAmount)/100)
 
 	return commissionAmount
 }

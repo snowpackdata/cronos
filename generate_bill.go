@@ -136,46 +136,48 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 		rate := val.RateFormatted
 		total := fmt.Sprintf("%.2f", val.Total)
 
-		pdf.CellFormat(colWidth[0], lineHt, billingCode, "1", 0, "CM", true, 0, "")
-		pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", true, 0, "")
-		pdf.CellFormat(colWidth[2], lineHt, hours, "1", 0, "CM", true, 0, "")
-		pdf.CellFormat(colWidth[3], lineHt, "$ "+rate, "1", 0, "CM", true, 0, "")
-		pdf.CellFormat(colWidth[4], lineHt, "$ "+total, "1", 0, "RM", true, 0, "")
+		pdf.CellFormat(colWidth[0], lineHt, billingCode, "1", 0, "LM", false, 0, "")
+		pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", false, 0, "")
+		pdf.CellFormat(colWidth[2], lineHt, hours, "1", 0, "CM", false, 0, "")
+		pdf.CellFormat(colWidth[3], lineHt, "$ "+rate, "1", 0, "LM", false, 0, "")
+		pdf.CellFormat(colWidth[4], lineHt, "$ "+total, "1", 0, "RM", false, 0, "")
 		pdf.Ln(-1)
 	}
 
 	// Add commissions to the bill if any exist
 	if len(commissions) > 0 {
-		pdf.SetFillColor(240, 240, 240) // Light gray background for commission rows
-
 		for _, commission := range commissions {
 			// Format commission amount
 			commissionAmount := fmt.Sprintf("%.2f", float64(commission.Amount)/100)
 
-			// Determine role display text
-			roleText := "Account Executive"
-			if commission.Role == CommissionRoleSDR.String() {
-				roleText = "Sales Development Rep"
-			}
+			// Calculate commission rate as percentage
+			commissionRate := a.CalculateCommissionRate(commission.Role, commission.ProjectType, 0) // Using 0 as deal size since we just want to display the rate
+			rateFormatted := fmt.Sprintf("%.1f%%", commissionRate*100)
 
-			// Determine project type display text
-			projectTypeText := "New Business"
+			// Determine project type display text (shorter version)
+			projectTypeText := "New"
 			if commission.ProjectType == ProjectTypeExisting.String() {
-				projectTypeText = "Existing Business"
+				projectTypeText = "Existing"
 			}
 
-			// Create description text
-			description := fmt.Sprintf("Commission: %s - %s (%s)", commission.ProjectName, roleText, projectTypeText)
+			// Determine role display text (abbreviated)
+			roleText := "AE"
+			if commission.Role == CommissionRoleSDR.String() {
+				roleText = "SDR"
+			}
 
-			pdf.CellFormat(colWidth[0], lineHt, "COMM", "1", 0, "CM", true, 0, "")
-			pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", true, 0, "")
-			pdf.CellFormat(colWidth[2], lineHt, "", "1", 0, "CM", true, 0, "")
-			pdf.CellFormat(colWidth[3], lineHt, "", "1", 0, "CM", true, 0, "")
-			pdf.CellFormat(colWidth[4], lineHt, "$ "+commissionAmount, "1", 0, "RM", true, 0, "")
+			// Create concise commission description with invoice reference
+			// Format invoice number as "YYYYNNNN" where NNNN is the project ID (zero-padded to 4 digits)
+			invoiceRef := fmt.Sprintf("#%d%04d", time.Now().Year(), commission.ProjectID)
+			description := fmt.Sprintf("%s %s - %s (%s)", commission.ProjectName, invoiceRef, roleText, projectTypeText)
+
+			pdf.CellFormat(colWidth[0], lineHt, "COMM", "1", 0, "LM", false, 0, "")
+			pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", false, 0, "")
+			pdf.CellFormat(colWidth[2], lineHt, "-", "1", 0, "CM", false, 0, "")
+			pdf.CellFormat(colWidth[3], lineHt, rateFormatted, "1", 0, "LM", false, 0, "")
+			pdf.CellFormat(colWidth[4], lineHt, "$ "+commissionAmount, "1", 0, "RM", false, 0, "")
 			pdf.Ln(-1)
 		}
-
-		pdf.SetFillColor(255, 255, 255) // Reset fill color
 	}
 
 	// Generate the total Rows
@@ -189,18 +191,9 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 
 	grandTotal := fmt.Sprintf("%.2f", float64(bill.TotalAmount)/100)
 	pdf.SetX(marginX + leftIndent)
-	pdf.CellFormat(colWidth[3], lineHt, "Total Due", "1", 0, "LM", true, 0, "")
-	pdf.CellFormat(colWidth[4], lineHt, "$ "+grandTotal, "1", 0, "RM", true, 0, "")
+	pdf.CellFormat(colWidth[3], lineHt, "Total Due", "1", 0, "LM", false, 0, "")
+	pdf.CellFormat(colWidth[4], lineHt, "$ "+grandTotal, "1", 0, "RM", false, 0, "")
 	pdf.Ln(lineHt)
-
-	// If there are commissions, show the commission subtotal
-	if bill.TotalCommissions > 0 {
-		commissionsTotal := fmt.Sprintf("%.2f", float64(bill.TotalCommissions)/100)
-		pdf.SetX(marginX + leftIndent)
-		pdf.CellFormat(colWidth[3], lineHt, "Commission Subtotal", "1", 0, "LM", true, 0, "")
-		pdf.CellFormat(colWidth[4], lineHt, "$ "+commissionsTotal, "1", 0, "RM", true, 0, "")
-		pdf.Ln(lineHt)
-	}
 
 	pdf.SetFontStyle("")
 	pdf.Ln(lineBreak)
