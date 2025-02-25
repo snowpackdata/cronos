@@ -2,10 +2,11 @@ package cronos
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
 	_ "gorm.io/driver/postgres"
@@ -172,14 +173,19 @@ type Client struct {
 type Account struct {
 	// Account is the specific customer account
 	gorm.Model
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	LegalName string    `gorm:"unique" json:"legal_name"`
-	Address   string    `json:"address"`
-	Email     string    `json:"email"`
-	Website   string    `json:"website"`
-	Clients   []User    `json:"clients"`
-	Projects  []Project `json:"projects"`
+	Name                  string    `json:"name"`
+	Type                  string    `json:"type"`
+	LegalName             string    `gorm:"unique" json:"legal_name"`
+	Address               string    `json:"address"`
+	Email                 string    `json:"email"`
+	Website               string    `json:"website"`
+	Clients               []User    `json:"clients"`
+	Projects              []Project `json:"projects"`
+	Invoices              []Invoice `json:"invoices"`
+	BillingFrequency      string    `json:"billing_frequency"`
+	BudgetHours           int       `json:"budget_hours"`
+	BudgetDollars         int       `json:"budget_dollars"`
+	ProjectsSingleInvoice bool      `json:"projects_single_invoice"`
 }
 
 type Rate struct {
@@ -198,18 +204,17 @@ type Project struct {
 	// often with specific time period. A rate will have a specific billing code
 	// associated with the project.
 	gorm.Model
-	Name             string        `json:"name"`
-	AccountID        uint          `json:"account_id"`
-	Account          Account       `json:"account"`
-	ActiveStart      time.Time     `json:"active_start"`
-	ActiveEnd        time.Time     `json:"active_end"`
-	BudgetHours      int           `json:"budget_hours"`
-	BudgetDollars    int           `json:"budget_dollars"`
-	Internal         bool          `json:"internal"`
-	BillingCodes     []BillingCode `json:"billing_codes"`
-	Entries          []Entry       `json:"entries"`
-	Invoices         []Invoice     `json:"invoices"`
-	BillingFrequency string        `json:"billing_frequency"`
+	Name          string        `json:"name"`
+	AccountID     uint          `json:"account_id"`
+	Account       Account       `json:"account"`
+	ActiveStart   time.Time     `json:"active_start"`
+	ActiveEnd     time.Time     `json:"active_end"`
+	BudgetHours   int           `json:"budget_hours"`
+	BudgetDollars int           `json:"budget_dollars"`
+	Internal      bool          `json:"internal"`
+	BillingCodes  []BillingCode `json:"billing_codes"`
+	Entries       []Entry       `json:"entries"`
+	Invoices      []Invoice     `json:"invoices"`
 }
 
 type BillingCode struct {
@@ -260,7 +265,9 @@ func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
 type Invoice struct {
 	gorm.Model
 	Name             string       `json:"name"`
-	ProjectID        uint         `json:"project_id"`
+	AccountID        uint         `json:"account_id"`
+	Account          Account      `json:"account"`
+	ProjectID        *uint        `json:"project_id"`
 	Project          Project      `json:"project"`
 	PeriodStart      time.Time    `json:"period_start"`
 	PeriodEnd        time.Time    `json:"period_end"`
@@ -434,6 +441,7 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 type InvoiceLineItem struct {
 	BillingCode    string  `json:"billing_code"`
 	Project        string  `json:"project"`
+	ProjectName    string  `json:"project_name"`
 	Hours          float64 `json:"hours"`
 	HoursFormatted string  `json:"hours_formatted"`
 	Rate           float64 `json:"rate"`
@@ -462,24 +470,27 @@ type invoiceEntry struct {
 func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItem {
 	var invoiceLineItems []InvoiceLineItem
 	var entries []Entry
-	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").Where("invoice_id = ? AND state != ?", i.ID, EntryStateVoid.String()).Find(&entries)
+	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").Preload("Project").Where("invoice_id = ? AND state != ?", i.ID, EntryStateVoid.String()).Find(&entries)
 
-	// Create a map to index line items
+	// Create a map to index line items - use a composite key of project ID + billing code
 	billingCodeMap := make(map[string]InvoiceLineItem)
 
 	// Populate the list of line items
 	for _, entry := range entries {
-		billingCode := entry.BillingCode.Code
-		if lineItem, exists := billingCodeMap[billingCode]; exists {
+		// Create a unique key that includes both project and billing code
+		mapKey := fmt.Sprintf("%d-%s", entry.ProjectID, entry.BillingCode.Code)
+
+		if lineItem, exists := billingCodeMap[mapKey]; exists {
 			// Update the existing line item
 			lineItem.Hours += entry.Duration().Hours()
 			lineItem.Total = lineItem.Hours * lineItem.Rate
-			billingCodeMap[billingCode] = lineItem
+			billingCodeMap[mapKey] = lineItem
 		} else {
 			// Create a new line item
-			billingCodeMap[billingCode] = InvoiceLineItem{
+			billingCodeMap[mapKey] = InvoiceLineItem{
 				BillingCode: entry.BillingCode.Code,
 				Project:     entry.BillingCode.Name,
+				ProjectName: entry.Project.Name,
 				Hours:       entry.Duration().Hours(),
 				Rate:        entry.BillingCode.Rate.Amount,
 				Total:       entry.Duration().Hours() * entry.BillingCode.Rate.Amount,
@@ -633,6 +644,8 @@ func (a *App) GetDraftEntry(e *Entry) DraftEntry {
 type DraftInvoice struct {
 	InvoiceID        uint         `json:"ID"`
 	InvoiceName      string       `json:"invoice_name"`
+	AccountID        uint         `json:"account_id"`
+	AccountName      string       `json:"account_name"`
 	ProjectID        uint         `json:"project_id"`
 	ProjectName      string       `json:"project_name"`
 	PeriodStart      string       `json:"period_start"`
@@ -649,6 +662,8 @@ type DraftInvoice struct {
 type AcceptedInvoice struct {
 	InvoiceID      uint              `json:"ID"`
 	InvoiceName    string            `json:"invoice_name"`
+	AccountID      uint              `json:"account_id"`
+	AccountName    string            `json:"account_name"`
 	ProjectID      uint              `json:"project_id"`
 	ProjectName    string            `json:"project_name"`
 	PeriodStart    string            `json:"period_start"`
@@ -666,11 +681,17 @@ type AcceptedInvoice struct {
 
 func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 	a.UpdateInvoiceTotals(i)
+
+	// Load the account and project if not already loaded
+	if i.Account.ID == 0 {
+		a.DB.Where("id = ?", i.AccountID).First(&i.Account)
+	}
+
 	draftInvoice := DraftInvoice{
 		InvoiceID:        i.ID,
 		InvoiceName:      i.Name,
-		ProjectID:        i.ProjectID,
-		ProjectName:      i.Project.Name,
+		AccountID:        i.AccountID,
+		AccountName:      i.Account.Name,
 		PeriodStart:      i.PeriodStart.In(time.UTC).Format("01/02/2006"),
 		PeriodEnd:        i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
 		TotalHours:       i.TotalHours,
@@ -678,6 +699,16 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		TotalAdjustments: i.TotalAdjustments,
 		TotalAmount:      i.TotalFees + i.TotalAdjustments,
 	}
+
+	// Handle project information if available
+	if i.ProjectID != nil {
+		if i.Project.ID == 0 {
+			a.DB.Where("id = ?", *i.ProjectID).First(&i.Project)
+		}
+		draftInvoice.ProjectID = *i.ProjectID
+		draftInvoice.ProjectName = i.Project.Name
+	}
+
 	for _, entry := range i.Entries {
 		draftEntry := a.GetDraftEntry(&entry)
 		draftInvoice.LineItems = append(draftInvoice.LineItems, draftEntry)
@@ -692,7 +723,6 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		if draftInvoice.Adjustments[i].State != AdjustmentStateVoid.String() {
 			totalAdjustments += draftInvoice.Adjustments[i].Amount * multiplicationFactor
 		}
-
 	}
 	draftInvoice.TotalAdjustments = totalAdjustments
 	draftInvoice.TotalAmount = draftInvoice.TotalFees + draftInvoice.TotalAdjustments
@@ -706,24 +736,38 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 }
 
 func (a *App) GetAcceptedInvoice(i *Invoice) AcceptedInvoice {
-	a.UpdateInvoiceTotals(i)
-	acceptedInvoice := AcceptedInvoice{
-		InvoiceID:      i.ID,
-		InvoiceName:    i.Name,
-		ProjectID:      i.ProjectID,
-		ProjectName:    i.Project.Name,
-		PeriodStart:    i.PeriodStart.In(time.UTC).Format("01/02/2006"),
-		PeriodEnd:      i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
-		File:           i.GCSFile,
-		LineItemsCount: len(i.Entries),
-		State:          i.State,
-		SentAt:         i.SentAt.In(time.UTC).Format("01/02/2006"),
-		DueAt:          i.DueAt.In(time.UTC).Format("01/02/2006"),
-		ClosedAt:       i.ClosedAt.In(time.UTC).Format("01/02/2006"),
-		TotalHours:     i.TotalHours,
-		TotalFees:      i.TotalFees,
+	// Load the account and project if not already loaded
+	if i.Account.ID == 0 {
+		a.DB.Where("id = ?", i.AccountID).First(&i.Account)
 	}
+
+	acceptedInvoice := AcceptedInvoice{
+		InvoiceID:   i.ID,
+		InvoiceName: i.Name,
+		AccountID:   i.AccountID,
+		AccountName: i.Account.Name,
+		PeriodStart: i.PeriodStart.In(time.UTC).Format("01/02/2006"),
+		PeriodEnd:   i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
+		File:        i.GCSFile,
+		TotalHours:  i.TotalHours,
+		TotalFees:   i.TotalFees,
+		State:       i.State,
+		SentAt:      i.SentAt.Format("01/02/2006"),
+		DueAt:       i.DueAt.Format("01/02/2006"),
+		ClosedAt:    i.ClosedAt.Format("01/02/2006"),
+	}
+
+	// Handle project information if available
+	if i.ProjectID != nil {
+		if i.Project.ID == 0 {
+			a.DB.Where("id = ?", *i.ProjectID).First(&i.Project)
+		}
+		acceptedInvoice.ProjectID = *i.ProjectID
+		acceptedInvoice.ProjectName = i.Project.Name
+	}
+
 	acceptedInvoice.LineItems = a.GetInvoiceLineItems(i)
+	acceptedInvoice.LineItemsCount = len(acceptedInvoice.LineItems)
 	return acceptedInvoice
 }
 
@@ -840,10 +884,19 @@ func (a *App) MarkBillPaid(b *Bill) {
 func (a *App) AddJournalEntries(i *Invoice) {
 	// First we need to add the entries for the total fee of the invoice
 	var project Project
-	a.DB.Preload("Account").Where("id = ?", i.ProjectID).First(&project)
+	var account Account
+
+	if i.ProjectID != nil && *i.ProjectID != 0 {
+		a.DB.Preload("Account").Where("id = ?", *i.ProjectID).First(&project)
+		account = project.Account
+	} else {
+		// If no project is associated, load the account directly
+		a.DB.Where("id = ?", i.AccountID).First(&account)
+	}
+
 	journal := Journal{
 		Account:    AccountARClientBillable.String(),
-		SubAccount: project.Account.LegalName,
+		SubAccount: account.LegalName,
 		Debit:      0,
 		Credit:     int64(i.TotalFees * 100),
 		Memo:       i.Name,
@@ -857,7 +910,7 @@ func (a *App) AddJournalEntries(i *Invoice) {
 	if i.TotalAdjustments != 0 {
 		adjustmentJournal := Journal{
 			Account:    AccountARClientFee.String(),
-			SubAccount: project.Account.LegalName,
+			SubAccount: account.LegalName,
 			Debit:      0,
 			Credit:     int64(i.TotalAdjustments * 100),
 			Memo:       i.Name,

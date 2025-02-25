@@ -3,10 +3,11 @@ package cronos
 import (
 	"bytes"
 	"fmt"
-	"github.com/jung-kurt/gofpdf"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jung-kurt/gofpdf"
 )
 
 // Set Constants for the invoice PDF
@@ -34,8 +35,14 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 
 	var project Project
 	var account Account
-	a.DB.Where("id = ?", invoice.ProjectID).First(&project)
-	a.DB.Where("id = ?", project.AccountID).First(&account)
+
+	// Get account information - invoice now has direct AccountID
+	a.DB.Where("id = ?", invoice.AccountID).First(&account)
+
+	// If this is a project-specific invoice, get the project information
+	if invoice.ProjectID != nil && *invoice.ProjectID != 0 {
+		a.DB.Where("id = ?", *invoice.ProjectID).First(&project)
+	}
 
 	InvoiceNumber := strconv.Itoa(time.Now().Year()) + "00" + strconv.Itoa(int(invoice.ID))
 
