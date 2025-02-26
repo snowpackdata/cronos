@@ -8,6 +8,8 @@ import (
 
 	"github.com/pkg/errors"
 
+	"log"
+
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
 	_ "gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -79,6 +81,18 @@ func (s JournalAccountType) String() string {
 	return string(s)
 }
 
+type ProjectType string
+
+func (s ProjectType) String() string {
+	return string(s)
+}
+
+type CommissionRole string
+
+func (s CommissionRole) String() string {
+	return string(s)
+}
+
 const (
 	HOUR                      = 60.0
 	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
@@ -96,6 +110,12 @@ const (
 	RateTypeExternalBillable         RateType = "RATE_TYPE_EXTERNAL_CLIENT_BILLABLE"
 	RateTypeExternalNonBillable      RateType = "RATE_TYPE_EXTERNAL_CLIENT_NON_BILLABLE"
 	RateTypeInternalProject          RateType = "RATE_TYPE_INTERNAL_PROJECT"
+
+	ProjectTypeNew      ProjectType = "PROJECT_TYPE_NEW"
+	ProjectTypeExisting ProjectType = "PROJECT_TYPE_EXISTING"
+
+	CommissionRoleAE  CommissionRole = "COMMISSION_ROLE_AE"
+	CommissionRoleSDR CommissionRole = "COMMISSION_ROLE_SDR"
 
 	BillingFrequencyMonthly   BillingFrequency = "BILLING_TYPE_MONTHLY"
 	BillingFrequencyProject   BillingFrequency = "BILLING_TYPE_PROJECT"
@@ -134,6 +154,26 @@ const (
 	AccountAPDiscount       JournalAccountType = "ACCOUNTS_PAYABLE_EXPENSE_DISCOUNT"
 	AccountAPStaffBonus     JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_BONUS"
 	AccountARClientFee      JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_FEE"
+
+	// Commission rate constants
+	// These rates are percentages (0.05 = 5%)
+	AECommissionRateNewSmall = 0.08 // Projects under $10,000
+	AECommissionRateNewLarge = 0.12 // Projects over $50,000
+
+	// AE Commission Rates for Existing Business
+	AECommissionRateExistingSmall = 0.032 // Projects under $10,000
+	AECommissionRateExistingLarge = 0.072 // Projects over $50,000
+
+	// SDR Commission Rates for New Business
+	SDRCommissionRateNewSmall = 0.02 // Projects under $10,000
+	SDRCommissionRateNewLarge = 0.03 // Projects over $50,000
+
+	// SDR Commission Rates for Existing Business
+	SDRCommissionRateExistingSmall = 0.008 // Projects under $10,000
+	SDRCommissionRateExistingLarge = 0.018 // Projects over $50,000
+
+	// Deal size thresholds (in dollars)
+	DealSizeSmallThreshold = 100000
 )
 
 type User struct {
@@ -204,17 +244,23 @@ type Project struct {
 	// often with specific time period. A rate will have a specific billing code
 	// associated with the project.
 	gorm.Model
-	Name          string        `json:"name"`
-	AccountID     uint          `json:"account_id"`
-	Account       Account       `json:"account"`
-	ActiveStart   time.Time     `json:"active_start"`
-	ActiveEnd     time.Time     `json:"active_end"`
-	BudgetHours   int           `json:"budget_hours"`
-	BudgetDollars int           `json:"budget_dollars"`
-	Internal      bool          `json:"internal"`
-	BillingCodes  []BillingCode `json:"billing_codes"`
-	Entries       []Entry       `json:"entries"`
-	Invoices      []Invoice     `json:"invoices"`
+	Name             string        `json:"name"`
+	AccountID        uint          `json:"account_id"`
+	Account          Account       `json:"account"`
+	ActiveStart      time.Time     `json:"active_start"`
+	ActiveEnd        time.Time     `json:"active_end"`
+	BudgetHours      int           `json:"budget_hours"`
+	BudgetDollars    int           `json:"budget_dollars"`
+	Internal         bool          `json:"internal"`
+	BillingCodes     []BillingCode `json:"billing_codes"`
+	Entries          []Entry       `json:"entries"`
+	Invoices         []Invoice     `json:"invoices"`
+	BillingFrequency string        `json:"billing_frequency"`
+	ProjectType      string        `json:"project_type"`
+	AEID             *uint         `json:"ae_id"`
+	AE               *Employee     `json:"ae"`
+	SDRID            *uint         `json:"sdr_id"`
+	SDR              *Employee     `json:"sdr"`
 }
 
 type BillingCode struct {
@@ -305,6 +351,21 @@ type Adjustment struct {
 	Notes     string  `json:"notes"`
 }
 
+// Commission represents a commission payment to a staff member
+type Commission struct {
+	gorm.Model
+	StaffID     uint     `json:"staff_id"`
+	Staff       Employee `json:"staff"`
+	Role        string   `json:"role"`
+	Amount      int      `json:"amount"`
+	BillID      uint     `json:"bill_id"`
+	Bill        Bill     `json:"bill" gorm:"foreignKey:BillID"`
+	ProjectID   uint     `json:"project_id"`
+	ProjectName string   `json:"project_name"`
+	ProjectType string   `json:"project_type"`
+	Paid        bool     `json:"paid"`
+}
+
 // Bill
 // This is a simple object that we can use to track the total hours and fees for an employee
 // over a set period of time. While the entries may be tied to individual projects, the bills are directly
@@ -318,11 +379,13 @@ type Bill struct {
 	PeriodEnd        time.Time    `json:"period_end"`
 	Entries          []Entry      `json:"entries"`
 	Adjustments      []Adjustment `json:"adjustments"`
+	Commissions      []Commission `json:"commissions" gorm:"foreignKey:BillID"`
 	AcceptedAt       *time.Time   `json:"accepted_at"`
 	ClosedAt         *time.Time   `json:"closed_at"`
 	TotalHours       float64      `json:"total_hours"`
 	TotalFees        int          `json:"total_fees"`
 	TotalAdjustments float64      `json:"total_adjustments"`
+	TotalCommissions int          `json:"total_commissions"`
 	TotalAmount      int          `json:"total_amount"`
 	GCSFile          string       `json:"file"`
 }
@@ -785,48 +848,85 @@ func (a *App) GetLatestBillIfExists(userID uint) (Bill, error) {
 }
 
 func (a *App) GenerateBills(i *Invoice) {
+	log.Printf("Starting GenerateBills for invoice ID: %d", i.ID)
+
 	userBillingCodeMap := make(map[uint]map[uint]float64)
+	userEntryMap := make(map[uint][]Entry)
+	entriesProcessed := 0
+	entriesSkipped := 0
+
 	// Add up each of the fees for a user and billing code
-	// and cache the value
+	// and cache the value, but only for entries that don't already have a bill
 	for _, entry := range i.Entries {
+		// Skip void entries and entries that already have a bill
 		if entry.State == EntryStateVoid.String() {
+			entriesSkipped++
 			continue
 		}
-		// first check if the user exists in the map, if not then add them
-		if _, ok := userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID]; !ok {
-			// if the users and billing code do not exist, add them
-			bc := make(map[uint]float64)
-			bc[entry.BillingCodeID] = entry.Duration().Minutes()
-			userBillingCodeMap[entry.EmployeeID] = bc
-		} else {
-			// otherwise add the fee to the existing fee
-			userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
+
+		if entry.BillID != nil && *entry.BillID > 0 {
+			log.Printf("Skipping entry ID %d - already associated with bill ID %d", entry.ID, *entry.BillID)
+			entriesSkipped++
+			continue
 		}
+
+		// Initialize the billing code map for this user if it doesn't exist
+		if _, ok := userBillingCodeMap[entry.EmployeeID]; !ok {
+			userBillingCodeMap[entry.EmployeeID] = make(map[uint]float64)
+			userEntryMap[entry.EmployeeID] = []Entry{}
+		}
+
+		// Add the entry's minutes to the map
+		userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
+
+		// Keep track of this entry for later association with the bill
+		userEntryMap[entry.EmployeeID] = append(userEntryMap[entry.EmployeeID], entry)
+		entriesProcessed++
 	}
+
+	log.Printf("Processing %d entries, skipped %d entries with existing bill associations", entriesProcessed, entriesSkipped)
+
+	if entriesProcessed == 0 {
+		log.Printf("No entries to process for invoice ID: %d, all entries already have bill associations", i.ID)
+		return
+	}
+
 	// Now we need to iterate over the map and create or add to the bill for each user
 	for user, billingCodes := range userBillingCodeMap {
 		var userObj Employee
 		a.DB.Where("id = ?", user).First(&userObj)
+		log.Printf("Processing bill for employee: %s %s (ID: %d)", userObj.FirstName, userObj.LastName, user)
+
 		var hours float64
 		var fee int
+
+		// Calculate the total hours and fee for this user
 		for billingCode, loopMin := range billingCodes {
 			// sum up the hours for the billing code
 			var billingCodeObj BillingCode
 			a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
-			floatFee := (loopMin / 60) * billingCodeObj.InternalRate.Amount
+
+			// Convert minutes to hours and multiply by the internal rate
+			hourAmount := loopMin / 60
+			floatFee := hourAmount * billingCodeObj.InternalRate.Amount
 			fee += int(floatFee * 100)
-			hours += (loopMin / 60)
+			hours += hourAmount
+
+			log.Printf("  Billing code %d: %.2f hours, fee: $%.2f", billingCode, hourAmount, floatFee)
 		}
+
 		// See if there is an existing bill for the user
 		var bill Bill
 		var err error
 		bill, err = a.GetLatestBillIfExists(user)
+
 		// If there is no bill, then create a new one for the user for this month
 		firstOfMonth := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
 		lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
+
 		if err != nil && errors.Is(err, NoEligibleBill) {
 			// Create a new bill for the user
-			// First We need the user's name
+			log.Printf("Creating new bill for employee ID: %d", user)
 			bill = Bill{
 				Name:        "Payroll " + userObj.FirstName + " " + userObj.LastName + " " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
 				EmployeeID:  user,
@@ -836,34 +936,133 @@ func (a *App) GenerateBills(i *Invoice) {
 				TotalFees:   0,
 				TotalAmount: 0,
 			}
-			a.DB.Create(&bill)
+			if err := a.DB.Create(&bill).Error; err != nil {
+				log.Printf("Error creating bill: %v", err)
+				continue
+			}
+			log.Printf("Created new bill ID: %d", bill.ID)
+		} else {
+			log.Printf("Using existing bill ID: %d", bill.ID)
 		}
-		// Add the fees to the existing bill
-		bill.TotalHours += hours
-		bill.TotalHours = math.Round(bill.TotalHours*100) / 100
-		bill.TotalFees += fee
-		bill.TotalAmount += fee
-		a.DB.Save(&bill)
 
 		// Update the entries to associate with the bill
-		for _, entry := range i.Entries {
-			if entry.EmployeeID == user {
-				entry.BillID = &bill.ID
-				a.DB.Save(&entry)
+		entriesUpdated := 0
+		for _, entry := range userEntryMap[user] {
+			entry.BillID = &bill.ID
+			result := a.DB.Save(&entry)
+			if result.Error != nil {
+				log.Printf("Error associating entry ID %d with bill ID %d: %v", entry.ID, bill.ID, result.Error)
+			} else {
+				entriesUpdated++
 			}
 		}
-		// Save the bill
+		log.Printf("Associated %d entries with bill ID: %d", entriesUpdated, bill.ID)
+
+		// Recalculate bill totals from all entries in the database
+		a.RecalculateBillTotals(&bill)
+
+		// Save the bill to GCS
 		err = a.SaveBillToGCS(&bill)
 		if err != nil {
-			fmt.Println(err)
+			log.Printf("Error saving bill to GCS: %v", err)
+		} else {
+			log.Printf("Successfully saved bill PDF to GCS for bill ID: %d", bill.ID)
 		}
+	}
+
+	log.Printf("Completed GenerateBills for invoice ID: %d", i.ID)
+}
+
+// RecalculateBillTotals recalculates the total hours, fees, and amounts for a bill
+// based on all associated entries in the database
+func (a *App) RecalculateBillTotals(bill *Bill) {
+	log.Printf("Recalculating totals for bill ID: %d", bill.ID)
+
+	// Reset totals
+	bill.TotalHours = 0
+	bill.TotalFees = 0
+
+	// Get all non-void entries for this bill
+	var entries []Entry
+	if err := a.DB.Preload("BillingCode").Preload("BillingCode.InternalRate").
+		Where("bill_id = ? AND state != ?", bill.ID, EntryStateVoid.String()).
+		Find(&entries).Error; err != nil {
+		log.Printf("Error loading entries for bill ID %d: %v", bill.ID, err)
+		return
+	}
+
+	log.Printf("Found %d valid entries for bill ID: %d", len(entries), bill.ID)
+
+	// Calculate totals from entries
+	for _, entry := range entries {
+		bill.TotalHours += entry.Duration().Hours()
+
+		// Ensure we have the internal rate
+		if entry.BillingCode.InternalRate.ID == 0 {
+			var internalRate Rate
+			if err := a.DB.Where("id = ?", entry.BillingCode.InternalRateID).First(&internalRate).Error; err != nil {
+				log.Printf("Error loading internal rate for billing code %d: %v", entry.BillingCodeID, err)
+				continue
+			}
+			entry.BillingCode.InternalRate = internalRate
+		}
+
+		hourAmount := entry.Duration().Hours()
+		fee := int(hourAmount * entry.BillingCode.InternalRate.Amount * 100)
+		bill.TotalFees += fee
+
+		log.Printf("  Entry ID %d: %.2f hours, fee: $%.2f", entry.ID, hourAmount, float64(fee)/100)
+	}
+
+	// Get all non-void adjustments for this bill
+	var adjustments []Adjustment
+	if err := a.DB.Where("bill_id = ? AND state != ?", bill.ID, AdjustmentStateVoid.String()).Find(&adjustments).Error; err != nil {
+		log.Printf("Error loading adjustments for bill ID %d: %v", bill.ID, err)
+	}
+
+	// Calculate total adjustments
+	totalAdjustmentsAmount := 0
+	for _, adjustment := range adjustments {
+		multiplier := 1
+		if adjustment.Type == AdjustmentTypeCredit.String() {
+			multiplier = -1
+		}
+
+		adjustmentAmount := int(adjustment.Amount*100) * multiplier
+		totalAdjustmentsAmount += adjustmentAmount
+
+		log.Printf("  Adjustment ID %d: $%.2f", adjustment.ID, float64(adjustmentAmount)/100)
+	}
+
+	// Update the total amount
+	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount))
+	bill.TotalHours = math.Round(bill.TotalHours*100) / 100
+
+	log.Printf("Bill totals recalculated - Hours: %.2f, Fees: $%.2f, Total: $%.2f",
+		bill.TotalHours, float64(bill.TotalFees)/100, float64(bill.TotalAmount)/100)
+
+	// Save the bill
+	if err := a.DB.Save(&bill).Error; err != nil {
+		log.Printf("Error saving bill with updated totals: %v", err)
+	} else {
+		log.Printf("Successfully saved bill ID %d with updated totals", bill.ID)
 	}
 }
 
 func (a *App) MarkBillPaid(b *Bill) {
+	// Recalculate bill totals first to ensure accurate values
+	a.RecalculateBillTotals(b)
+
+	// Now mark the bill as paid
 	nowTime := time.Now()
 	b.ClosedAt = &nowTime
-	a.DB.Save(&b)
+
+	// Save the updated bill
+	if err := a.DB.Save(&b).Error; err != nil {
+		log.Printf("Error saving bill as paid: %v", err)
+		return
+	}
+	log.Printf("Bill ID %d marked as paid with accurate totals", b.ID)
 
 	// Get the User
 	var userObj Employee
@@ -872,13 +1071,16 @@ func (a *App) MarkBillPaid(b *Bill) {
 	journal := Journal{
 		Account:    AccountAPStaffPayroll.String(),
 		SubAccount: userObj.FirstName + " " + userObj.LastName,
-		Debit:      int64(b.TotalFees),
+		Debit:      int64(b.TotalAmount), // Use the total amount which includes fees, commissions, and adjustments
 		Credit:     0,
 		Memo:       b.Name,
 		BillID:     &b.ID,
 	}
-	a.DB.Create(&journal)
-
+	if err := a.DB.Create(&journal).Error; err != nil {
+		log.Printf("Error creating journal entry for bill: %v", err)
+	} else {
+		log.Printf("Created journal entry for bill ID %d with amount $%.2f", b.ID, float64(b.TotalAmount)/100)
+	}
 }
 
 func (a *App) AddJournalEntries(i *Invoice) {
@@ -963,4 +1165,113 @@ func (a *App) GetBillLineItems(b *Bill) []BillLineItem {
 	}
 
 	return billLineItems
+}
+
+// CalculateCommissionRate determines the appropriate commission rate based on role, project type, and deal size
+func (a *App) CalculateCommissionRate(role string, projectType string, dealSize int) float64 {
+	isNew := projectType == ProjectTypeNew.String()
+	isAE := role == CommissionRoleAE.String()
+
+	log.Printf("Commission rate calculation - Role: %s, Project Type: %s, Deal Size: $%d",
+		role, projectType, dealSize)
+
+	// Determine deal size category
+	var sizeCategory string
+	if dealSize < DealSizeSmallThreshold {
+		sizeCategory = "Small"
+	} else {
+		sizeCategory = "Large"
+	}
+
+	log.Printf("Deal size category: %s", sizeCategory)
+
+	var rate float64
+	// Return appropriate rate based on role, project type, and deal size
+	if isAE {
+		if isNew {
+			if sizeCategory == "Small" {
+				rate = AECommissionRateNewSmall
+			} else {
+				rate = AECommissionRateNewLarge
+			}
+		} else {
+			if sizeCategory == "Small" {
+				rate = AECommissionRateExistingSmall
+			} else {
+				rate = AECommissionRateExistingLarge
+			}
+		}
+	} else { // SDR
+		if isNew {
+			if sizeCategory == "Small" {
+				rate = SDRCommissionRateNewSmall
+			} else {
+				rate = SDRCommissionRateNewLarge
+			}
+		} else {
+			if sizeCategory == "Small" {
+				rate = SDRCommissionRateExistingSmall
+			} else {
+				rate = SDRCommissionRateExistingLarge
+			}
+		}
+	}
+
+	log.Printf("Selected commission rate: %.2f%%", rate*100)
+	return rate
+}
+
+// CalculateCommissionAmount calculates the commission amount based on the project and role
+func (a *App) CalculateCommissionAmount(project *Project, role string, invoiceTotal float64) int {
+	// Calculate total project value based on invoice amount
+	totalProjectValue := int(invoiceTotal)
+
+	log.Printf("Commission calculation for invoice amount: $%d", totalProjectValue)
+
+	// Get the commission rate
+	rate := a.CalculateCommissionRate(role, project.ProjectType, totalProjectValue)
+
+	// Log the commission calculation details
+	log.Printf("Commission calculation - Role: %s, Project Type: %s, Invoice Total: $%d, Rate: %.2f%%",
+		role, project.ProjectType, totalProjectValue, rate*100)
+
+	// Calculate commission amount (in cents)
+	commissionAmount := int(float64(totalProjectValue) * rate * 100)
+
+	log.Printf("Calculated commission amount: $%.2f", float64(commissionAmount)/100)
+
+	return commissionAmount
+}
+
+// calculateMonths calculates the number of whole months between two dates
+func calculateMonths(start, end time.Time) int {
+	months := (end.Year()-start.Year())*12 + int(end.Month()-start.Month())
+	// Round up if there are days remaining
+	if end.Day() > start.Day() {
+		months++
+	}
+	if months < 1 {
+		return 1 // Minimum of 1 month
+	}
+	return months
+}
+
+// calculateWeeks calculates the number of whole weeks between two dates
+func calculateWeeks(start, end time.Time) int {
+	days := int(end.Sub(start).Hours() / 24)
+	weeks := (days + 6) / 7 // Round up to nearest week
+	if weeks < 1 {
+		return 1 // Minimum of 1 week
+	}
+	return weeks
+}
+
+// calculateBiWeeks calculates the number of bi-weekly periods between two dates
+func calculateBiWeeks(start, end time.Time) int {
+	days := int(end.Sub(start).Hours() / 24)
+	biweeks := (days + 13) / 14 // Round up to nearest bi-week (14 days)
+	if biweeks < 1 {
+		return 1 // Minimum of 1 bi-week
+	}
+	return biweeks
 }

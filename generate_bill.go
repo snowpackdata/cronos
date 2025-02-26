@@ -3,9 +3,10 @@ package cronos
 import (
 	"bytes"
 	"fmt"
-	"github.com/jung-kurt/gofpdf"
 	"strconv"
 	"time"
+
+	"github.com/jung-kurt/gofpdf"
 )
 
 // Set Constants for the invoice PDF
@@ -21,6 +22,10 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 	lineItems := a.GetBillLineItems(bill)
 	//entryItems := a.GetInvoiceEntries(invoice)
 	//adjustments := a.GetInvoiceAdjustments(invoice)
+
+	// Load commissions for this bill
+	var commissions []Commission
+	a.DB.Where("bill_id = ?", bill.ID).Find(&commissions)
 
 	var employee Employee
 	a.DB.Preload("User").Where("id = ?", bill.EmployeeID).First(&employee)
@@ -131,12 +136,48 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 		rate := val.RateFormatted
 		total := fmt.Sprintf("%.2f", val.Total)
 
-		pdf.CellFormat(colWidth[0], lineHt, billingCode, "1", 0, "CM", true, 0, "")
-		pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", true, 0, "")
-		pdf.CellFormat(colWidth[2], lineHt, hours, "1", 0, "CM", true, 0, "")
-		pdf.CellFormat(colWidth[3], lineHt, "$ "+rate, "1", 0, "CM", true, 0, "")
-		pdf.CellFormat(colWidth[4], lineHt, "$ "+total, "1", 0, "RM", true, 0, "")
+		pdf.CellFormat(colWidth[0], lineHt, billingCode, "1", 0, "LM", false, 0, "")
+		pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", false, 0, "")
+		pdf.CellFormat(colWidth[2], lineHt, hours, "1", 0, "CM", false, 0, "")
+		pdf.CellFormat(colWidth[3], lineHt, "$ "+rate, "1", 0, "LM", false, 0, "")
+		pdf.CellFormat(colWidth[4], lineHt, "$ "+total, "1", 0, "RM", false, 0, "")
 		pdf.Ln(-1)
+	}
+
+	// Add commissions to the bill if any exist
+	if len(commissions) > 0 {
+		for _, commission := range commissions {
+			// Format commission amount
+			commissionAmount := fmt.Sprintf("%.2f", float64(commission.Amount)/100)
+
+			// Calculate commission rate as percentage
+			commissionRate := a.CalculateCommissionRate(commission.Role, commission.ProjectType, 0) // Using 0 as deal size since we just want to display the rate
+			rateFormatted := fmt.Sprintf("%.1f%%", commissionRate*100)
+
+			// Determine project type display text (shorter version)
+			projectTypeText := "New"
+			if commission.ProjectType == ProjectTypeExisting.String() {
+				projectTypeText = "Existing"
+			}
+
+			// Determine role display text (abbreviated)
+			roleText := "AE"
+			if commission.Role == CommissionRoleSDR.String() {
+				roleText = "SDR"
+			}
+
+			// Create concise commission description with invoice reference
+			// Format invoice number as "YYYYNNNN" where NNNN is the project ID (zero-padded to 4 digits)
+			invoiceRef := fmt.Sprintf("#%d%04d", time.Now().Year(), commission.ProjectID)
+			description := fmt.Sprintf("%s %s - %s (%s)", commission.ProjectName, invoiceRef, roleText, projectTypeText)
+
+			pdf.CellFormat(colWidth[0], lineHt, "COMM", "1", 0, "LM", false, 0, "")
+			pdf.CellFormat(colWidth[1], lineHt, description, "1", 0, "LM", false, 0, "")
+			pdf.CellFormat(colWidth[2], lineHt, "-", "1", 0, "CM", false, 0, "")
+			pdf.CellFormat(colWidth[3], lineHt, rateFormatted, "1", 0, "LM", false, 0, "")
+			pdf.CellFormat(colWidth[4], lineHt, "$ "+commissionAmount, "1", 0, "RM", false, 0, "")
+			pdf.Ln(-1)
+		}
 	}
 
 	// Generate the total Rows
@@ -150,8 +191,8 @@ func (a *App) GenerateBillPDF(bill *Bill) []byte {
 
 	grandTotal := fmt.Sprintf("%.2f", float64(bill.TotalAmount)/100)
 	pdf.SetX(marginX + leftIndent)
-	pdf.CellFormat(colWidth[3], lineHt, "Total Due", "1", 0, "LM", true, 0, "")
-	pdf.CellFormat(colWidth[4], lineHt, "$ "+grandTotal, "1", 0, "RM", true, 0, "")
+	pdf.CellFormat(colWidth[3], lineHt, "Total Due", "1", 0, "LM", false, 0, "")
+	pdf.CellFormat(colWidth[4], lineHt, "$ "+grandTotal, "1", 0, "RM", false, 0, "")
 	pdf.Ln(lineHt)
 
 	pdf.SetFontStyle("")
