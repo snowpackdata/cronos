@@ -281,22 +281,24 @@ type BillingCode struct {
 }
 type Entry struct {
 	gorm.Model
-	ProjectID     uint        `json:"project_id"` // Can remove these, unnecessary with billing code
-	Project       Project     `json:"project"`    // Can remove these, unnecessary with billing code
-	Notes         string      `gorm:"type:varchar(2048)" json:"notes"`
-	EmployeeID    uint        `json:"employee_id" gorm:"index:idx_employee_internal"`
-	Employee      Employee    `json:"employee"`
-	BillingCodeID uint        `json:"billing_code_id"`
-	BillingCode   BillingCode `json:"billing_code"`
-	Start         time.Time   `json:"start"`
-	End           time.Time   `json:"end"`
-	Internal      bool        `json:"internal" gorm:"index:idx_employee_internal"`
-	Bill          Bill        `json:"bill"`
-	BillID        *uint       `json:"bill_id"`
-	Invoice       Invoice     `json:"invoice"`
-	InvoiceID     *uint       `json:"invoice_id"`
-	State         string      `json:"state"`
-	Fee           int         `json:"fee"`
+	ProjectID           uint        `json:"project_id"` // Can remove these, unnecessary with billing code
+	Project             Project     `json:"project"`    // Can remove these, unnecessary with billing code
+	Notes               string      `gorm:"type:varchar(2048)" json:"notes"`
+	EmployeeID          uint        `json:"employee_id" gorm:"index:idx_employee_internal"`
+	Employee            Employee    `json:"employee"`
+	ImpersonateAsUserID *uint       `json:"impersonate_as_user_id"`
+	ImpersonateAsUser   *Employee   `json:"impersonate_as_user" gorm:"foreignKey:ImpersonateAsUserID"`
+	BillingCodeID       uint        `json:"billing_code_id"`
+	BillingCode         BillingCode `json:"billing_code"`
+	Start               time.Time   `json:"start"`
+	End                 time.Time   `json:"end"`
+	Internal            bool        `json:"internal" gorm:"index:idx_employee_internal"`
+	Bill                Bill        `json:"bill"`
+	BillID              *uint       `json:"bill_id"`
+	Invoice             Invoice     `json:"invoice"`
+	InvoiceID           *uint       `json:"invoice_id"`
+	State               string      `json:"state"`
+	Fee                 int         `json:"fee"`
 }
 
 func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
@@ -580,12 +582,18 @@ func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItem {
 func (a *App) GetInvoiceEntries(i *Invoice) []invoiceEntry {
 	var invoiceEntries []invoiceEntry
 	var entries []Entry
-	a.DB.Preload("BillingCode").Preload("Employee").Where("invoice_id = ? and state != ?", i.ID, EntryStateVoid.String()).Order("start asc").Find(&entries)
+	a.DB.Preload("BillingCode").Preload("Employee").Preload("ImpersonateAsUser").Where("invoice_id = ? and state != ?", i.ID, EntryStateVoid.String()).Order("start asc").Find(&entries)
 	for _, entry := range entries {
+		staffName := entry.Employee.FirstName + " " + entry.Employee.LastName
+		// Use impersonated user name if available
+		if entry.ImpersonateAsUser != nil {
+			staffName = entry.ImpersonateAsUser.FirstName + " " + entry.ImpersonateAsUser.LastName
+		}
+
 		invoiceEntries = append(invoiceEntries, invoiceEntry{
 			dateString:     entry.Start.Format("01/02/2006"),
 			billingCode:    entry.BillingCode.Code,
-			staff:          entry.Employee.FirstName + " " + entry.Employee.LastName,
+			staff:          staffName,
 			description:    entry.Notes,
 			hours:          entry.Duration().Hours(),
 			hoursFormatted: fmt.Sprintf("%.2f", entry.Duration().Hours()),
@@ -623,85 +631,136 @@ func (b *Bill) GetBillFilename() string {
 }
 
 type ApiEntry struct {
-	EntryID         uint      `json:"entry_id"`
-	ProjectID       uint      `json:"project_id"`
-	BillingCodeID   uint      `json:"billing_code_id"`
-	BillingCode     string    `json:"billing_code"`
-	BillingCodeName string    `json:"billing_code_name"`
-	Start           time.Time `json:"start"`
-	End             time.Time `json:"end"`
-	Notes           string    `json:"notes"`
-	StartDate       string    `json:"start_date"`
-	StartHour       int       `json:"start_hour"`
-	StartMinute     int       `json:"start_minute"`
-	EndDate         string    `json:"end_date"`
-	EndHour         int       `json:"end_hour"`
-	EndMinute       int       `json:"end_minute"`
-	DurationHours   float64   `json:"duration_hours"`
-	StartDayOfWeek  string    `json:"start_day_of_week"`
-	StartIndex      float64   `json:"start_index"`
-	State           string    `json:"state"`
-	Fee             float64   `json:"fee"`
+	EntryID             uint      `json:"entry_id"`
+	ProjectID           uint      `json:"project_id"`
+	BillingCodeID       uint      `json:"billing_code_id"`
+	BillingCode         string    `json:"billing_code"`
+	BillingCodeName     string    `json:"billing_code_name"`
+	Start               time.Time `json:"start"`
+	End                 time.Time `json:"end"`
+	Notes               string    `json:"notes"`
+	StartDate           string    `json:"start_date"`
+	StartHour           int       `json:"start_hour"`
+	StartMinute         int       `json:"start_minute"`
+	EndDate             string    `json:"end_date"`
+	EndHour             int       `json:"end_hour"`
+	EndMinute           int       `json:"end_minute"`
+	DurationHours       float64   `json:"duration_hours"`
+	StartDayOfWeek      string    `json:"start_day_of_week"`
+	StartIndex          float64   `json:"start_index"`
+	State               string    `json:"state"`
+	Fee                 float64   `json:"fee"`
+	ImpersonateAsUserID *uint     `json:"impersonate_as_user_id,omitempty"`
+	EmployeeName        string    `json:"employee_name,omitempty"`
+	IsBeingImpersonated bool      `json:"is_being_impersonated,omitempty"`
 }
 
 func (e *Entry) GetAPIEntry() ApiEntry {
-	apiEntry := ApiEntry{
-		EntryID:         e.ID,
-		ProjectID:       e.ProjectID,
-		BillingCodeID:   e.BillingCodeID,
-		BillingCode:     e.BillingCode.Code,
-		BillingCodeName: e.BillingCode.Name,
-		Start:           e.Start.In(time.UTC),
-		End:             e.End.In(time.UTC),
-		Notes:           e.Notes,
-		StartDate:       e.Start.In(time.UTC).Format("2006-01-02"),
-		StartHour:       e.Start.In(time.UTC).Hour(),
-		StartMinute:     e.Start.Minute(),
-		EndDate:         e.End.In(time.UTC).Format("2006-01-02"),
-		EndHour:         e.End.In(time.UTC).Hour(),
-		EndMinute:       e.End.Minute(),
-		DurationHours:   e.Duration().Hours(),
-		StartDayOfWeek:  e.Start.In(time.UTC).Weekday().String(),
-		StartIndex:      float64(e.Start.In(time.UTC).Hour()) + (float64(e.Start.Minute()) / 60.0),
-		State:           e.State,
-		Fee:             float64(e.Fee) / 100.0,
+	// Calculate duration and extract time components
+	durationHours := float64(e.End.Sub(e.Start).Minutes()) / 60.0
+	startHour := e.Start.Hour()
+	startMinute := e.Start.Minute()
+	endHour := e.End.Hour()
+	endMinute := e.End.Minute()
+
+	// Set default values for billing code information
+	billingCode := ""
+	billingCodeName := ""
+
+	// Only attempt to access billing code information if it exists
+	if e.BillingCode.ID != 0 {
+		billingCode = e.BillingCode.Code
+		billingCodeName = e.BillingCode.Name
 	}
-	return apiEntry
+
+	return ApiEntry{
+		EntryID:             e.ID,
+		ProjectID:           e.ProjectID,
+		BillingCodeID:       e.BillingCodeID,
+		BillingCode:         billingCode,
+		BillingCodeName:     billingCodeName,
+		Start:               e.Start,
+		End:                 e.End,
+		Notes:               e.Notes,
+		StartDate:           e.Start.Format("2006-01-02"),
+		StartHour:           startHour,
+		StartMinute:         startMinute,
+		EndDate:             e.End.Format("2006-01-02"),
+		EndHour:             endHour,
+		EndMinute:           endMinute,
+		DurationHours:       durationHours,
+		StartDayOfWeek:      e.Start.Format("Monday"),
+		StartIndex:          float64(e.Start.Hour()*60+e.Start.Minute()) / 60.0,
+		State:               e.State,
+		Fee:                 float64(e.Fee) / 100.0,
+		ImpersonateAsUserID: e.ImpersonateAsUserID,
+		EmployeeName:        e.Employee.FirstName + " " + e.Employee.LastName,
+	}
 }
 
 type DraftEntry struct {
-	EntryID       uint    `json:"entry_id"`
-	ProjectID     uint    `json:"project_id"`
-	BillingCodeID uint    `json:"billing_code_id"`
-	BillingCode   string  `json:"billing_code"`
-	Notes         string  `json:"notes"`
-	StartDate     string  `json:"start_date"`
-	DurationHours float64 `json:"duration_hours"`
-	Fee           float64 `json:"fee"`
-	EmployeeName  string  `json:"user_name"`
-	EmployeeRole  string  `json:"user_role"`
-	State         string  `json:"state"`
+	EntryID               uint    `json:"entry_id"`
+	ProjectID             uint    `json:"project_id"`
+	BillingCodeID         uint    `json:"billing_code_id"`
+	BillingCode           string  `json:"billing_code"`
+	Notes                 string  `json:"notes"`
+	StartDate             string  `json:"start_date"`
+	DurationHours         float64 `json:"duration_hours"`
+	Fee                   float64 `json:"fee"`
+	EmployeeName          string  `json:"user_name"`
+	EmployeeRole          string  `json:"user_role"`
+	ImpersonateAsUserID   *uint   `json:"impersonate_as_user_id"`
+	ImpersonateAsUserName string  `json:"impersonate_as_user_name,omitempty"`
+	IsImpersonated        bool    `json:"is_impersonated,omitempty"`
+	CreatedByName         string  `json:"created_by_name,omitempty"`
+	State                 string  `json:"state"`
 }
 
 func (a *App) GetDraftEntry(e *Entry) DraftEntry {
-	var employee Employee
-	a.DB.Where("id = ?", e.EmployeeID).First(&employee)
-	var billingCode BillingCode
-	a.DB.Where("id = ?", e.BillingCodeID).First(&billingCode)
-	draftEntry := DraftEntry{
-		EntryID:       e.ID,
-		ProjectID:     e.ProjectID,
-		BillingCodeID: e.BillingCodeID,
-		BillingCode:   billingCode.Code,
-		Notes:         e.Notes,
-		StartDate:     e.Start.In(time.UTC).Format("January 2"),
-		DurationHours: e.Duration().Hours(),
-		Fee:           float64(e.Fee) / 100.0,
-		EmployeeName:  employee.FirstName + " " + employee.LastName,
-		EmployeeRole:  employee.Title,
-		State:         e.State,
+	var employeeName string
+	var employeeRole string
+	var impersonateAsUserName string
+	var billingCodeCode string
+	var createdByName string
+
+	a.DB.Raw("SELECT concat(first_name, ' ', last_name) FROM employees WHERE id = ?", e.EmployeeID).Scan(&employeeName)
+	a.DB.Raw("SELECT role FROM users JOIN employees ON users.id = employees.user_id WHERE employees.id = ?", e.EmployeeID).Scan(&employeeRole)
+
+	// Store creator's name for all entries
+	createdByName = employeeName
+
+	// Get impersonated user name if applicable
+	if e.ImpersonateAsUserID != nil {
+		a.DB.Raw("SELECT concat(first_name, ' ', last_name) FROM employees WHERE id = ?", *e.ImpersonateAsUserID).Scan(&impersonateAsUserName)
+		// When displaying an impersonated entry, show the impersonated user's name as the primary name
+		employeeName = impersonateAsUserName
 	}
-	return draftEntry
+
+	// Ensure we have the billing code information
+	if e.BillingCode.Code == "" {
+		// Billing code not loaded, fetch it directly
+		a.DB.Raw("SELECT code FROM billing_codes WHERE id = ?", e.BillingCodeID).Scan(&billingCodeCode)
+	} else {
+		billingCodeCode = e.BillingCode.Code
+	}
+
+	return DraftEntry{
+		EntryID:               e.ID,
+		ProjectID:             e.ProjectID,
+		BillingCodeID:         e.BillingCodeID,
+		BillingCode:           billingCodeCode,
+		Notes:                 e.Notes,
+		StartDate:             e.Start.Format("01/02/2006"),
+		DurationHours:         e.Duration().Hours(),
+		Fee:                   float64(e.Fee) / 100.0,
+		EmployeeName:          employeeName,
+		EmployeeRole:          employeeRole,
+		ImpersonateAsUserID:   e.ImpersonateAsUserID,
+		ImpersonateAsUserName: impersonateAsUserName,
+		IsImpersonated:        e.ImpersonateAsUserID != nil,
+		CreatedByName:         createdByName,
+		State:                 e.State,
+	}
 }
 
 type DraftInvoice struct {
@@ -743,59 +802,95 @@ type AcceptedInvoice struct {
 }
 
 func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
-	a.UpdateInvoiceTotals(i)
+	var accountName, projectName string
+	var periodClosed bool
 
-	// Load the account and project if not already loaded
-	if i.Account.ID == 0 {
-		a.DB.Where("id = ?", i.AccountID).First(&i.Account)
+	// Fetch account name
+	if i.AccountID != 0 {
+		a.DB.Raw("SELECT name FROM accounts WHERE id = ?", i.AccountID).Scan(&accountName)
 	}
 
-	draftInvoice := DraftInvoice{
+	// Fetch project name if available
+	if i.ProjectID != nil && *i.ProjectID != 0 {
+		a.DB.Raw("SELECT name FROM projects WHERE id = ?", *i.ProjectID).Scan(&projectName)
+	}
+
+	// Check if the billing period is closed - this is true if there are no entries in draft state
+	var draftEntryCount int64
+	if i.ProjectID != nil && *i.ProjectID != 0 {
+		// Project specific check
+		a.DB.Model(&Entry{}).Where("project_id = ? AND state = ? AND start >= ? AND start <= ?",
+			*i.ProjectID, EntryStateDraft.String(), i.PeriodStart, i.PeriodEnd).Count(&draftEntryCount)
+	} else {
+		// Account-wide check across all projects
+		a.DB.Model(&Entry{}).
+			Joins("JOIN projects ON entries.project_id = projects.id").
+			Where("projects.account_id = ? AND entries.state = ? AND entries.start >= ? AND entries.start <= ?",
+				i.AccountID, EntryStateDraft.String(), i.PeriodStart, i.PeriodEnd).
+			Count(&draftEntryCount)
+	}
+	periodClosed = draftEntryCount == 0
+
+	// Generate line items
+	draftEntries := make([]DraftEntry, 0, len(i.Entries))
+	for _, entry := range i.Entries {
+		// Skip void entries - these will be filtered out
+		if entry.State == EntryStateVoid.String() {
+			continue
+		}
+
+		// Enhanced preloading for impersonation details
+		if entry.ImpersonateAsUserID != nil {
+			a.DB.Preload("Employee").Preload("ImpersonateAsUser").First(&entry, entry.ID)
+		}
+
+		draftEntry := a.GetDraftEntry(&entry)
+
+		// Make the draft entry editable
+		draftEntries = append(draftEntries, draftEntry)
+	}
+
+	// Calculate totals
+	var totalHours, totalFees, totalAmount float64
+	var totalAdjustments float64
+
+	// Sum entry fees and hours
+	for _, entry := range draftEntries {
+		if entry.State != EntryStateVoid.String() {
+			totalHours += entry.DurationHours
+			totalFees += entry.Fee
+		}
+	}
+
+	// Sum adjustments
+	for _, adjustment := range i.Adjustments {
+		if adjustment.State != AdjustmentStateVoid.String() {
+			totalAdjustments += adjustment.Amount
+		}
+	}
+	totalAmount = totalFees + totalAdjustments
+
+	// Make sure we have all adjustments
+	var adjustments []Adjustment
+	a.DB.Where("invoice_id = ?", i.ID).Find(&adjustments)
+
+	return DraftInvoice{
 		InvoiceID:        i.ID,
 		InvoiceName:      i.Name,
 		AccountID:        i.AccountID,
-		AccountName:      i.Account.Name,
-		PeriodStart:      i.PeriodStart.In(time.UTC).Format("01/02/2006"),
-		PeriodEnd:        i.PeriodEnd.In(time.UTC).Format("01/02/2006"),
-		TotalHours:       i.TotalHours,
-		TotalFees:        i.TotalFees,
-		TotalAdjustments: i.TotalAdjustments,
-		TotalAmount:      i.TotalFees + i.TotalAdjustments,
+		AccountName:      accountName,
+		ProjectID:        uintPtrToUint(i.ProjectID),
+		ProjectName:      projectName,
+		PeriodStart:      i.PeriodStart.Format("01/02/2006"),
+		PeriodEnd:        i.PeriodEnd.Format("01/02/2006"),
+		LineItems:        draftEntries,
+		Adjustments:      adjustments,
+		TotalHours:       totalHours,
+		TotalFees:        totalFees,
+		TotalAdjustments: totalAdjustments,
+		TotalAmount:      totalAmount,
+		PeriodClosed:     periodClosed,
 	}
-
-	// Handle project information if available
-	if i.ProjectID != nil {
-		if i.Project.ID == 0 {
-			a.DB.Where("id = ?", *i.ProjectID).First(&i.Project)
-		}
-		draftInvoice.ProjectID = *i.ProjectID
-		draftInvoice.ProjectName = i.Project.Name
-	}
-
-	for _, entry := range i.Entries {
-		draftEntry := a.GetDraftEntry(&entry)
-		draftInvoice.LineItems = append(draftInvoice.LineItems, draftEntry)
-	}
-	a.DB.Where("invoice_id = ?", i.ID).Find(&draftInvoice.Adjustments)
-	var totalAdjustments float64
-	for i, _ := range draftInvoice.Adjustments {
-		multiplicationFactor := 1.0
-		if draftInvoice.Adjustments[i].Type == AdjustmentTypeCredit.String() {
-			multiplicationFactor = -1.0
-		}
-		if draftInvoice.Adjustments[i].State != AdjustmentStateVoid.String() {
-			totalAdjustments += draftInvoice.Adjustments[i].Amount * multiplicationFactor
-		}
-	}
-	draftInvoice.TotalAdjustments = totalAdjustments
-	draftInvoice.TotalAmount = draftInvoice.TotalFees + draftInvoice.TotalAdjustments
-	// Round to the nearest cent
-	draftInvoice.TotalHours = math.Round(draftInvoice.TotalHours*100) / 100
-	draftInvoice.TotalFees = math.Round(draftInvoice.TotalFees*100) / 100
-	draftInvoice.TotalAdjustments = math.Round(draftInvoice.TotalAdjustments*100) / 100
-	draftInvoice.TotalAmount = math.Round(draftInvoice.TotalAmount*100) / 100
-	draftInvoice.PeriodClosed = i.PeriodEnd.In(time.UTC).Before(time.Now())
-	return draftInvoice
 }
 
 func (a *App) GetAcceptedInvoice(i *Invoice) AcceptedInvoice {
@@ -870,6 +965,7 @@ func (a *App) GenerateBills(i *Invoice) {
 			continue
 		}
 
+		// Note: We always bill to the actual creator (EmployeeID), not the impersonated user
 		// Initialize the billing code map for this user if it doesn't exist
 		if _, ok := userBillingCodeMap[entry.EmployeeID]; !ok {
 			userBillingCodeMap[entry.EmployeeID] = make(map[uint]float64)
@@ -920,7 +1016,7 @@ func (a *App) GenerateBills(i *Invoice) {
 		var err error
 		bill, err = a.GetLatestBillIfExists(user)
 
-		// If there is no bill, then create a new one for the user for this month
+		// If there is no bill, then create a new one for the user
 		firstOfMonth := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
 		lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
 
@@ -1274,4 +1370,12 @@ func calculateBiWeeks(start, end time.Time) int {
 		return 1 // Minimum of 1 bi-week
 	}
 	return biweeks
+}
+
+// Helper function to convert a uint pointer to uint, with 0 as default
+func uintPtrToUint(ptr *uint) uint {
+	if ptr == nil {
+		return 0
+	}
+	return *ptr
 }

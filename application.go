@@ -1,18 +1,19 @@
 package cronos
 
 import (
-	"cloud.google.com/go/storage"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"cloud.google.com/go/storage"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"log"
-	"os"
-	"time"
 )
 
 // App is used to initialize a database and hold our handler functions
@@ -43,6 +44,8 @@ func (a *App) InitializeSQLite() {
 	a.DB = db
 	a.Bucket = os.Getenv("GCS_BUCKET")
 	a.Project = os.Getenv("GCP_PROJECT")
+	a.SeedDatabase()
+
 }
 
 // InitializeLocal allows us to initialize our application and connect to the cloud database
