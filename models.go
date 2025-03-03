@@ -658,9 +658,9 @@ type ApiEntry struct {
 func (e *Entry) GetAPIEntry() ApiEntry {
 	// Calculate duration and extract time components
 	durationHours := float64(e.End.Sub(e.Start).Minutes()) / 60.0
-	startHour := e.Start.Hour()
+	startHour := e.Start.In(time.UTC).Hour()
 	startMinute := e.Start.Minute()
-	endHour := e.End.Hour()
+	endHour := e.End.In(time.UTC).Hour()
 	endMinute := e.End.Minute()
 
 	// Set default values for billing code information
@@ -679,18 +679,18 @@ func (e *Entry) GetAPIEntry() ApiEntry {
 		BillingCodeID:       e.BillingCodeID,
 		BillingCode:         billingCode,
 		BillingCodeName:     billingCodeName,
-		Start:               e.Start,
-		End:                 e.End,
+		Start:               e.Start.In(time.UTC),
+		End:                 e.End.In(time.UTC),
 		Notes:               e.Notes,
-		StartDate:           e.Start.Format("2006-01-02"),
+		StartDate:           e.Start.In(time.UTC).Format("2006-01-02"),
 		StartHour:           startHour,
 		StartMinute:         startMinute,
-		EndDate:             e.End.Format("2006-01-02"),
+		EndDate:             e.End.In(time.UTC).Format("2006-01-02"),
 		EndHour:             endHour,
 		EndMinute:           endMinute,
 		DurationHours:       durationHours,
-		StartDayOfWeek:      e.Start.Format("Monday"),
-		StartIndex:          float64(e.Start.Hour()*60+e.Start.Minute()) / 60.0,
+		StartDayOfWeek:      e.Start.In(time.UTC).Format("Monday"),
+		StartIndex:          float64(e.Start.In(time.UTC).Hour()*60+e.Start.In(time.UTC).Minute()) / 60.0,
 		State:               e.State,
 		Fee:                 float64(e.Fee) / 100.0,
 		ImpersonateAsUserID: e.ImpersonateAsUserID,
@@ -815,30 +815,11 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		a.DB.Raw("SELECT name FROM projects WHERE id = ?", *i.ProjectID).Scan(&projectName)
 	}
 
-	// Check if the billing period is closed - this is true if there are no entries in draft state
-	var draftEntryCount int64
-	if i.ProjectID != nil && *i.ProjectID != 0 {
-		// Project specific check
-		a.DB.Model(&Entry{}).Where("project_id = ? AND state = ? AND start >= ? AND start <= ?",
-			*i.ProjectID, EntryStateDraft.String(), i.PeriodStart, i.PeriodEnd).Count(&draftEntryCount)
-	} else {
-		// Account-wide check across all projects
-		a.DB.Model(&Entry{}).
-			Joins("JOIN projects ON entries.project_id = projects.id").
-			Where("projects.account_id = ? AND entries.state = ? AND entries.start >= ? AND entries.start <= ?",
-				i.AccountID, EntryStateDraft.String(), i.PeriodStart, i.PeriodEnd).
-			Count(&draftEntryCount)
-	}
-	periodClosed = draftEntryCount == 0
+	periodClosed = i.ClosedAt.Before(time.Now())
 
 	// Generate line items
 	draftEntries := make([]DraftEntry, 0, len(i.Entries))
 	for _, entry := range i.Entries {
-		// Skip void entries - these will be filtered out
-		if entry.State == EntryStateVoid.String() {
-			continue
-		}
-
 		// Enhanced preloading for impersonation details
 		if entry.ImpersonateAsUserID != nil {
 			a.DB.Preload("Employee").Preload("ImpersonateAsUser").First(&entry, entry.ID)
@@ -862,17 +843,17 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		}
 	}
 
+	// Make sure we have all adjustments
+	var adjustments []Adjustment
+	a.DB.Where("invoice_id = ?", i.ID).Find(&adjustments)
+
 	// Sum adjustments
-	for _, adjustment := range i.Adjustments {
+	for _, adjustment := range adjustments {
 		if adjustment.State != AdjustmentStateVoid.String() {
 			totalAdjustments += adjustment.Amount
 		}
 	}
 	totalAmount = totalFees + totalAdjustments
-
-	// Make sure we have all adjustments
-	var adjustments []Adjustment
-	a.DB.Where("invoice_id = ?", i.ID).Find(&adjustments)
 
 	return DraftInvoice{
 		InvoiceID:        i.ID,
