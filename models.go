@@ -658,9 +658,9 @@ type ApiEntry struct {
 func (e *Entry) GetAPIEntry() ApiEntry {
 	// Calculate duration and extract time components
 	durationHours := float64(e.End.Sub(e.Start).Minutes()) / 60.0
-	startHour := e.Start.Hour()
+	startHour := e.Start.In(time.UTC).Hour()
 	startMinute := e.Start.Minute()
-	endHour := e.End.Hour()
+	endHour := e.End.In(time.UTC).Hour()
 	endMinute := e.End.Minute()
 
 	// Set default values for billing code information
@@ -679,18 +679,18 @@ func (e *Entry) GetAPIEntry() ApiEntry {
 		BillingCodeID:       e.BillingCodeID,
 		BillingCode:         billingCode,
 		BillingCodeName:     billingCodeName,
-		Start:               e.Start,
-		End:                 e.End,
+		Start:               e.Start.In(time.UTC),
+		End:                 e.End.In(time.UTC),
 		Notes:               e.Notes,
-		StartDate:           e.Start.Format("2006-01-02"),
+		StartDate:           e.Start.In(time.UTC).Format("2006-01-02"),
 		StartHour:           startHour,
 		StartMinute:         startMinute,
-		EndDate:             e.End.Format("2006-01-02"),
+		EndDate:             e.End.In(time.UTC).Format("2006-01-02"),
 		EndHour:             endHour,
 		EndMinute:           endMinute,
 		DurationHours:       durationHours,
-		StartDayOfWeek:      e.Start.Format("Monday"),
-		StartIndex:          float64(e.Start.Hour()*60+e.Start.Minute()) / 60.0,
+		StartDayOfWeek:      e.Start.In(time.UTC).Format("Monday"),
+		StartIndex:          float64(e.Start.In(time.UTC).Hour()*60+e.Start.In(time.UTC).Minute()) / 60.0,
 		State:               e.State,
 		Fee:                 float64(e.Fee) / 100.0,
 		ImpersonateAsUserID: e.ImpersonateAsUserID,
