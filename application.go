@@ -44,7 +44,7 @@ func (a *App) InitializeSQLite() {
 	a.DB = db
 	a.Bucket = os.Getenv("GCS_BUCKET")
 	a.Project = os.Getenv("GCP_PROJECT")
-	a.SeedDatabase()
+	//a.SeedDatabase()
 
 }
 
