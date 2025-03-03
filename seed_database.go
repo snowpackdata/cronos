@@ -67,6 +67,12 @@ func (a *App) SeedDatabase() {
 	// Create additional users for staff
 	users := []User{
 		{
+			Email:    "nate@snowpack-data.com",
+			IsAdmin:  true,
+			Role:     UserRoleAdmin.String(),
+			Password: DEFAULT_PASSWORD,
+		},
+		{
 			Email:    "kevin@snowpack-data.com",
 			IsAdmin:  true,
 			Role:     UserRoleStaff.String(),
@@ -98,13 +104,21 @@ func (a *App) SeedDatabase() {
 		{
 			User:      users[0],
 			Title:     "Partner",
+			FirstName: "Nate",
+			LastName:  "Robinson",
+			IsActive:  true,
+			StartDate: yesterday,
+		},
+		{
+			User:      users[1],
+			Title:     "Partner",
 			FirstName: "Kevin",
 			LastName:  "Koenitzer",
 			IsActive:  true,
 			StartDate: yesterday,
 		},
 		{
-			User:      users[1],
+			User:      users[2],
 			Title:     "Partner",
 			FirstName: "David",
 			LastName:  "Shore",
@@ -112,7 +126,7 @@ func (a *App) SeedDatabase() {
 			StartDate: yesterday,
 		},
 		{
-			User:      users[2],
+			User:      users[3],
 			Title:     "Senior Data Engineer",
 			FirstName: "John",
 			LastName:  "Doe",
@@ -120,7 +134,7 @@ func (a *App) SeedDatabase() {
 			StartDate: yesterday,
 		},
 		{
-			User:      users[3],
+			User:      users[4],
 			Title:     "Data Scientist",
 			FirstName: "Jane",
 			LastName:  "Smith",
