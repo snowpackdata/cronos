@@ -460,7 +460,7 @@ func (s AssetType) String() string {
 
 const (
 	AssetTypeImage     AssetType = "IMAGE"
-	AssetTypeDocument  AssetType = "PDF"
+	AssetTypePDF       AssetType = "PDF"
 	AssetTypeVideo     AssetType = "VIDEO"
 	AssetTypeGoogleDoc AssetType = "GOOGLE_DOC"
 )
