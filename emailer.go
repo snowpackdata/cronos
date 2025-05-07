@@ -21,6 +21,8 @@ const (
 	EmailTypeChangePassword     EmailType = "change_password.html"
 	EmailTypeWelcome            EmailType = "welcome.html"
 	EmailTypeSurveyConfirmation EmailType = "survey_confirmation.html"
+
+	SNOWPACK_SENDER_ADDRESS string = "no-reply@snowpack-data.com"
 )
 
 func (s EmailType) String() string {
@@ -31,7 +33,7 @@ type Email struct {
 	// Email is a non-persistent object that is used to store the email
 	// information for a user across the application
 	SenderName       string `default:"Snowpack Data"`
-	SenderEmail      string `default:"accounts@snowpack-data.io"`
+	SenderEmail      string `default:"no-reply@snowpack-data.com"`
 	RecipientName    string
 	RecipientEmail   string
 	Subject          string
@@ -60,24 +62,24 @@ func (a *App) EmailFromAdmin(emailType EmailType, address string) error {
 	switch emailType {
 	case EmailTypeRegisterClient:
 		email = Email{
-			SenderName:     "Snowpack-Data",
-			SenderEmail:    "accounts@snowpack-data.io",
+			SenderName:     "Snowpack Data",
+			SenderEmail:    SNOWPACK_SENDER_ADDRESS,
 			RecipientEmail: address,
 			Subject:        "Welcome to Snowpack Data",
 			htmlFile:       emailType.String(),
 		}
 	case EmailTypeRegisterStaff:
 		email = Email{
-			SenderName:     "Snowpack-Data",
-			SenderEmail:    "accounts@snowpack-data.io",
+			SenderName:     "Snowpack Data",
+			SenderEmail:    SNOWPACK_SENDER_ADDRESS,
 			RecipientEmail: address,
 			Subject:        "Welcome to Snowpack Data",
 			htmlFile:       emailType.String(),
 		}
 	case EmailTypeSurveyConfirmation:
 		email = Email{
-			SenderName:     "Snowpack-Data",
-			SenderEmail:    "accounts@snowpack-data.io",
+			SenderName:     "Snowpack Data",
+			SenderEmail:    SNOWPACK_SENDER_ADDRESS,
 			RecipientEmail: address,
 			Subject:        "We Received your Survey Response",
 			htmlFile:       emailType.String(),

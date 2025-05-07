@@ -1,7 +1,10 @@
 package cronos
 
 import (
+	"cloud.google.com/go/storage"
+	"context"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"time"
@@ -226,6 +229,7 @@ type Account struct {
 	BudgetHours           int       `json:"budget_hours"`
 	BudgetDollars         int       `json:"budget_dollars"`
 	ProjectsSingleInvoice bool      `json:"projects_single_invoice"`
+	Assets                []Asset   `json:"assets"`
 }
 
 type Rate struct {
@@ -244,23 +248,26 @@ type Project struct {
 	// often with specific time period. A rate will have a specific billing code
 	// associated with the project.
 	gorm.Model
-	Name             string        `json:"name"`
-	AccountID        uint          `json:"account_id"`
-	Account          Account       `json:"account"`
-	ActiveStart      time.Time     `json:"active_start"`
-	ActiveEnd        time.Time     `json:"active_end"`
-	BudgetHours      int           `json:"budget_hours"`
-	BudgetDollars    int           `json:"budget_dollars"`
-	Internal         bool          `json:"internal"`
-	BillingCodes     []BillingCode `json:"billing_codes"`
-	Entries          []Entry       `json:"entries"`
-	Invoices         []Invoice     `json:"invoices"`
-	BillingFrequency string        `json:"billing_frequency"`
-	ProjectType      string        `json:"project_type"`
-	AEID             *uint         `json:"ae_id"`
-	AE               *Employee     `json:"ae"`
-	SDRID            *uint         `json:"sdr_id"`
-	SDR              *Employee     `json:"sdr"`
+	Name                string               `json:"name"`
+	Description         string               `json:"description"`
+	AccountID           uint                 `json:"account_id"`
+	Account             Account              `json:"account"`
+	ActiveStart         time.Time            `json:"active_start"`
+	ActiveEnd           time.Time            `json:"active_end"`
+	BudgetHours         int                  `json:"budget_hours"`
+	BudgetDollars       int                  `json:"budget_dollars"`
+	Internal            bool                 `json:"internal"`
+	BillingCodes        []BillingCode        `json:"billing_codes"`
+	Entries             []Entry              `json:"entries"`
+	Invoices            []Invoice            `json:"invoices"`
+	BillingFrequency    string               `json:"billing_frequency"`
+	ProjectType         string               `json:"project_type"`
+	AEID                *uint                `json:"ae_id"`
+	AE                  *Employee            `json:"ae"`
+	SDRID               *uint                `json:"sdr_id"`
+	SDR                 *Employee            `json:"sdr"`
+	StaffingAssignments []StaffingAssignment `json:"staffing_assignments"`
+	Assets              []Asset              `json:"assets"`
 }
 
 type BillingCode struct {
@@ -406,6 +413,57 @@ type Journal struct {
 	Debit      int64   `json:"debit"`
 	Credit     int64   `json:"credit"`
 }
+
+type StaffingAssignment struct {
+	// StaffingAssignment is a record of an employee's assignment to a project
+	gorm.Model
+	// This is a many-to-many relationship between employees and projects
+	// An employee can be assigned to multiple projects, and a project can have multiple employees
+	// assigned to it. This is a join table that links the two together.
+	// The commitment is the weekly commitment of the employee to the project
+	EmployeeID uint     `json:"employee_id"`
+	Employee   Employee `json:"employee"`
+	ProjectID  uint     `json:"project_id"`
+	Project    Project  `json:"project"`
+	Commitment int      `json:"commitment"`
+}
+
+type Asset struct {
+	// Asset is a record of an external asset -- these are typically saved to GCS
+	// and are associated with a project. These can be images, documents, etc.
+	gorm.Model
+	// Can optionally be associated with a project or an account
+	ProjectID    *uint      `json:"project_id"`
+	Project      *Project   `json:"project"`
+	AccountID    *uint      `json:"account_id"`
+	Account      *Account   `json:"account"`
+	AssetType    string     `json:"asset_type"`
+	Name         string     `json:"name"`
+	Url          string     `json:"url"`
+	BucketName   string     `json:"bucket_name"`   // GCS bucket name
+	ContentType  string     `json:"content_type"`  // MIME type of the asset
+	Size         int64      `json:"size"`          // Size of the asset in bytes
+	Checksum     string     `json:"checksum"`      // Checksum for data integrity
+	IsPublic     bool       `json:"is_public"`     // Whether the asset is publicly accessible
+	UploadStatus string     `json:"upload_status"` // Status of the upload process
+	UploadedBy   uint       `json:"uploaded_by"`   // ID of the user who uploaded the asset
+	UploadedAt   time.Time  `json:"uploaded_at"`   // Timestamp of the upload
+	ExpiresAt    *time.Time `json:"expires_at"`    // Expiration date for the asset
+	LastError    string     `json:"last_error"`    // Error message if upload/retrieval failed
+	Version      string     `json:"version"`       // GCS object version (if versioning is enabled)
+}
+type AssetType string
+
+func (s AssetType) String() string {
+	return string(s)
+}
+
+const (
+	AssetTypeImage     AssetType = "IMAGE"
+	AssetTypeDocument  AssetType = "PDF"
+	AssetTypeVideo     AssetType = "VIDEO"
+	AssetTypeGoogleDoc AssetType = "GOOGLE_DOC"
+)
 
 // WEBSITE SPECIFIC MODULES
 
@@ -1359,4 +1417,107 @@ func uintPtrToUint(ptr *uint) uint {
 		return 0
 	}
 	return *ptr
+}
+
+const signedURLExpiration = time.Hour * 24 * 30 // 30 days
+
+// UploadObject uploads a file to GCS.
+func (a *App) UploadObject(ctx context.Context, bucketName, objectName string, data io.Reader, contentType string) error {
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to create GCS client")
+	}
+	defer client.Close()
+
+	wc := client.Bucket(bucketName).Object(objectName).NewWriter(ctx)
+	wc.ContentType = contentType
+
+	if _, err := io.Copy(wc, data); err != nil {
+		return errors.Wrap(err, "failed to write object to GCS")
+	}
+
+	if err := wc.Close(); err != nil {
+		return errors.Wrap(err, "failed to close GCS writer")
+	}
+
+	return nil
+}
+
+// GetObjectURL retrieves the public URL of an object.
+func (a *App) GetObjectURL(bucketName, objectName string) string {
+	return fmt.Sprintf("https://storage.googleapis.com/%s/%s", bucketName, objectName)
+}
+
+// DownloadObject downloads an object from GCS.
+func (a *App) DownloadObject(ctx context.Context, bucketName, objectName string) ([]byte, error) {
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create GCS client")
+	}
+	defer client.Close()
+
+	rc, err := client.Bucket(bucketName).Object(objectName).NewReader(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open GCS object")
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read GCS object")
+	}
+
+	return data, nil
+}
+
+// DeleteObject deletes an object from GCS.
+func (a *App) DeleteObject(ctx context.Context, bucketName, objectName string) error {
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to create GCS client")
+	}
+	defer client.Close()
+
+	if err := client.Bucket(bucketName).Object(objectName).Delete(ctx); err != nil {
+		return errors.Wrap(err, "failed to delete GCS object")
+	}
+
+	return nil
+}
+
+// ObjectExists checks if an object exists in GCS.
+func (a *App) ObjectExists(ctx context.Context, bucketName, objectName string) (bool, error) {
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return false, errors.Wrap(err, "failed to create GCS client")
+	}
+	defer client.Close()
+
+	_, err = client.Bucket(bucketName).Object(objectName).Attrs(ctx)
+	if err == storage.ErrObjectNotExist {
+		return false, nil
+	} else if err != nil {
+		return false, errors.Wrap(err, "failed to check GCS object existence")
+	}
+
+	return true, nil
+}
+
+// GenerateSignedURL generates a signed URL for accessing a private object.
+func (a *App) GenerateSignedURL(bucketName, objectName string) (string, error) {
+	client, err := storage.NewClient(context.Background())
+	if err != nil {
+		return "", errors.Wrap(err, "failed to create GCS client")
+	}
+	defer client.Close()
+
+	url, err := client.Bucket(bucketName).SignedURL(objectName, &storage.SignedURLOptions{
+		Method:  "GET",
+		Expires: time.Now().Add(signedURLExpiration),
+	})
+	if err != nil {
+		return "", errors.Wrap(err, "failed to generate signed URL")
+	}
+
+	return url, nil
 }
