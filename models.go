@@ -421,11 +421,13 @@ type StaffingAssignment struct {
 	// An employee can be assigned to multiple projects, and a project can have multiple employees
 	// assigned to it. This is a join table that links the two together.
 	// The commitment is the weekly commitment of the employee to the project
-	EmployeeID uint     `json:"employee_id"`
-	Employee   Employee `json:"employee"`
-	ProjectID  uint     `json:"project_id"`
-	Project    Project  `json:"project"`
-	Commitment int      `json:"commitment"`
+	EmployeeID uint      `json:"employee_id"`
+	Employee   Employee  `json:"employee"`
+	ProjectID  uint      `json:"project_id"`
+	Project    Project   `json:"project"`
+	Commitment int       `json:"commitment"`
+	StartDate  time.Time `json:"start_date"`
+	EndDate    time.Time `json:"end_date"`
 }
 
 type Asset struct {
@@ -433,24 +435,25 @@ type Asset struct {
 	// and are associated with a project. These can be images, documents, etc.
 	gorm.Model
 	// Can optionally be associated with a project or an account
-	ProjectID    *uint      `json:"project_id"`
-	Project      *Project   `json:"project"`
-	AccountID    *uint      `json:"account_id"`
-	Account      *Account   `json:"account"`
-	AssetType    string     `json:"asset_type"`
-	Name         string     `json:"name"`
-	Url          string     `json:"url"`
-	BucketName   string     `json:"bucket_name"`   // GCS bucket name
-	ContentType  string     `json:"content_type"`  // MIME type of the asset
-	Size         int64      `json:"size"`          // Size of the asset in bytes
-	Checksum     string     `json:"checksum"`      // Checksum for data integrity
-	IsPublic     bool       `json:"is_public"`     // Whether the asset is publicly accessible
-	UploadStatus string     `json:"upload_status"` // Status of the upload process
-	UploadedBy   uint       `json:"uploaded_by"`   // ID of the user who uploaded the asset
-	UploadedAt   time.Time  `json:"uploaded_at"`   // Timestamp of the upload
+	ProjectID *uint    `json:"project_id"`
+	Project   *Project `json:"project"`
+	AccountID *uint    `json:"account_id"`
+	Account   *Account `json:"account"`
+	AssetType string   `json:"asset_type"`
+	Name      string   `json:"name"`
+	Url       string   `json:"url"`
+	IsPublic  bool     `json:"is_public"` // Whether the asset is publicly accessible
+
+	// The following fields are used for GCS and are optional
+	BucketName   *string    `json:"bucket_name"`   // GCS bucket name
+	ContentType  *string    `json:"content_type"`  // MIME type of the asset
+	Size         *int64     `json:"size"`          // Size of the asset in bytes
+	Checksum     *string    `json:"checksum"`      // Checksum for data integrity
+	UploadStatus *string    `json:"upload_status"` // Status of the upload process
+	UploadedBy   *uint      `json:"uploaded_by"`   // ID of the user who uploaded the asset
+	UploadedAt   *time.Time `json:"uploaded_at"`   // Timestamp of the upload
 	ExpiresAt    *time.Time `json:"expires_at"`    // Expiration date for the asset
-	LastError    string     `json:"last_error"`    // Error message if upload/retrieval failed
-	Version      string     `json:"version"`       // GCS object version (if versioning is enabled)
+	Version      *int       `json:"version"`       // Version number of the asset
 }
 type AssetType string
 
