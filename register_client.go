@@ -19,7 +19,9 @@ func (a *App) RegisterClient(email string, accountId uint) error {
 	user.Role = UserRoleClient.String()
 	user.AccountID = accountId
 	a.DB.Save(&user)
-	return a.EmailFromAdmin(EmailTypeRegisterClient, email)
+	// Send the email to the user
+	err := a.EmailFromAdmin(EmailTypeRegisterClient, email)
+	return err
 }
 
 func (a *App) RegisterStaff(email string, accountId uint) error {
@@ -31,5 +33,7 @@ func (a *App) RegisterStaff(email string, accountId uint) error {
 	user.Role = UserRoleStaff.String()
 	user.AccountID = accountId
 	a.DB.Save(&user)
-	return a.EmailFromAdmin(EmailTypeRegisterStaff, email)
+	// Send the email to the user
+	err := a.EmailFromAdmin(EmailTypeRegisterStaff, email)
+	return err
 }
