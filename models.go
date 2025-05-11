@@ -1,13 +1,14 @@
 package cronos
 
 import (
-	"cloud.google.com/go/storage"
 	"context"
 	"fmt"
 	"io"
 	"math"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/storage"
 
 	"github.com/pkg/errors"
 
@@ -158,12 +159,12 @@ const (
 	AccountAPStaffBonus     JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_BONUS"
 	AccountARClientFee      JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_FEE"
 
-	// Commission rate constants
+	// AECommission rate constants
 	// These rates are percentages (0.05 = 5%)
 	AECommissionRateNewSmall = 0.08 // Projects under $10,000
 	AECommissionRateNewLarge = 0.12 // Projects over $50,000
 
-	// AE Commission Rates for Existing Business
+	// AECommissionRates for Existing Business
 	AECommissionRateExistingSmall = 0.032 // Projects under $10,000
 	AECommissionRateExistingLarge = 0.072 // Projects over $50,000
 
@@ -256,6 +257,8 @@ type Project struct {
 	ActiveEnd           time.Time            `json:"active_end"`
 	BudgetHours         int                  `json:"budget_hours"`
 	BudgetDollars       int                  `json:"budget_dollars"`
+	BudgetCapHours      int                  `json:"budget_cap_hours"`
+	BudgetCapDollars    int                  `json:"budget_cap_dollars"`
 	Internal            bool                 `json:"internal"`
 	BillingCodes        []BillingCode        `json:"billing_codes"`
 	Entries             []Entry              `json:"entries"`
@@ -445,15 +448,16 @@ type Asset struct {
 	IsPublic  bool     `json:"is_public"` // Whether the asset is publicly accessible
 
 	// The following fields are used for GCS and are optional
-	BucketName   *string    `json:"bucket_name"`   // GCS bucket name
-	ContentType  *string    `json:"content_type"`  // MIME type of the asset
-	Size         *int64     `json:"size"`          // Size of the asset in bytes
-	Checksum     *string    `json:"checksum"`      // Checksum for data integrity
-	UploadStatus *string    `json:"upload_status"` // Status of the upload process
-	UploadedBy   *uint      `json:"uploaded_by"`   // ID of the user who uploaded the asset
-	UploadedAt   *time.Time `json:"uploaded_at"`   // Timestamp of the upload
-	ExpiresAt    *time.Time `json:"expires_at"`    // Expiration date for the asset
-	Version      *int       `json:"version"`       // Version number of the asset
+	BucketName    *string    `json:"bucket_name"`               // GCS bucket name
+	ContentType   *string    `json:"content_type"`              // MIME type of the asset
+	Size          *int64     `json:"size"`                      // Size of the asset in bytes
+	Checksum      *string    `json:"checksum"`                  // Checksum for data integrity
+	UploadStatus  *string    `json:"upload_status"`             // Status of the upload process
+	UploadedBy    *uint      `json:"uploaded_by"`               // ID of the user who uploaded the asset
+	UploadedAt    *time.Time `json:"uploaded_at"`               // Timestamp of the upload
+	ExpiresAt     *time.Time `json:"expires_at"`                // Expiration date for the asset
+	Version       *int       `json:"version"`                   // Version number of the asset
+	GCSObjectPath *string    `json:"gcs_object_path,omitempty"` // Actual GCS object path, e.g., assets/projects/1/file.txt
 }
 type AssetType string
 
@@ -462,10 +466,31 @@ func (s AssetType) String() string {
 }
 
 const (
-	AssetTypeImage     AssetType = "IMAGE"
-	AssetTypePDF       AssetType = "PDF"
-	AssetTypeVideo     AssetType = "VIDEO"
-	AssetTypeGoogleDoc AssetType = "GOOGLE_DOC"
+	AssetTypePDF          AssetType = "application/pdf"
+	AssetTypeDOCX         AssetType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	AssetTypeXLSX         AssetType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	AssetTypeCSV          AssetType = "text/csv"
+	AssetTypePNG          AssetType = "image/png"
+	AssetTypeJPEG         AssetType = "image/jpeg"
+	AssetTypeGoogleDoc    AssetType = "application/vnd.google-apps.document" // Matches frontend ASSET_TYPES
+	AssetTypeGoogleSheet  AssetType = "application/vnd.google-apps.spreadsheet"
+	AssetTypeGoogleSlides AssetType = "application/vnd.google-apps.presentation"
+	AssetTypeExternalLink AssetType = "text/uri-list"
+	AssetTypeGenericFile  AssetType = "file" // Matches frontend ASSET_TYPES
+)
+
+type AssetUploadStatus string
+
+func (s AssetUploadStatus) String() string {
+	return string(s)
+}
+
+const (
+	AssetUploadStatusPending    AssetUploadStatus = "pending"
+	AssetUploadStatusUploading  AssetUploadStatus = "uploading"
+	AssetUploadStatusCompleted  AssetUploadStatus = "completed"
+	AssetUploadStatusFailed     AssetUploadStatus = "failed"
+	AssetUploadStatusProcessing AssetUploadStatus = "processing"
 )
 
 // WEBSITE SPECIFIC MODULES
@@ -1422,7 +1447,7 @@ func uintPtrToUint(ptr *uint) uint {
 	return *ptr
 }
 
-const signedURLExpiration = time.Hour * 24 * 30 // 30 days
+const signedURLExpiration = time.Hour * 24 * 7 // 7 days
 
 // UploadObject uploads a file to GCS.
 func (a *App) UploadObject(ctx context.Context, bucketName, objectName string, data io.Reader, contentType string) error {
@@ -1507,20 +1532,22 @@ func (a *App) ObjectExists(ctx context.Context, bucketName, objectName string) (
 }
 
 // GenerateSignedURL generates a signed URL for accessing a private object.
-func (a *App) GenerateSignedURL(bucketName, objectName string) (string, error) {
+// It now returns the generated URL, the expiration time of the URL, and any error.
+func (a *App) GenerateSignedURL(bucketName, objectName string) (string, time.Time, error) {
 	client, err := storage.NewClient(context.Background())
 	if err != nil {
-		return "", errors.Wrap(err, "failed to create GCS client")
+		return "", time.Time{}, errors.Wrap(err, "failed to create GCS client")
 	}
 	defer client.Close()
 
+	expiresTime := time.Now().Add(signedURLExpiration)
 	url, err := client.Bucket(bucketName).SignedURL(objectName, &storage.SignedURLOptions{
 		Method:  "GET",
-		Expires: time.Now().Add(signedURLExpiration),
+		Expires: expiresTime,
 	})
 	if err != nil {
-		return "", errors.Wrap(err, "failed to generate signed URL")
+		return "", time.Time{}, errors.Wrap(err, "failed to generate signed URL")
 	}
 
-	return url, nil
+	return url, expiresTime, nil
 }
