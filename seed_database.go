@@ -41,11 +41,12 @@ func (a *App) SeedDatabase() {
 
 	if !userExists {
 		// If the user doesn't exist, create a default one (this shouldn't happen if the dev user was registered)
+		hashed, _ := hashPassword(DEFAULT_PASSWORD)
 		devUser = User{
 			Email:    "dev@example.com",
 			IsAdmin:  true,
 			Role:     UserRoleAdmin.String(),
-			Password: DEFAULT_PASSWORD,
+			Password: hashed,
 		}
 		a.DB.Create(&devUser)
 		a.DB.Model(&devUser).Update("id", 1)
@@ -65,36 +66,37 @@ func (a *App) SeedDatabase() {
 	}
 
 	// Create additional users for staff
+	hashed, _ := hashPassword(DEFAULT_PASSWORD)
 	users := []User{
 		{
 			Email:    "nate@snowpack-data.com",
 			IsAdmin:  true,
 			Role:     UserRoleAdmin.String(),
-			Password: DEFAULT_PASSWORD,
+			Password: hashed,
 		},
 		{
 			Email:    "kevin@snowpack-data.com",
 			IsAdmin:  true,
 			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Password: hashed,
 		},
 		{
 			Email:    "david@snowpack-data.com",
 			IsAdmin:  false,
 			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Password: hashed,
 		},
 		{
 			Email:    "john@snowpack-data.com",
 			IsAdmin:  false,
 			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Password: hashed,
 		},
 		{
 			Email:    "jane@snowpack-data.com",
 			IsAdmin:  false,
 			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Password: hashed,
 		},
 	}
 	_ = a.DB.Create(&users)

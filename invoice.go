@@ -376,13 +376,11 @@ func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 	if _, err := writer.Write(pdfBytes); err != nil {
 		return err
 	}
-	writer.Close()
-
-	// Set the object to be publicly accessible
-	acl := bucket.Object(objectName).ACL()
-	if err := acl.Set(ctx, storage.AllUsers, storage.RoleReader); err != nil {
+	if err := writer.Close(); err != nil {
 		return err
 	}
+
+	// keep object private and store link
 
 	// save the public invoice URL to the database
 	invoice.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName

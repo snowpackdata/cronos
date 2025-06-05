@@ -3,7 +3,7 @@ package cronos
 import (
 	"cloud.google.com/go/storage"
 	"context"
-	"log"
+	"fmt"
 )
 
 // SaveBillToGCS saves the invoice to GCS
@@ -24,20 +24,18 @@ func (a *App) SaveBillToGCS(bill *Bill) error {
 	if _, err := writer.Write(pdfBytes); err != nil {
 		return err
 	}
-	writer.Close()
-
-	// Set the object to be publicly accessible
-	acl := bucket.Object(objectName).ACL()
-	if err := acl.Set(ctx, storage.AllUsers, storage.RoleReader); err != nil {
+	if err := writer.Close(); err != nil {
 		return err
 	}
+
+	// Objects remain private; update cache settings
 	attrsToUpdate := storage.ObjectAttrsToUpdate{
 		CacheControl: "no-cache, max-age=0, must-revalidate",
 	}
 	if _, err := bucket.Object(objectName).Update(ctx, attrsToUpdate); err != nil {
-		log.Fatalf("Failed to update object: %v", err)
+		return fmt.Errorf("failed to update object: %w", err)
 	}
-	// save the public invoice URL to the database
+	// save the invoice URL to the database
 	bill.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
 	a.DB.Save(&bill)
 	return nil
@@ -45,9 +43,8 @@ func (a *App) SaveBillToGCS(bill *Bill) error {
 
 // RegeneratePDF regenerates the PDF for a bill, we will call this when a bill is updated
 func (a *App) RegeneratePDF(bill *Bill) error {
-	err := a.SaveBillToGCS(bill)
-	if err != nil {
-		panic(err)
+	if err := a.SaveBillToGCS(bill); err != nil {
+		return err
 	}
 	return nil
 }

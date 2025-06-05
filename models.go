@@ -12,6 +12,8 @@ import (
 
 	"github.com/pkg/errors"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"log"
 
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
@@ -180,6 +182,15 @@ const (
 	DealSizeSmallThreshold = 100000
 )
 
+// hashPassword hashes a plaintext password using bcrypt.
+func hashPassword(password string) (string, error) {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashed), nil
+}
+
 type User struct {
 	// User is the generic user object for anyone accessing the application
 	gorm.Model
@@ -312,6 +323,10 @@ type Entry struct {
 }
 
 func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
+	// ensure end time is after start time
+	if !e.End.After(e.Start) {
+		return fmt.Errorf("end time must be after start time")
+	}
 	// recalculate the fee
 	e.Fee = int(e.GetFee(tx) * 100)
 	return nil

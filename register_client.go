@@ -1,6 +1,8 @@
 package cronos
 
-import "github.com/pkg/errors"
+import (
+	"github.com/pkg/errors"
+)
 
 var ErrUserAlreadyExists = errors.New("user already exists")
 
@@ -15,13 +17,17 @@ func (a *App) RegisterClient(email string, accountId uint) error {
 	} else {
 		return ErrUserAlreadyExists
 	}
-	user.Password = DEFAULT_PASSWORD
+	hashed, err := hashPassword(DEFAULT_PASSWORD)
+	if err != nil {
+		return err
+	}
+	user.Password = hashed
 	user.Role = UserRoleClient.String()
 	user.AccountID = accountId
 	a.DB.Save(&user)
 	// Send the email to the user
-	err := a.EmailFromAdmin(EmailTypeRegisterClient, email)
-	return err
+	sendErr := a.EmailFromAdmin(EmailTypeRegisterClient, email)
+	return sendErr
 }
 
 func (a *App) RegisterStaff(email string, accountId uint) error {
@@ -29,11 +35,15 @@ func (a *App) RegisterStaff(email string, accountId uint) error {
 	user := User{Email: email}
 	a.DB.Save(&user)
 	a.DB.Save(&Employee{User: user})
-	user.Password = DEFAULT_PASSWORD
+	hashed, err := hashPassword(DEFAULT_PASSWORD)
+	if err != nil {
+		return err
+	}
+	user.Password = hashed
 	user.Role = UserRoleStaff.String()
 	user.AccountID = accountId
 	a.DB.Save(&user)
 	// Send the email to the user
-	err := a.EmailFromAdmin(EmailTypeRegisterStaff, email)
-	return err
+	sendErr := a.EmailFromAdmin(EmailTypeRegisterStaff, email)
+	return sendErr
 }

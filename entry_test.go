@@ -290,6 +290,30 @@ func TestEntryGetInternalFee(t *testing.T) {
 	}
 }
 
+// TestEntryStartEndValidation ensures entries with an end time before the start return an error.
+func TestEntryStartEndValidation(t *testing.T) {
+	db := setupTestDB(t)
+
+	rate := Rate{Name: "Rate", Amount: 100, ActiveFrom: time.Now().AddDate(-1, 0, 0), ActiveTo: time.Now().AddDate(1, 0, 0)}
+	db.Create(&rate)
+	account := Account{Name: "Account", LegalName: "Legal", Type: AccountTypeClient.String()}
+	db.Create(&account)
+	project := Project{Name: "Proj", AccountID: account.ID, ActiveStart: time.Now().AddDate(-1, 0, 0), ActiveEnd: time.Now().AddDate(1, 0, 0)}
+	db.Create(&project)
+	billingCode := BillingCode{Name: "Code", RateType: RateTypeExternalBillable.String(), Code: "C", RoundedTo: 15, ProjectID: project.ID, ActiveStart: time.Now().AddDate(-1, 0, 0), ActiveEnd: time.Now().AddDate(1, 0, 0), RateID: rate.ID}
+	db.Create(&billingCode)
+
+	entry := Entry{
+		ProjectID:     project.ID,
+		BillingCodeID: billingCode.ID,
+		Start:         time.Now(),
+		End:           time.Now().Add(-time.Hour),
+	}
+	if err := db.Create(&entry).Error; err == nil {
+		t.Fatalf("expected error for invalid entry times")
+	}
+}
+
 // TestAssociateEntry tests that entries (both regular and impersonated) are correctly
 // associated with invoices under various conditions
 func TestAssociateEntry(t *testing.T) {
