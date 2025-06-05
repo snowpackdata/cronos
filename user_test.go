@@ -124,10 +124,14 @@ func TestRegisterStaff(t *testing.T) {
 
 	// Create a custom register function that doesn't send emails
 	registerStaff := func(email string, accountID uint) error {
-		// Create a blank user and staff
+		// Create the user record first
 		user := User{Email: email}
 		app.DB.Save(&user)
-		app.DB.Save(&Employee{User: user})
+
+		// Link the newly created user to an employee record using the user's ID
+		employee := Employee{UserID: user.ID}
+		app.DB.Create(&employee)
+
 		user.Password = DEFAULT_PASSWORD
 		user.Role = UserRoleStaff.String()
 		user.AccountID = accountID

@@ -25,10 +25,14 @@ func (a *App) RegisterClient(email string, accountId uint) error {
 }
 
 func (a *App) RegisterStaff(email string, accountId uint) error {
-	// Create a blank user and client if they don't already exist
+	// Create the user record first
 	user := User{Email: email}
 	a.DB.Save(&user)
-	a.DB.Save(&Employee{User: user})
+
+	// Link the newly created user to an employee record using the user's ID
+	employee := Employee{UserID: user.ID}
+	a.DB.Create(&employee)
+
 	user.Password = DEFAULT_PASSWORD
 	user.Role = UserRoleStaff.String()
 	user.AccountID = accountId
