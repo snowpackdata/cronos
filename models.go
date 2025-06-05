@@ -583,7 +583,7 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 		}
 	}
 	i.TotalHours = totalHours
-	i.TotalFees = float64(totalFeesInt / 100)
+	i.TotalFees = float64(totalFeesInt) / 100
 	i.TotalAdjustments = totalAdjustments
 	i.TotalAmount = i.TotalFees + i.TotalAdjustments
 	a.DB.Omit(clause.Associations).Save(&i)
