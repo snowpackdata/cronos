@@ -171,6 +171,11 @@ func TestUpdateInvoiceTotals(t *testing.T) {
 	// Update the invoice totals
 	app.UpdateInvoiceTotals(&invoice)
 
+	// Reload the invoice from the DB to ensure totals were persisted
+	if err := db.First(&invoice, invoice.ID).Error; err != nil {
+		t.Fatalf("Failed to reload invoice: %v", err)
+	}
+
 	// Verify totals
 	// Hours: 2 + 3 = 5 hours
 	// Fees: 5 hours * $150/hour = $750
