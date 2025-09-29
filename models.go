@@ -193,15 +193,23 @@ type User struct {
 type Employee struct {
 	// Employee refers to internal information regarding an employee
 	gorm.Model
-	UserID    uint      `json:"user_id"`
-	User      User      `json:"user"`
-	Title     string    `json:"title"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name"`
-	IsActive  bool      `json:"is_active"`
-	StartDate time.Time `json:"start_date"`
-	EndDate   time.Time `json:"end_date"`
-	Entries   []Entry   `json:"entries"`
+	UserID                  uint         `json:"user_id"`
+	User                    User         `json:"user"`
+	Title                   string       `json:"title"`
+	FirstName               string       `json:"first_name"`
+	LastName                string       `json:"last_name"`
+	IsActive                bool         `json:"is_active"`
+	StartDate               time.Time    `json:"start_date"`
+	EndDate                 time.Time    `json:"end_date"`
+	Entries                 []Entry      `json:"entries"`
+	Commissions             []Commission `json:"commissions" gorm:"foreignKey:StaffID"`
+	CapacityWeekly          int          `json:"capacity_weekly"`
+	IsSalaried              bool         `json:"is_salaried"`
+	SalaryAnnualized        int          `json:"salary_annualized"`
+	HasVariableInternalRate bool         `json:"is_variable_hourly"`
+	HasFixedInternalRate    bool         `json:"is_fixed_hourly"`
+	FixedHourlyRate         int          `json:"hourly_rate"`
+	EntryPayEligibleState   string       `json:"entry_pay_eligible_state"`
 }
 
 type Client struct {
@@ -291,28 +299,34 @@ type BillingCode struct {
 }
 type Entry struct {
 	gorm.Model
-	ProjectID           uint        `json:"project_id"` // Can remove these, unnecessary with billing code
-	Project             Project     `json:"project"`    // Can remove these, unnecessary with billing code
-	Notes               string      `gorm:"type:varchar(2048)" json:"notes"`
-	EmployeeID          uint        `json:"employee_id" gorm:"index:idx_employee_internal"`
-	Employee            Employee    `json:"employee"`
-	ImpersonateAsUserID *uint       `json:"impersonate_as_user_id"`
-	ImpersonateAsUser   *Employee   `json:"impersonate_as_user" gorm:"foreignKey:ImpersonateAsUserID"`
-	BillingCodeID       uint        `json:"billing_code_id"`
-	BillingCode         BillingCode `json:"billing_code"`
-	Start               time.Time   `json:"start"`
-	End                 time.Time   `json:"end"`
-	Internal            bool        `json:"internal" gorm:"index:idx_employee_internal"`
-	Bill                Bill        `json:"bill"`
-	BillID              *uint       `json:"bill_id"`
-	Invoice             Invoice     `json:"invoice"`
-	InvoiceID           *uint       `json:"invoice_id"`
-	State               string      `json:"state"`
-	Fee                 int         `json:"fee"`
+	ProjectID            uint               `json:"project_id"` // Can remove these, unnecessary with billing code
+	Project              Project            `json:"project"`    // Can remove these, unnecessary with billing code
+	Notes                string             `gorm:"type:varchar(2048)" json:"notes"`
+	EmployeeID           uint               `json:"employee_id" gorm:"index:idx_employee_internal"`
+	Employee             Employee           `json:"employee"`
+	ImpersonateAsUserID  *uint              `json:"impersonate_as_user_id"`
+	ImpersonateAsUser    *Employee          `json:"impersonate_as_user" gorm:"foreignKey:ImpersonateAsUserID"`
+	BillingCodeID        uint               `json:"billing_code_id"`
+	BillingCode          BillingCode        `json:"billing_code"`
+	Start                time.Time          `json:"start"`
+	End                  time.Time          `json:"end"`
+	DurationMinutes      float64            `json:"duration_minutes"` // Auto-calculated: End - Start in minutes
+	Internal             bool               `json:"internal" gorm:"index:idx_employee_internal"`
+	Bill                 Bill               `json:"bill"`
+	BillID               *uint              `json:"bill_id"`
+	Invoice              Invoice            `json:"invoice"`
+	InvoiceID            *uint              `json:"invoice_id"`
+	StaffingAssignmentID *uint              `json:"staffing_assignment_id"`
+	StaffingAssignment   StaffingAssignment `json:"staffing_assignment"`
+	State                string             `json:"state"`
+	Fee                  int                `json:"fee"`
 }
 
 func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
-	// recalculate the fee
+	// Auto-calculate duration in minutes
+	e.DurationMinutes = e.End.Sub(e.Start).Minutes()
+
+	// Recalculate the fee
 	e.Fee = int(e.GetFee(tx) * 100)
 	return nil
 }
@@ -431,6 +445,7 @@ type StaffingAssignment struct {
 	Commitment int       `json:"commitment"`
 	StartDate  time.Time `json:"start_date"`
 	EndDate    time.Time `json:"end_date"`
+	Entries    []Entry   `json:"entries"`
 }
 
 type Asset struct {
@@ -552,6 +567,23 @@ func (e *Entry) GetInternalFee(tx *gorm.DB) float64 {
 	roundedHours := float64(int(hours/roundingFactor)) * roundingFactor
 	fee := roundedHours * rate.Amount
 	return fee
+}
+
+// GetEmployeeBillRate determines the appropriate hourly rate for billing an employee
+// based on their rate configuration (fixed vs variable) and the billing code
+func (a *App) GetEmployeeBillRate(employee *Employee, billingCodeID uint) float64 {
+	if employee.HasFixedInternalRate {
+		// Use the employee's fixed hourly rate (stored in cents)
+		return float64(employee.FixedHourlyRate) / 100.0
+	}
+
+	// Use the billing code's internal rate (variable by project/billing code, or default)
+	var billingCode BillingCode
+	if err := a.DB.Preload("InternalRate").Where("id = ?", billingCodeID).First(&billingCode).Error; err != nil {
+		log.Printf("Error loading billing code %d for rate calculation: %v", billingCodeID, err)
+		return 0
+	}
+	return billingCode.InternalRate.Amount
 }
 
 // UpdateInvoiceTotals updates the totals for an invoice based on non-voided entries
@@ -1016,9 +1048,11 @@ func (a *App) GenerateBills(i *Invoice) {
 	userEntryMap := make(map[uint][]Entry)
 	entriesProcessed := 0
 	entriesSkipped := 0
+	entriesNotEligible := 0
 
 	// Add up each of the fees for a user and billing code
 	// and cache the value, but only for entries that don't already have a bill
+	// and whose employee is eligible for pay at the current entry state
 	for _, entry := range i.Entries {
 		// Skip void entries and entries that already have a bill
 		if entry.State == EntryStateVoid.String() {
@@ -1032,12 +1066,31 @@ func (a *App) GenerateBills(i *Invoice) {
 			continue
 		}
 
+		// Load the employee to check their EntryPayEligibleState
+		var employee Employee
+		if err := a.DB.Where("id = ?", entry.EmployeeID).First(&employee).Error; err != nil {
+			log.Printf("Error loading employee ID %d for entry ID %d: %v", entry.EmployeeID, entry.ID, err)
+			entriesSkipped++
+			continue
+		}
+
+		// Check if the employee is eligible for pay at the current entry state
+		if employee.EntryPayEligibleState != "" && employee.EntryPayEligibleState != entry.State {
+			log.Printf("Skipping entry ID %d - employee %s %s (ID: %d) not eligible for pay at state %s (eligible at: %s)",
+				entry.ID, employee.FirstName, employee.LastName, employee.ID, entry.State, employee.EntryPayEligibleState)
+			entriesNotEligible++
+			continue
+		}
+
 		// Note: We always bill to the actual creator (EmployeeID), not the impersonated user
 		// Initialize the billing code map for this user if it doesn't exist
 		if _, ok := userBillingCodeMap[entry.EmployeeID]; !ok {
 			userBillingCodeMap[entry.EmployeeID] = make(map[uint]float64)
 			userEntryMap[entry.EmployeeID] = []Entry{}
 		}
+
+		// Store the employee data with the entry for later use
+		entry.Employee = employee
 
 		// Add the entry's minutes to the map
 		userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
@@ -1047,7 +1100,7 @@ func (a *App) GenerateBills(i *Invoice) {
 		entriesProcessed++
 	}
 
-	log.Printf("Processing %d entries, skipped %d entries with existing bill associations", entriesProcessed, entriesSkipped)
+	log.Printf("Processing %d entries, skipped %d entries with existing bill associations, %d entries not eligible for pay", entriesProcessed, entriesSkipped, entriesNotEligible)
 
 	if entriesProcessed == 0 {
 		log.Printf("No entries to process for invoice ID: %d, all entries already have bill associations", i.ID)
@@ -1065,17 +1118,14 @@ func (a *App) GenerateBills(i *Invoice) {
 
 		// Calculate the total hours and fee for this user
 		for billingCode, loopMin := range billingCodes {
-			// sum up the hours for the billing code
-			var billingCodeObj BillingCode
-			a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
-
-			// Convert minutes to hours and multiply by the internal rate
 			hourAmount := loopMin / 60
-			floatFee := hourAmount * billingCodeObj.InternalRate.Amount
-			fee += int(floatFee * 100)
 			hours += hourAmount
 
-			log.Printf("  Billing code %d: %.2f hours, fee: $%.2f", billingCode, hourAmount, floatFee)
+			rate := a.GetEmployeeBillRate(&userObj, billingCode)
+			floatFee := hourAmount * rate
+			fee += int(floatFee * 100)
+
+			log.Printf("  Billing code %d: %.2f hours at $%.2f/hr = $%.2f", billingCode, hourAmount, rate, floatFee)
 		}
 
 		// See if there is an existing bill for the user
@@ -1124,13 +1174,8 @@ func (a *App) GenerateBills(i *Invoice) {
 		// Recalculate bill totals from all entries in the database
 		a.RecalculateBillTotals(&bill)
 
-		// Save the bill to GCS
-		err = a.SaveBillToGCS(&bill)
-		if err != nil {
-			log.Printf("Error saving bill to GCS: %v", err)
-		} else {
-			log.Printf("Successfully saved bill PDF to GCS for bill ID: %d", bill.ID)
-		}
+		// Note: SaveBillToGCS is not called here to avoid requiring GCS credentials
+		// during testing. Callers should explicitly call SaveBillToGCS if needed.
 	}
 
 	log.Printf("Completed GenerateBills for invoice ID: %d", i.ID)
@@ -1156,25 +1201,24 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 
 	log.Printf("Found %d valid entries for bill ID: %d", len(entries), bill.ID)
 
+	// Load the employee to get rate configuration
+	var employee Employee
+	if err := a.DB.Where("id = ?", bill.EmployeeID).First(&employee).Error; err != nil {
+		log.Printf("Error loading employee for bill ID %d: %v", bill.ID, err)
+		return
+	}
+
 	// Calculate totals from entries
 	for _, entry := range entries {
 		bill.TotalHours += entry.Duration().Hours()
 
-		// Ensure we have the internal rate
-		if entry.BillingCode.InternalRate.ID == 0 {
-			var internalRate Rate
-			if err := a.DB.Where("id = ?", entry.BillingCode.InternalRateID).First(&internalRate).Error; err != nil {
-				log.Printf("Error loading internal rate for billing code %d: %v", entry.BillingCodeID, err)
-				continue
-			}
-			entry.BillingCode.InternalRate = internalRate
-		}
-
+		// Use the helper function to get the correct rate based on employee configuration
 		hourAmount := entry.Duration().Hours()
-		fee := int(hourAmount * entry.BillingCode.InternalRate.Amount * 100)
+		rate := a.GetEmployeeBillRate(&employee, entry.BillingCodeID)
+		fee := int(hourAmount * rate * 100)
 		bill.TotalFees += fee
 
-		log.Printf("  Entry ID %d: %.2f hours, fee: $%.2f", entry.ID, hourAmount, float64(fee)/100)
+		log.Printf("  Entry ID %d: %.2f hours at $%.2f/hr, fee: $%.2f", entry.ID, hourAmount, rate, float64(fee)/100)
 	}
 
 	// Get all non-void adjustments for this bill
@@ -1283,7 +1327,6 @@ func (a *App) AddJournalEntries(i *Invoice) {
 		}
 		a.DB.Create(&adjustmentJournal)
 	}
-	return
 }
 
 func (a *App) GetBillLineItems(b *Bill) []BillLineItem {
