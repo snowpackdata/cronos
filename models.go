@@ -310,6 +310,7 @@ type Entry struct {
 	BillingCode          BillingCode        `json:"billing_code"`
 	Start                time.Time          `json:"start"`
 	End                  time.Time          `json:"end"`
+	DurationMinutes      float64            `json:"duration_minutes"` // Auto-calculated: End - Start in minutes
 	Internal             bool               `json:"internal" gorm:"index:idx_employee_internal"`
 	Bill                 Bill               `json:"bill"`
 	BillID               *uint              `json:"bill_id"`
@@ -322,7 +323,10 @@ type Entry struct {
 }
 
 func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
-	// recalculate the fee
+	// Auto-calculate duration in minutes
+	e.DurationMinutes = e.End.Sub(e.Start).Minutes()
+
+	// Recalculate the fee
 	e.Fee = int(e.GetFee(tx) * 100)
 	return nil
 }
@@ -1104,9 +1108,9 @@ func (a *App) GenerateBills(i *Invoice) {
 			var floatFee float64
 
 			if userObj.HasFixedInternalRate {
-				// Use the employee's fixed hourly rate
-				floatFee = hourAmount * float64(userObj.FixedHourlyRate)
-				log.Printf("  Billing code %d: %.2f hours at fixed rate $%.2f/hr = $%.2f", billingCode, hourAmount, float64(userObj.FixedHourlyRate), floatFee)
+				// Use the employee's fixed hourly rate (stored in cents, like other int monetary fields)
+				floatFee = hourAmount * float64(userObj.FixedHourlyRate) / 100.0
+				log.Printf("  Billing code %d: %.2f hours at fixed rate $%.2f/hr = $%.2f", billingCode, hourAmount, float64(userObj.FixedHourlyRate)/100.0, floatFee)
 			} else if userObj.HasVariableInternalRate {
 				// Use the billing code's internal rate (variable by project/billing code)
 				var billingCodeObj BillingCode
