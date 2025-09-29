@@ -633,10 +633,9 @@ func TestBillGenerationWithVariableAndFixedRates(t *testing.T) {
 			t.Fatalf("Failed to find bill: %v", err)
 		}
 
-		// Expected: 2 hours * $75/hour (employee fixed rate) = $150
-		// But RecalculateBillTotals uses the billing code's internal rate ($50/hr) = $100
-		// Expected bill total after recalculation: 2 hours * $50/hour = $100 = 10000 cents
-		expected := 10000
+		// Expected: 2 hours * $75/hour (employee fixed rate) = $150 = 15000 cents
+		// RecalculateBillTotals should use the employee's fixed rate, not the billing code's internal rate
+		expected := 15000
 		if bill.TotalFees != expected {
 			t.Errorf("Expected bill total fees %d, got %d", expected, bill.TotalFees)
 		}
