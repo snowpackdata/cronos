@@ -205,10 +205,10 @@ type Employee struct {
 	Commissions             []Commission `json:"commissions" gorm:"foreignKey:StaffID"`
 	CapacityWeekly          int          `json:"capacity_weekly"`
 	IsSalaried              bool         `json:"is_salaried"`
-	SalaryAnnualized        int          `json:"salary_annualized"`
+	SalaryAnnualized        int          `json:"salary_annualized"` // Stored in cents (consistent with int monetary pattern)
 	HasVariableInternalRate bool         `json:"is_variable_hourly"`
 	HasFixedInternalRate    bool         `json:"is_fixed_hourly"`
-	FixedHourlyRate         int          `json:"hourly_rate"`
+	FixedHourlyRate         int          `json:"hourly_rate"` // Stored in cents (consistent with int monetary pattern)
 	EntryPayEligibleState   string       `json:"entry_pay_eligible_state"`
 }
 
@@ -236,7 +236,7 @@ type Account struct {
 	Invoices              []Invoice `json:"invoices"`
 	BillingFrequency      string    `json:"billing_frequency"`
 	BudgetHours           int       `json:"budget_hours"`
-	BudgetDollars         int       `json:"budget_dollars"`
+	BudgetDollars         int       `json:"budget_dollars"` // Stored in whole dollars (exception to int-as-cents pattern)
 	ProjectsSingleInvoice bool      `json:"projects_single_invoice"`
 	Assets                []Asset   `json:"assets"`
 }
@@ -264,9 +264,9 @@ type Project struct {
 	ActiveStart         time.Time            `json:"active_start"`
 	ActiveEnd           time.Time            `json:"active_end"`
 	BudgetHours         int                  `json:"budget_hours"`
-	BudgetDollars       int                  `json:"budget_dollars"`
+	BudgetDollars       int                  `json:"budget_dollars"` // Stored in whole dollars (exception to int-as-cents pattern)
 	BudgetCapHours      int                  `json:"budget_cap_hours"`
-	BudgetCapDollars    int                  `json:"budget_cap_dollars"`
+	BudgetCapDollars    int                  `json:"budget_cap_dollars"` // Stored in whole dollars (exception to int-as-cents pattern)
 	Internal            bool                 `json:"internal"`
 	BillingCodes        []BillingCode        `json:"billing_codes"`
 	Entries             []Entry              `json:"entries"`
@@ -1333,7 +1333,6 @@ func (a *App) AddJournalEntries(i *Invoice) {
 		}
 		a.DB.Create(&adjustmentJournal)
 	}
-	return
 }
 
 func (a *App) GetBillLineItems(b *Bill) []BillLineItem {
