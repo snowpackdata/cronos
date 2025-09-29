@@ -202,7 +202,7 @@ type Employee struct {
 	StartDate               time.Time    `json:"start_date"`
 	EndDate                 time.Time    `json:"end_date"`
 	Entries                 []Entry      `json:"entries"`
-	Commissions             []Commission `json:"commissions"`
+	Commissions             []Commission `json:"commissions" gorm:"foreignKey:StaffID"`
 	CapacityWeekly          int          `json:"capacity_weekly"`
 	IsSalaried              bool         `json:"is_salaried"`
 	SalaryAnnualized        int          `json:"salary_annualized"`
