@@ -193,15 +193,23 @@ type User struct {
 type Employee struct {
 	// Employee refers to internal information regarding an employee
 	gorm.Model
-	UserID    uint      `json:"user_id"`
-	User      User      `json:"user"`
-	Title     string    `json:"title"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name"`
-	IsActive  bool      `json:"is_active"`
-	StartDate time.Time `json:"start_date"`
-	EndDate   time.Time `json:"end_date"`
-	Entries   []Entry   `json:"entries"`
+	UserID                  uint         `json:"user_id"`
+	User                    User         `json:"user"`
+	Title                   string       `json:"title"`
+	FirstName               string       `json:"first_name"`
+	LastName                string       `json:"last_name"`
+	IsActive                bool         `json:"is_active"`
+	StartDate               time.Time    `json:"start_date"`
+	EndDate                 time.Time    `json:"end_date"`
+	Entries                 []Entry      `json:"entries"`
+	Commissions             []Commission `json:"commissions"`
+	CapacityWeekly          int          `json:"capacity_weekly"`
+	IsSalaried              bool         `json:"is_salaried"`
+	SalaryAnnualized        int          `json:"salary_annualized"`
+	HasVariableInternalRate bool         `json:"is_variable_hourly"`
+	HasFixedInternalRate    bool         `json:"is_fixed_hourly"`
+	FixedHourlyRate         int          `json:"hourly_rate"`
+	EntryPayEligibleState   string       `json:"entry_pay_eligible_state"`
 }
 
 type Client struct {
@@ -291,24 +299,26 @@ type BillingCode struct {
 }
 type Entry struct {
 	gorm.Model
-	ProjectID           uint        `json:"project_id"` // Can remove these, unnecessary with billing code
-	Project             Project     `json:"project"`    // Can remove these, unnecessary with billing code
-	Notes               string      `gorm:"type:varchar(2048)" json:"notes"`
-	EmployeeID          uint        `json:"employee_id" gorm:"index:idx_employee_internal"`
-	Employee            Employee    `json:"employee"`
-	ImpersonateAsUserID *uint       `json:"impersonate_as_user_id"`
-	ImpersonateAsUser   *Employee   `json:"impersonate_as_user" gorm:"foreignKey:ImpersonateAsUserID"`
-	BillingCodeID       uint        `json:"billing_code_id"`
-	BillingCode         BillingCode `json:"billing_code"`
-	Start               time.Time   `json:"start"`
-	End                 time.Time   `json:"end"`
-	Internal            bool        `json:"internal" gorm:"index:idx_employee_internal"`
-	Bill                Bill        `json:"bill"`
-	BillID              *uint       `json:"bill_id"`
-	Invoice             Invoice     `json:"invoice"`
-	InvoiceID           *uint       `json:"invoice_id"`
-	State               string      `json:"state"`
-	Fee                 int         `json:"fee"`
+	ProjectID            uint               `json:"project_id"` // Can remove these, unnecessary with billing code
+	Project              Project            `json:"project"`    // Can remove these, unnecessary with billing code
+	Notes                string             `gorm:"type:varchar(2048)" json:"notes"`
+	EmployeeID           uint               `json:"employee_id" gorm:"index:idx_employee_internal"`
+	Employee             Employee           `json:"employee"`
+	ImpersonateAsUserID  *uint              `json:"impersonate_as_user_id"`
+	ImpersonateAsUser    *Employee          `json:"impersonate_as_user" gorm:"foreignKey:ImpersonateAsUserID"`
+	BillingCodeID        uint               `json:"billing_code_id"`
+	BillingCode          BillingCode        `json:"billing_code"`
+	Start                time.Time          `json:"start"`
+	End                  time.Time          `json:"end"`
+	Internal             bool               `json:"internal" gorm:"index:idx_employee_internal"`
+	Bill                 Bill               `json:"bill"`
+	BillID               *uint              `json:"bill_id"`
+	Invoice              Invoice            `json:"invoice"`
+	InvoiceID            *uint              `json:"invoice_id"`
+	StaffingAssignmentID *uint              `json:"staffing_assignment_id"`
+	StaffingAssignment   StaffingAssignment `json:"staffing_assignment"`
+	State                string             `json:"state"`
+	Fee                  int                `json:"fee"`
 }
 
 func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
@@ -431,6 +441,7 @@ type StaffingAssignment struct {
 	Commitment int       `json:"commitment"`
 	StartDate  time.Time `json:"start_date"`
 	EndDate    time.Time `json:"end_date"`
+	Entries    []Entry   `json:"entries"`
 }
 
 type Asset struct {
