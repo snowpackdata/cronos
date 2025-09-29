@@ -205,10 +205,10 @@ type Employee struct {
 	Commissions             []Commission `json:"commissions" gorm:"foreignKey:StaffID"`
 	CapacityWeekly          int          `json:"capacity_weekly"`
 	IsSalaried              bool         `json:"is_salaried"`
-	SalaryAnnualized        int          `json:"salary_annualized"` // Stored in cents (consistent with int monetary pattern)
+	SalaryAnnualized        int          `json:"salary_annualized"`
 	HasVariableInternalRate bool         `json:"is_variable_hourly"`
 	HasFixedInternalRate    bool         `json:"is_fixed_hourly"`
-	FixedHourlyRate         int          `json:"hourly_rate"` // Stored in cents (consistent with int monetary pattern)
+	FixedHourlyRate         int          `json:"hourly_rate"`
 	EntryPayEligibleState   string       `json:"entry_pay_eligible_state"`
 }
 
@@ -236,7 +236,7 @@ type Account struct {
 	Invoices              []Invoice `json:"invoices"`
 	BillingFrequency      string    `json:"billing_frequency"`
 	BudgetHours           int       `json:"budget_hours"`
-	BudgetDollars         int       `json:"budget_dollars"` // Stored in whole dollars (exception to int-as-cents pattern)
+	BudgetDollars         int       `json:"budget_dollars"`
 	ProjectsSingleInvoice bool      `json:"projects_single_invoice"`
 	Assets                []Asset   `json:"assets"`
 }
@@ -264,9 +264,9 @@ type Project struct {
 	ActiveStart         time.Time            `json:"active_start"`
 	ActiveEnd           time.Time            `json:"active_end"`
 	BudgetHours         int                  `json:"budget_hours"`
-	BudgetDollars       int                  `json:"budget_dollars"` // Stored in whole dollars (exception to int-as-cents pattern)
+	BudgetDollars       int                  `json:"budget_dollars"`
 	BudgetCapHours      int                  `json:"budget_cap_hours"`
-	BudgetCapDollars    int                  `json:"budget_cap_dollars"` // Stored in whole dollars (exception to int-as-cents pattern)
+	BudgetCapDollars    int                  `json:"budget_cap_dollars"`
 	Internal            bool                 `json:"internal"`
 	BillingCodes        []BillingCode        `json:"billing_codes"`
 	Entries             []Entry              `json:"entries"`
@@ -567,6 +567,23 @@ func (e *Entry) GetInternalFee(tx *gorm.DB) float64 {
 	roundedHours := float64(int(hours/roundingFactor)) * roundingFactor
 	fee := roundedHours * rate.Amount
 	return fee
+}
+
+// GetEmployeeBillRate determines the appropriate hourly rate for billing an employee
+// based on their rate configuration (fixed vs variable) and the billing code
+func (a *App) GetEmployeeBillRate(employee *Employee, billingCodeID uint) float64 {
+	if employee.HasFixedInternalRate {
+		// Use the employee's fixed hourly rate (stored in cents)
+		return float64(employee.FixedHourlyRate) / 100.0
+	}
+
+	// Use the billing code's internal rate (variable by project/billing code, or default)
+	var billingCode BillingCode
+	if err := a.DB.Preload("InternalRate").Where("id = ?", billingCodeID).First(&billingCode).Error; err != nil {
+		log.Printf("Error loading billing code %d for rate calculation: %v", billingCodeID, err)
+		return 0
+	}
+	return billingCode.InternalRate.Amount
 }
 
 // UpdateInvoiceTotals updates the totals for an invoice based on non-voided entries
@@ -1100,32 +1117,15 @@ func (a *App) GenerateBills(i *Invoice) {
 		var fee int
 
 		// Calculate the total hours and fee for this user
-		// Respect the employee's rate configuration: HasVariableInternalRate vs HasFixedInternalRate
 		for billingCode, loopMin := range billingCodes {
 			hourAmount := loopMin / 60
 			hours += hourAmount
 
-			var floatFee float64
-
-			if userObj.HasFixedInternalRate {
-				// Use the employee's fixed hourly rate (stored in cents, like other int monetary fields)
-				floatFee = hourAmount * float64(userObj.FixedHourlyRate) / 100.0
-				log.Printf("  Billing code %d: %.2f hours at fixed rate $%.2f/hr = $%.2f", billingCode, hourAmount, float64(userObj.FixedHourlyRate)/100.0, floatFee)
-			} else if userObj.HasVariableInternalRate {
-				// Use the billing code's internal rate (variable by project/billing code)
-				var billingCodeObj BillingCode
-				a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
-				floatFee = hourAmount * billingCodeObj.InternalRate.Amount
-				log.Printf("  Billing code %d: %.2f hours at variable rate $%.2f/hr = $%.2f", billingCode, hourAmount, billingCodeObj.InternalRate.Amount, floatFee)
-			} else {
-				// Default to billing code internal rate if neither flag is set
-				var billingCodeObj BillingCode
-				a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
-				floatFee = hourAmount * billingCodeObj.InternalRate.Amount
-				log.Printf("  Billing code %d: %.2f hours at default rate $%.2f/hr = $%.2f (no rate type set)", billingCode, hourAmount, billingCodeObj.InternalRate.Amount, floatFee)
-			}
-
+			rate := a.GetEmployeeBillRate(&userObj, billingCode)
+			floatFee := hourAmount * rate
 			fee += int(floatFee * 100)
+
+			log.Printf("  Billing code %d: %.2f hours at $%.2f/hr = $%.2f", billingCode, hourAmount, rate, floatFee)
 		}
 
 		// See if there is an existing bill for the user
@@ -1206,25 +1206,24 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 
 	log.Printf("Found %d valid entries for bill ID: %d", len(entries), bill.ID)
 
+	// Load the employee to get rate configuration
+	var employee Employee
+	if err := a.DB.Where("id = ?", bill.EmployeeID).First(&employee).Error; err != nil {
+		log.Printf("Error loading employee for bill ID %d: %v", bill.ID, err)
+		return
+	}
+
 	// Calculate totals from entries
 	for _, entry := range entries {
 		bill.TotalHours += entry.Duration().Hours()
 
-		// Ensure we have the internal rate
-		if entry.BillingCode.InternalRate.ID == 0 {
-			var internalRate Rate
-			if err := a.DB.Where("id = ?", entry.BillingCode.InternalRateID).First(&internalRate).Error; err != nil {
-				log.Printf("Error loading internal rate for billing code %d: %v", entry.BillingCodeID, err)
-				continue
-			}
-			entry.BillingCode.InternalRate = internalRate
-		}
-
+		// Use the helper function to get the correct rate based on employee configuration
 		hourAmount := entry.Duration().Hours()
-		fee := int(hourAmount * entry.BillingCode.InternalRate.Amount * 100)
+		rate := a.GetEmployeeBillRate(&employee, entry.BillingCodeID)
+		fee := int(hourAmount * rate * 100)
 		bill.TotalFees += fee
 
-		log.Printf("  Entry ID %d: %.2f hours, fee: $%.2f", entry.ID, hourAmount, float64(fee)/100)
+		log.Printf("  Entry ID %d: %.2f hours at $%.2f/hr, fee: $%.2f", entry.ID, hourAmount, rate, float64(fee)/100)
 	}
 
 	// Get all non-void adjustments for this bill
