@@ -1027,9 +1027,11 @@ func (a *App) GenerateBills(i *Invoice) {
 	userEntryMap := make(map[uint][]Entry)
 	entriesProcessed := 0
 	entriesSkipped := 0
+	entriesNotEligible := 0
 
 	// Add up each of the fees for a user and billing code
 	// and cache the value, but only for entries that don't already have a bill
+	// and whose employee is eligible for pay at the current entry state
 	for _, entry := range i.Entries {
 		// Skip void entries and entries that already have a bill
 		if entry.State == EntryStateVoid.String() {
@@ -1043,12 +1045,31 @@ func (a *App) GenerateBills(i *Invoice) {
 			continue
 		}
 
+		// Load the employee to check their EntryPayEligibleState
+		var employee Employee
+		if err := a.DB.Where("id = ?", entry.EmployeeID).First(&employee).Error; err != nil {
+			log.Printf("Error loading employee ID %d for entry ID %d: %v", entry.EmployeeID, entry.ID, err)
+			entriesSkipped++
+			continue
+		}
+
+		// Check if the employee is eligible for pay at the current entry state
+		if employee.EntryPayEligibleState != "" && employee.EntryPayEligibleState != entry.State {
+			log.Printf("Skipping entry ID %d - employee %s %s (ID: %d) not eligible for pay at state %s (eligible at: %s)",
+				entry.ID, employee.FirstName, employee.LastName, employee.ID, entry.State, employee.EntryPayEligibleState)
+			entriesNotEligible++
+			continue
+		}
+
 		// Note: We always bill to the actual creator (EmployeeID), not the impersonated user
 		// Initialize the billing code map for this user if it doesn't exist
 		if _, ok := userBillingCodeMap[entry.EmployeeID]; !ok {
 			userBillingCodeMap[entry.EmployeeID] = make(map[uint]float64)
 			userEntryMap[entry.EmployeeID] = []Entry{}
 		}
+
+		// Store the employee data with the entry for later use
+		entry.Employee = employee
 
 		// Add the entry's minutes to the map
 		userBillingCodeMap[entry.EmployeeID][entry.BillingCodeID] += entry.Duration().Minutes()
@@ -1058,7 +1079,7 @@ func (a *App) GenerateBills(i *Invoice) {
 		entriesProcessed++
 	}
 
-	log.Printf("Processing %d entries, skipped %d entries with existing bill associations", entriesProcessed, entriesSkipped)
+	log.Printf("Processing %d entries, skipped %d entries with existing bill associations, %d entries not eligible for pay", entriesProcessed, entriesSkipped, entriesNotEligible)
 
 	if entriesProcessed == 0 {
 		log.Printf("No entries to process for invoice ID: %d, all entries already have bill associations", i.ID)
@@ -1075,18 +1096,32 @@ func (a *App) GenerateBills(i *Invoice) {
 		var fee int
 
 		// Calculate the total hours and fee for this user
+		// Respect the employee's rate configuration: HasVariableInternalRate vs HasFixedInternalRate
 		for billingCode, loopMin := range billingCodes {
-			// sum up the hours for the billing code
-			var billingCodeObj BillingCode
-			a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
-
-			// Convert minutes to hours and multiply by the internal rate
 			hourAmount := loopMin / 60
-			floatFee := hourAmount * billingCodeObj.InternalRate.Amount
-			fee += int(floatFee * 100)
 			hours += hourAmount
 
-			log.Printf("  Billing code %d: %.2f hours, fee: $%.2f", billingCode, hourAmount, floatFee)
+			var floatFee float64
+
+			if userObj.HasFixedInternalRate {
+				// Use the employee's fixed hourly rate
+				floatFee = hourAmount * float64(userObj.FixedHourlyRate)
+				log.Printf("  Billing code %d: %.2f hours at fixed rate $%.2f/hr = $%.2f", billingCode, hourAmount, float64(userObj.FixedHourlyRate), floatFee)
+			} else if userObj.HasVariableInternalRate {
+				// Use the billing code's internal rate (variable by project/billing code)
+				var billingCodeObj BillingCode
+				a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
+				floatFee = hourAmount * billingCodeObj.InternalRate.Amount
+				log.Printf("  Billing code %d: %.2f hours at variable rate $%.2f/hr = $%.2f", billingCode, hourAmount, billingCodeObj.InternalRate.Amount, floatFee)
+			} else {
+				// Default to billing code internal rate if neither flag is set
+				var billingCodeObj BillingCode
+				a.DB.Preload("InternalRate").Where("id = ?", billingCode).First(&billingCodeObj)
+				floatFee = hourAmount * billingCodeObj.InternalRate.Amount
+				log.Printf("  Billing code %d: %.2f hours at default rate $%.2f/hr = $%.2f (no rate type set)", billingCode, hourAmount, billingCodeObj.InternalRate.Amount, floatFee)
+			}
+
+			fee += int(floatFee * 100)
 		}
 
 		// See if there is an existing bill for the user

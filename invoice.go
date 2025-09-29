@@ -128,24 +128,36 @@ func (a *App) CreateInvoice(accountID uint, projectID *uint, creationDate time.T
 
 // ApproveInvoice approves the invoice and transitions it to the "approved" state
 func (a *App) ApproveInvoice(invoiceID uint) error {
+	log.Printf("ApproveInvoice called for invoice ID: %d", invoiceID)
+
 	var invoice Invoice
 	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
 	if invoice.State != InvoiceStateDraft.String() {
 		return InvalidPriorState
 	}
 	invoice.State = InvoiceStateApproved.String()
+
+	log.Printf("Updating %d entries to approved state", len(invoice.Entries))
 	for _, entry := range invoice.Entries {
 		entry.State = EntryStateApproved.String()
 		a.DB.Save(&entry)
 	}
 	a.DB.Save(&invoice)
+
+	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_APPROVED
+	log.Printf("Generating bills for employees eligible at ENTRY_STATE_APPROVED")
+	a.GenerateBills(&invoice)
+
+	log.Printf("Successfully approved invoice ID: %d", invoiceID)
 	return nil
 }
 
 // SendInvoice sends the invoice to the client and transitions it to the "sent" state
 func (a *App) SendInvoice(invoiceID uint) error {
+	log.Printf("SendInvoice called for invoice ID: %d", invoiceID)
+
 	var invoice Invoice
-	a.DB.Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
+	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
 	if invoice.State != InvoiceStateApproved.String() {
 		return InvalidPriorState
 	}
@@ -153,7 +165,21 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	invoice.SentAt = time.Now()
 	// Set the due date based on invoice date (e.g., net 30)
 	invoice.DueAt = invoice.SentAt.AddDate(0, 0, 30) // Default to 30 days
+
+	// Update entry states to sent
+	log.Printf("Updating %d entries to sent state", len(invoice.Entries))
+	for _, entry := range invoice.Entries {
+		entry.State = EntryStateSent.String()
+		a.DB.Save(&entry)
+	}
+
 	a.DB.Save(&invoice)
+
+	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_SENT
+	log.Printf("Generating bills for employees eligible at ENTRY_STATE_SENT")
+	a.GenerateBills(&invoice)
+
+	log.Printf("Successfully sent invoice ID: %d", invoiceID)
 	return nil
 }
 
@@ -249,8 +275,9 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 		}
 	}
 
-	// Generate bills for the invoice
-	log.Printf("Generating bills for invoice ID: %d", invoice.ID)
+	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_PAID
+	// Note: Employees with other eligible states (APPROVED, SENT) have already had bills generated
+	log.Printf("Generating bills for employees eligible at ENTRY_STATE_PAID")
 	a.GenerateBills(&invoice)
 
 	// Add commissions to bills if applicable
@@ -278,7 +305,7 @@ func (a *App) VoidInvoice(invoiceID uint) error {
 // AssociateEntry associates an entry with the proper invoice. This function is called just after an entry is created
 // and associates it to the appropriate invoice based on the entry date and the AP/AR state.
 func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
-	if entry.Internal == true {
+	if entry.Internal {
 		return nil
 	}
 
@@ -346,6 +373,26 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 	} else {
 		entry.InvoiceID = &invoice.ID
 		entry.State = EntryStateDraft.String()
+	}
+
+	// Find and associate the appropriate StaffingAssignment
+	// Look for a staffing assignment that matches:
+	// 1. The entry's employee
+	// 2. The entry's project
+	// 3. The entry date falls within the assignment's date range
+	var staffingAssignment StaffingAssignment
+	err := a.DB.Where("employee_id = ? AND project_id = ? AND start_date <= ? AND end_date >= ?",
+		entry.EmployeeID, projectID, entry.Start, entry.Start).First(&staffingAssignment).Error
+
+	if err == nil {
+		// Found a matching staffing assignment
+		entry.StaffingAssignmentID = &staffingAssignment.ID
+		log.Printf("Associated entry ID %d with staffing assignment ID %d (Employee: %d, Project: %d)",
+			entry.ID, staffingAssignment.ID, entry.EmployeeID, projectID)
+	} else {
+		// No matching staffing assignment found - this is okay, not all entries require assignments
+		log.Printf("No staffing assignment found for entry ID %d (Employee: %d, Project: %d, Date: %s)",
+			entry.ID, entry.EmployeeID, projectID, entry.Start.Format("2006-01-02"))
 	}
 
 	a.DB.Save(&entry)
