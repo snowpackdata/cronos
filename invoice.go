@@ -144,6 +144,9 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 	}
 	a.DB.Save(&invoice)
 
+	// Reload invoice with updated entries before generating bills
+	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+
 	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_APPROVED
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_APPROVED")
 	a.GenerateBills(&invoice)
@@ -174,6 +177,9 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	}
 
 	a.DB.Save(&invoice)
+
+	// Reload invoice with updated entries before generating bills
+	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
 
 	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_SENT
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_SENT")
@@ -274,6 +280,9 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 			log.Printf("WARNING: Invoice state not properly saved!")
 		}
 	}
+
+	// Reload invoice with updated entries before generating bills
+	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
 
 	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_PAID
 	// Note: Employees with other eligible states (APPROVED, SENT) have already had bills generated
