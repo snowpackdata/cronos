@@ -126,6 +126,32 @@ func (a *App) CreateInvoice(accountID uint, projectID *uint, creationDate time.T
 	return nil
 }
 
+// SaveBillPDFsForInvoice generates and saves PDFs for all bills associated with an invoice
+func (a *App) SaveBillPDFsForInvoice(invoice *Invoice) {
+	// Get all unique bill IDs from the invoice's entries
+	billIDs := make(map[uint]bool)
+	for _, entry := range invoice.Entries {
+		if entry.BillID != nil && *entry.BillID > 0 {
+			billIDs[*entry.BillID] = true
+		}
+	}
+
+	// Save PDF for each bill
+	for billID := range billIDs {
+		var bill Bill
+		if err := a.DB.Where("id = ?", billID).First(&bill).Error; err != nil {
+			log.Printf("Error loading bill ID %d: %v", billID, err)
+			continue
+		}
+
+		if err := a.SaveBillToGCS(&bill); err != nil {
+			log.Printf("Error saving bill PDF for bill ID %d: %v", billID, err)
+		} else {
+			log.Printf("Successfully saved bill PDF for bill ID: %d", billID)
+		}
+	}
+}
+
 // ApproveInvoice approves the invoice and transitions it to the "approved" state
 func (a *App) ApproveInvoice(invoiceID uint) error {
 	log.Printf("ApproveInvoice called for invoice ID: %d", invoiceID)
@@ -150,6 +176,10 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_APPROVED
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_APPROVED")
 	a.GenerateBills(&invoice)
+
+	// Reload entries with bill associations and save PDFs
+	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+	a.SaveBillPDFsForInvoice(&invoice)
 
 	log.Printf("Successfully approved invoice ID: %d", invoiceID)
 	return nil
@@ -184,6 +214,10 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_SENT
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_SENT")
 	a.GenerateBills(&invoice)
+
+	// Reload entries with bill associations and save PDFs
+	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+	a.SaveBillPDFsForInvoice(&invoice)
 
 	log.Printf("Successfully sent invoice ID: %d", invoiceID)
 	return nil
@@ -292,6 +326,11 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	// Add commissions to bills if applicable
 	log.Printf("Adding commissions to bills for invoice ID: %d", invoice.ID)
 	a.AddCommissionsToBills(&invoice)
+
+	// Reload entries with bill associations and save PDFs for all bills
+	// This ensures bills without commissions also get PDFs, and regenerates PDFs for bills with commissions
+	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+	a.SaveBillPDFsForInvoice(&invoice)
 
 	log.Printf("Successfully processed invoice ID: %d", invoice.ID)
 	return nil

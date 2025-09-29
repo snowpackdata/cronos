@@ -1174,13 +1174,8 @@ func (a *App) GenerateBills(i *Invoice) {
 		// Recalculate bill totals from all entries in the database
 		a.RecalculateBillTotals(&bill)
 
-		// Save the bill to GCS
-		err = a.SaveBillToGCS(&bill)
-		if err != nil {
-			log.Printf("Error saving bill to GCS: %v", err)
-		} else {
-			log.Printf("Successfully saved bill PDF to GCS for bill ID: %d", bill.ID)
-		}
+		// Note: SaveBillToGCS is not called here to avoid requiring GCS credentials
+		// during testing. Callers should explicitly call SaveBillToGCS if needed.
 	}
 
 	log.Printf("Completed GenerateBills for invoice ID: %d", i.ID)
