@@ -97,6 +97,18 @@ func (s CommissionRole) String() string {
 	return string(s)
 }
 
+type EmploymentStatus string
+
+func (s EmploymentStatus) String() string {
+	return string(s)
+}
+
+type CompensationType string
+
+func (c CompensationType) String() string {
+	return string(c)
+}
+
 const (
 	HOUR                      = 60.0
 	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
@@ -178,6 +190,14 @@ const (
 
 	// Deal size thresholds (in dollars)
 	DealSizeSmallThreshold = 100000
+
+	EmploymentStatusActive     EmploymentStatus = "EMPLOYMENT_STATUS_ACTIVE"
+	EmploymentStatusInactive   EmploymentStatus = "EMPLOYMENT_STATUS_INACTIVE"
+	EmploymentStatusTerminated EmploymentStatus = "EMPLOYMENT_STATUS_TERMINATED"
+
+	CompensationTypeFullyVariable    CompensationType = "COMPENSATION_TYPE_FULLY_VARIABLE"
+	CompensationTypeSalaried         CompensationType = "COMPENSATION_TYPE_SALARIED"
+	CompensationTypeBasePlusVariable CompensationType = "COMPENSATION_TYPE_BASE_PLUS_VARIABLE"
 )
 
 type User struct {
@@ -199,13 +219,14 @@ type Employee struct {
 	FirstName               string       `json:"first_name"`
 	LastName                string       `json:"last_name"`
 	IsActive                bool         `json:"is_active"`
+	EmploymentStatus        string       `json:"employment_status"` // "active", "inactive", "terminated"
 	StartDate               time.Time    `json:"start_date"`
 	EndDate                 time.Time    `json:"end_date"`
 	Entries                 []Entry      `json:"entries"`
 	Commissions             []Commission `json:"commissions" gorm:"foreignKey:StaffID"`
 	CapacityWeekly          int          `json:"capacity_weekly"`
-	IsSalaried              bool         `json:"is_salaried"`
-	SalaryAnnualized        int          `json:"salary_annualized"`
+	CompensationType        string       `json:"compensation_type"` // "fully-variable", "salaried", "base-plus-variable"
+	SalaryAnnualized        int          `json:"salary_annualized"` // For salaried or base+variable compensation
 	HasVariableInternalRate bool         `json:"is_variable_hourly"`
 	HasFixedInternalRate    bool         `json:"is_fixed_hourly"`
 	FixedHourlyRate         int          `json:"hourly_rate"`
