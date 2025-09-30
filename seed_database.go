@@ -1,6 +1,11 @@
 package cronos
 
-import "time"
+import (
+	"log"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+)
 
 const AccountsReceivable = "SNOWPACK_ACCOUNTS_RECEIVABLE"
 const AccountsPayable = "SNOWPACK_ACCOUNTS_PAYABLE"
@@ -41,14 +46,31 @@ func (a *App) SeedDatabase() {
 
 	if !userExists {
 		// If the user doesn't exist, create a default one (this shouldn't happen if the dev user was registered)
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte("devpassword"), bcrypt.DefaultCost)
+		if err != nil {
+			log.Printf("Error hashing password for dev user: %v", err)
+			hashedPassword = []byte(DEFAULT_PASSWORD) // Fallback to plain text if hashing fails
+		}
 		devUser = User{
 			Email:    "dev@example.com",
 			IsAdmin:  true,
 			Role:     UserRoleAdmin.String(),
-			Password: DEFAULT_PASSWORD,
+			Password: string(hashedPassword),
 		}
 		a.DB.Create(&devUser)
 		a.DB.Model(&devUser).Update("id", 1)
+	} else {
+		// User exists, but make sure password is hashed for dev environment
+		if devUser.Password == DEFAULT_PASSWORD {
+			hashedPassword, err := bcrypt.GenerateFromPassword([]byte("devpassword"), bcrypt.DefaultCost)
+			if err != nil {
+				log.Printf("Error hashing password for existing dev user: %v", err)
+			} else {
+				devUser.Password = string(hashedPassword)
+				a.DB.Save(&devUser)
+				log.Printf("Updated existing dev user password to hashed version")
+			}
+		}
 	}
 
 	if !employeeExists {
