@@ -200,6 +200,27 @@ const (
 	CompensationTypeBasePlusVariable CompensationType = "COMPENSATION_TYPE_BASE_PLUS_VARIABLE"
 )
 
+type ScenarioEmployeeRoleType string
+
+func (s ScenarioEmployeeRoleType) String() string {
+	return string(s)
+}
+
+type ScenarioEmployeeStatus string
+
+func (s ScenarioEmployeeStatus) String() string {
+	return string(s)
+}
+
+const (
+	ScenarioEmployeeRoleTypeFTE        ScenarioEmployeeRoleType = "SCENARIO_EMPLOYEE_ROLE_FTE"
+	ScenarioEmployeeRoleTypeConsultant ScenarioEmployeeRoleType = "SCENARIO_EMPLOYEE_ROLE_CONSULTANT"
+
+	ScenarioEmployeeStatusReady           ScenarioEmployeeStatus = "SCENARIO_EMPLOYEE_STATUS_READY"
+	ScenarioEmployeeStatusPipeline        ScenarioEmployeeStatus = "SCENARIO_EMPLOYEE_STATUS_PIPELINE"
+	ScenarioEmployeeStatusInactiveBacklog ScenarioEmployeeStatus = "SCENARIO_EMPLOYEE_STATUS_INACTIVE_BACKLOG"
+)
+
 type User struct {
 	// User is the generic user object for anyone accessing the application
 	gorm.Model
@@ -231,6 +252,20 @@ type Employee struct {
 	HasFixedInternalRate    bool         `json:"is_fixed_hourly"`
 	FixedHourlyRate         int          `json:"hourly_rate"`
 	EntryPayEligibleState   string       `json:"entry_pay_eligible_state"`
+}
+
+type ScenarioEmployee struct {
+	// ScenarioEmployee represents potential talent that we want to track for hiring or bringing on part-time
+	gorm.Model
+	FirstName                 string    `json:"first_name"`
+	LastName                  string    `json:"last_name"`
+	Title                     string    `json:"title"`
+	ExpectedStartDate         time.Time `json:"expected_start_date"`
+	RoleType                  string    `json:"role_type"`                    // "FTE" vs "consultant"
+	Status                    string    `json:"status"`                       // "ready", "pipeline", "inactive backlog"
+	WeeklyCapacityHours       int       `json:"weekly_capacity_hours"`        // Total hours they can work per week
+	TargetWeeklyBillableHours int       `json:"target_weekly_billable_hours"` // Target billable hours per week
+	Notes                     string    `json:"notes"`                        // General notes about this scenario employee
 }
 
 type Client struct {
