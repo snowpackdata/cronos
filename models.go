@@ -862,25 +862,38 @@ func (a *App) GetDraftEntry(e *Entry) DraftEntry {
 	var billingCodeCode string
 	var createdByName string
 
-	a.DB.Raw("SELECT concat(first_name, ' ', last_name) FROM employees WHERE id = ?", e.EmployeeID).Scan(&employeeName)
-	a.DB.Raw("SELECT role FROM users JOIN employees ON users.id = employees.user_id WHERE employees.id = ?", e.EmployeeID).Scan(&employeeRole)
+	// Use preloaded employee data if available, otherwise query (for backward compatibility)
+	if e.Employee.ID != 0 && e.Employee.FirstName != "" {
+		employeeName = e.Employee.FirstName + " " + e.Employee.LastName
+		if e.Employee.User.ID != 0 && e.Employee.User.Role != "" {
+			employeeRole = e.Employee.User.Role
+		} else {
+			a.DB.Raw("SELECT role FROM users JOIN employees ON users.id = employees.user_id WHERE employees.id = ?", e.EmployeeID).Scan(&employeeRole)
+		}
+	} else {
+		a.DB.Raw("SELECT concat(first_name, ' ', last_name) FROM employees WHERE id = ?", e.EmployeeID).Scan(&employeeName)
+		a.DB.Raw("SELECT role FROM users JOIN employees ON users.id = employees.user_id WHERE employees.id = ?", e.EmployeeID).Scan(&employeeRole)
+	}
 
 	// Store creator's name for all entries
 	createdByName = employeeName
 
 	// Get impersonated user name if applicable
 	if e.ImpersonateAsUserID != nil {
-		a.DB.Raw("SELECT concat(first_name, ' ', last_name) FROM employees WHERE id = ?", *e.ImpersonateAsUserID).Scan(&impersonateAsUserName)
+		if e.ImpersonateAsUser.ID != 0 && e.ImpersonateAsUser.FirstName != "" {
+			impersonateAsUserName = e.ImpersonateAsUser.FirstName + " " + e.ImpersonateAsUser.LastName
+		} else {
+			a.DB.Raw("SELECT concat(first_name, ' ', last_name) FROM employees WHERE id = ?", *e.ImpersonateAsUserID).Scan(&impersonateAsUserName)
+		}
 		// When displaying an impersonated entry, show the impersonated user's name as the primary name
 		employeeName = impersonateAsUserName
 	}
 
-	// Ensure we have the billing code information
-	if e.BillingCode.Code == "" {
-		// Billing code not loaded, fetch it directly
-		a.DB.Raw("SELECT code FROM billing_codes WHERE id = ?", e.BillingCodeID).Scan(&billingCodeCode)
-	} else {
+	// Use preloaded billing code if available, otherwise query (for backward compatibility)
+	if e.BillingCode.Code != "" {
 		billingCodeCode = e.BillingCode.Code
+	} else {
+		a.DB.Raw("SELECT code FROM billing_codes WHERE id = ?", e.BillingCodeID).Scan(&billingCodeCode)
 	}
 
 	return DraftEntry{
@@ -944,29 +957,58 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 	var accountName, projectName string
 	var periodClosed bool
 
-	// Fetch account name
-	if i.AccountID != 0 {
+	// Use preloaded account name if available, otherwise query
+	if i.Account.ID != 0 {
+		accountName = i.Account.Name
+	} else if i.AccountID != 0 {
 		a.DB.Raw("SELECT name FROM accounts WHERE id = ?", i.AccountID).Scan(&accountName)
 	}
 
-	// Fetch project name if available
-	if i.ProjectID != nil && *i.ProjectID != 0 {
+	// Use preloaded project name if available, otherwise query
+	if i.Project.ID != 0 {
+		projectName = i.Project.Name
+	} else if i.ProjectID != nil && *i.ProjectID != 0 {
 		a.DB.Raw("SELECT name FROM projects WHERE id = ?", *i.ProjectID).Scan(&projectName)
 	}
 
 	periodClosed = i.ClosedAt.Before(time.Now())
 
-	// Generate line items
+	// Generate line items in bulk using preloaded data
 	draftEntries := make([]DraftEntry, 0, len(i.Entries))
 	for _, entry := range i.Entries {
-		// Enhanced preloading for impersonation details
+		// Build draft entry directly using preloaded data
+		employeeName := entry.Employee.FirstName + " " + entry.Employee.LastName
+		employeeRole := entry.Employee.User.Role
+		createdByName := employeeName
+		var impersonateAsUserName string
+		
+		// Handle impersonation
 		if entry.ImpersonateAsUserID != nil {
-			a.DB.Preload("Employee").Preload("ImpersonateAsUser").First(&entry, entry.ID)
+			impersonateAsUserName = entry.ImpersonateAsUser.FirstName + " " + entry.ImpersonateAsUser.LastName
+			employeeName = impersonateAsUserName // Show impersonated user's name as primary
 		}
 
-		draftEntry := a.GetDraftEntry(&entry)
+		// Calculate duration 
+		durationHours := float64(entry.End.Sub(entry.Start).Minutes()) / 60.0
 
-		// Make the draft entry editable
+		draftEntry := DraftEntry{
+			EntryID:               entry.ID,
+			ProjectID:             entry.ProjectID,
+			BillingCodeID:         entry.BillingCodeID,
+			BillingCode:           entry.BillingCode.Code,
+			Notes:                 entry.Notes,
+			StartDate:             entry.Start.In(time.UTC).Format("01/02/2006"),
+			DurationHours:         durationHours,
+			State:                 entry.State,
+			Fee:                   float64(entry.Fee) / 100.0,
+			EmployeeName:          employeeName,
+			EmployeeRole:          employeeRole,
+			ImpersonateAsUserID:   entry.ImpersonateAsUserID,
+			ImpersonateAsUserName: impersonateAsUserName,
+			IsImpersonated:        entry.ImpersonateAsUserID != nil,
+			CreatedByName:         createdByName,
+		}
+
 		draftEntries = append(draftEntries, draftEntry)
 	}
 
@@ -982,9 +1024,11 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		}
 	}
 
-	// Make sure we have all adjustments
-	var adjustments []Adjustment
-	a.DB.Where("invoice_id = ?", i.ID).Find(&adjustments)
+	// Use preloaded adjustments if available, otherwise query
+	adjustments := i.Adjustments
+	if len(adjustments) == 0 {
+		a.DB.Where("invoice_id = ?", i.ID).Find(&adjustments)
+	}
 
 	// Sum adjustments
 	for _, adjustment := range adjustments {
