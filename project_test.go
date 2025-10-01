@@ -255,3 +255,106 @@ func TestAddBillingCodeToProject(t *testing.T) {
 		t.Errorf("Expected billing code 'CONS-001', got '%s'", projectWithBillingCodes.BillingCodes[0].Code)
 	}
 }
+
+// TestProjectWithHubspotDealID tests creating and updating a project with a HubSpot Deal ID
+func TestProjectWithHubspotDealID(t *testing.T) {
+	// Setup test DB
+	db := setupTestDB(t)
+
+	// Create a test account
+	account := Account{
+		Name:      "Test Account",
+		LegalName: "Test Legal Name",
+		Type:      AccountTypeClient.String(),
+		Email:     "test@example.com",
+		Website:   "https://example.com",
+	}
+	if err := db.Create(&account).Error; err != nil {
+		t.Fatalf("Failed to create account: %v", err)
+	}
+
+	// Test 1: Create project with HubSpot Deal ID
+	now := time.Now()
+	oneYearFromNow := now.AddDate(1, 0, 0)
+	hubspotDealID := uint(123456789)
+
+	project := Project{
+		Name:             "Test Project with HubSpot",
+		AccountID:        account.ID,
+		ActiveStart:      now,
+		ActiveEnd:        oneYearFromNow,
+		BudgetHours:      100,
+		BudgetDollars:    10000,
+		Internal:         false,
+		BillingFrequency: "monthly",
+		ProjectType:      ProjectTypeNew.String(),
+		HubspotDealID:    &hubspotDealID,
+	}
+
+	// Save the project
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatalf("Failed to create project: %v", err)
+	}
+
+	// Retrieve the project
+	var savedProject Project
+	if err := db.First(&savedProject, project.ID).Error; err != nil {
+		t.Fatalf("Failed to retrieve created project: %v", err)
+	}
+
+	// Verify HubSpot Deal ID was saved correctly
+	if savedProject.HubspotDealID == nil {
+		t.Errorf("Expected HubSpot Deal ID to be set, got nil")
+	} else if *savedProject.HubspotDealID != hubspotDealID {
+		t.Errorf("Expected HubSpot Deal ID %d, got %d", hubspotDealID, *savedProject.HubspotDealID)
+	}
+
+	// Test 2: Create project without HubSpot Deal ID (should be nil)
+	projectWithoutHubspot := Project{
+		Name:             "Test Project without HubSpot",
+		AccountID:        account.ID,
+		ActiveStart:      now,
+		ActiveEnd:        oneYearFromNow,
+		BudgetHours:      50,
+		BudgetDollars:    5000,
+		Internal:         false,
+		BillingFrequency: "monthly",
+		ProjectType:      ProjectTypeNew.String(),
+	}
+
+	if err := db.Create(&projectWithoutHubspot).Error; err != nil {
+		t.Fatalf("Failed to create project without HubSpot: %v", err)
+	}
+
+	// Retrieve the project without HubSpot ID
+	var savedProjectWithoutHubspot Project
+	if err := db.First(&savedProjectWithoutHubspot, projectWithoutHubspot.ID).Error; err != nil {
+		t.Fatalf("Failed to retrieve project without HubSpot: %v", err)
+	}
+
+	// Verify HubSpot Deal ID is nil
+	if savedProjectWithoutHubspot.HubspotDealID != nil {
+		t.Errorf("Expected HubSpot Deal ID to be nil, got %v", *savedProjectWithoutHubspot.HubspotDealID)
+	}
+
+	// Test 3: Update project to add HubSpot Deal ID
+	newHubspotDealID := uint(987654321)
+	savedProjectWithoutHubspot.HubspotDealID = &newHubspotDealID
+
+	if err := db.Save(&savedProjectWithoutHubspot).Error; err != nil {
+		t.Fatalf("Failed to update project with HubSpot Deal ID: %v", err)
+	}
+
+	// Retrieve the updated project
+	var updatedProject Project
+	if err := db.First(&updatedProject, savedProjectWithoutHubspot.ID).Error; err != nil {
+		t.Fatalf("Failed to retrieve updated project: %v", err)
+	}
+
+	// Verify HubSpot Deal ID was updated correctly
+	if updatedProject.HubspotDealID == nil {
+		t.Errorf("Expected HubSpot Deal ID to be set after update, got nil")
+	} else if *updatedProject.HubspotDealID != newHubspotDealID {
+		t.Errorf("Expected HubSpot Deal ID %d after update, got %d", newHubspotDealID, *updatedProject.HubspotDealID)
+	}
+}
