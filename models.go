@@ -2,6 +2,7 @@ package cronos
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -452,21 +453,82 @@ type Journal struct {
 	Credit     int64   `json:"credit"`
 }
 
+// CommitmentSegment represents a time period with a specific commitment level
+type CommitmentSegment struct {
+	StartDate  string `json:"start_date"` // Format: "2006-01-02"
+	EndDate    string `json:"end_date"`   // Format: "2006-01-02"
+	Commitment int    `json:"commitment"` // Weekly hours
+}
+
+// CommitmentSchedule represents variable commitment over time
+type CommitmentSchedule struct {
+	Segments []CommitmentSegment `json:"segments"`
+}
+
 type StaffingAssignment struct {
 	// StaffingAssignment is a record of an employee's assignment to a project
 	gorm.Model
 	// This is a many-to-many relationship between employees and projects
 	// An employee can be assigned to multiple projects, and a project can have multiple employees
 	// assigned to it. This is a join table that links the two together.
-	// The commitment is the weekly commitment of the employee to the project
-	EmployeeID uint      `json:"employee_id"`
-	Employee   Employee  `json:"employee"`
-	ProjectID  uint      `json:"project_id"`
-	Project    Project   `json:"project"`
-	Commitment int       `json:"commitment"`
-	StartDate  time.Time `json:"start_date"`
-	EndDate    time.Time `json:"end_date"`
-	Entries    []Entry   `json:"entries"`
+	EmployeeID uint     `json:"employee_id"`
+	Employee   Employee `json:"employee"`
+	ProjectID  uint     `json:"project_id"`
+	Project    Project  `json:"project"`
+
+	// Legacy fields - kept for backward compatibility and as defaults
+	Commitment int       `json:"commitment"` // Default/fallback weekly commitment
+	StartDate  time.Time `json:"start_date"` // Overall assignment start
+	EndDate    time.Time `json:"end_date"`   // Overall assignment end
+
+	// New flexible scheduling - JSON field for variable commitments over time
+	// If null/empty, falls back to simple Commitment for entire period
+	CommitmentSchedule string `json:"commitment_schedule" gorm:"type:text"` // JSON-serialized CommitmentSchedule
+
+	Entries []Entry `json:"entries"`
+}
+
+// GetCommitmentForWeek returns the commitment hours for a specific week
+// Uses segments if available, otherwise falls back to simple Commitment field
+func (sa *StaffingAssignment) GetCommitmentForWeek(weekStart time.Time) int {
+	// Try to parse commitment schedule first
+	if sa.CommitmentSchedule != "" {
+		var schedule CommitmentSchedule
+		if err := json.Unmarshal([]byte(sa.CommitmentSchedule), &schedule); err == nil {
+			// Find which segment contains this week
+			for _, segment := range schedule.Segments {
+				segStart, _ := time.Parse("2006-01-02", segment.StartDate)
+				segEnd, _ := time.Parse("2006-01-02", segment.EndDate)
+
+				if (weekStart.Equal(segStart) || weekStart.After(segStart)) &&
+					(weekStart.Equal(segEnd) || weekStart.Before(segEnd)) {
+					return segment.Commitment
+				}
+			}
+		}
+	}
+
+	// Fallback to simple commitment
+	return sa.Commitment
+}
+
+// GetSegments returns the commitment segments, creating a simple one if schedule is empty
+func (sa *StaffingAssignment) GetSegments() []CommitmentSegment {
+	if sa.CommitmentSchedule != "" {
+		var schedule CommitmentSchedule
+		if err := json.Unmarshal([]byte(sa.CommitmentSchedule), &schedule); err == nil {
+			return schedule.Segments
+		}
+	}
+
+	// Return a simple single segment from legacy fields
+	return []CommitmentSegment{
+		{
+			StartDate:  sa.StartDate.Format("2006-01-02"),
+			EndDate:    sa.EndDate.Format("2006-01-02"),
+			Commitment: sa.Commitment,
+		},
+	}
 }
 
 type Asset struct {
@@ -981,14 +1043,14 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		employeeRole := entry.Employee.User.Role
 		createdByName := employeeName
 		var impersonateAsUserName string
-		
+
 		// Handle impersonation
 		if entry.ImpersonateAsUserID != nil {
 			impersonateAsUserName = entry.ImpersonateAsUser.FirstName + " " + entry.ImpersonateAsUser.LastName
 			employeeName = impersonateAsUserName // Show impersonated user's name as primary
 		}
 
-		// Calculate duration 
+		// Calculate duration
 		durationHours := float64(entry.End.Sub(entry.Start).Minutes()) / 60.0
 
 		draftEntry := DraftEntry{
