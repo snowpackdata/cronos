@@ -356,6 +356,11 @@ func TestGetInvoiceLineItems(t *testing.T) {
 		}
 	}
 
+	// Generate line items from entries
+	if err := app.GenerateInvoiceLineItems(&invoice); err != nil {
+		t.Fatalf("Failed to generate invoice line items: %v", err)
+	}
+
 	// Get line items
 	lineItems := app.GetInvoiceLineItems(&invoice)
 
