@@ -174,8 +174,8 @@ func TestUpdateInvoiceTotals(t *testing.T) {
 	// Verify totals
 	// Hours: 2 + 3 = 5 hours
 	// Fees: 5 hours * $150/hour = $750
-	// Adjustments: $100 - $50 + $100 + $100 = $350 (Might include some additional system adjustments)
-	// Total: $750 + $350 = $1100
+	// Adjustments: $100 - $50 + $100 + $100 = $250
+	// Total: $750 + $250 = $1000
 
 	if invoice.TotalHours != 5.0 {
 		t.Errorf("Expected total hours to be 5.0, got %.2f", invoice.TotalHours)
@@ -185,12 +185,12 @@ func TestUpdateInvoiceTotals(t *testing.T) {
 		t.Errorf("Expected total fees to be 750.0, got %.2f", invoice.TotalFees)
 	}
 
-	if invoice.TotalAdjustments != 350.0 {
-		t.Errorf("Expected total adjustments to be 350.0, got %.2f", invoice.TotalAdjustments)
+	if invoice.TotalAdjustments != 250.0 {
+		t.Errorf("Expected total adjustments to be 250.0, got %.2f", invoice.TotalAdjustments)
 	}
 
-	if invoice.TotalAmount != 1100.0 {
-		t.Errorf("Expected total amount to be 1100.0, got %.2f", invoice.TotalAmount)
+	if invoice.TotalAmount != 1000.0 {
+		t.Errorf("Expected total amount to be 1000.0, got %.2f", invoice.TotalAmount)
 	}
 }
 
@@ -354,6 +354,11 @@ func TestGetInvoiceLineItems(t *testing.T) {
 		if err := db.Create(&entries[i]).Error; err != nil {
 			t.Fatalf("Failed to create entry %d: %v", i, err)
 		}
+	}
+
+	// Generate line items from entries
+	if err := app.GenerateInvoiceLineItems(&invoice); err != nil {
+		t.Fatalf("Failed to generate invoice line items: %v", err)
 	}
 
 	// Get line items

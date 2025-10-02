@@ -120,10 +120,12 @@ func (a *App) Migrate() {
 	_ = a.DB.AutoMigrate(&BillingCode{})
 	_ = a.DB.AutoMigrate(&Journal{})
 	_ = a.DB.AutoMigrate(&Invoice{})
+	_ = a.DB.AutoMigrate(&InvoiceLineItem{})
 	_ = a.DB.AutoMigrate(&Adjustment{})
 	_ = a.DB.AutoMigrate(&Survey{})
 	_ = a.DB.AutoMigrate(&SurveyResponse{})
 	_ = a.DB.AutoMigrate(&Bill{})
+	_ = a.DB.AutoMigrate(&BillLineItem{})
 	_ = a.DB.AutoMigrate(&StaffingAssignment{})
 	_ = a.DB.AutoMigrate(&Asset{})
 }

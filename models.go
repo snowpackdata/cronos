@@ -2,6 +2,7 @@ package cronos
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -61,6 +62,12 @@ func (s InvoiceState) String() string {
 	return string(s)
 }
 
+type BillState string
+
+func (s BillState) String() string {
+	return string(s)
+}
+
 type InvoiceType string
 
 func (s InvoiceType) String() string {
@@ -109,6 +116,12 @@ func (c CompensationType) String() string {
 	return string(c)
 }
 
+type LineItemType string
+
+func (l LineItemType) String() string {
+	return string(l)
+}
+
 const (
 	HOUR                      = 60.0
 	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
@@ -152,6 +165,11 @@ const (
 	InvoiceStatePaid     InvoiceState = "INVOICE_STATE_PAID"
 	InvoiceStateVoid     InvoiceState = "INVOICE_STATE_VOID"
 
+	BillStateDraft    BillState = "BILL_STATE_DRAFT"
+	BillStateAccepted BillState = "BILL_STATE_ACCEPTED"
+	BillStatePaid     BillState = "BILL_STATE_PAID"
+	BillStateVoid     BillState = "BILL_STATE_VOID"
+
 	InvoiceTypeAR InvoiceType = "INVOICE_TYPE_ACCOUNTS_RECEIVABLE"
 	InvoiceTypeAP InvoiceType = "INVOICE_TYPE_ACCOUNTS_PAYABLE"
 
@@ -164,12 +182,27 @@ const (
 	AdjustmentStatePaid     AdjustmentState = "ADJUSTMENT_STATE_PAID"
 	AdjustmentStateVoid     AdjustmentState = "ADJUSTMENT_STATE_VOID"
 
-	AccountARClientBillable JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_BILLABLE"
-	AccountAPStaffPayroll   JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_PAYROLL"
-	AccountARIncome         JournalAccountType = "ACCOUNTS_RECEIVABLE_INCOME"
-	AccountAPDiscount       JournalAccountType = "ACCOUNTS_PAYABLE_EXPENSE_DISCOUNT"
-	AccountAPStaffBonus     JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_BONUS"
-	AccountARClientFee      JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_FEE"
+	// New accrual accounting structure
+	// Assets
+	AccountAccruedReceivables JournalAccountType = "ACCRUED_RECEIVABLES"
+	AccountAccountsReceivable JournalAccountType = "ACCOUNTS_RECEIVABLE"
+	AccountCash               JournalAccountType = "CASH"
+
+	// Liabilities
+	AccountAccruedPayroll  JournalAccountType = "ACCRUED_PAYROLL"
+	AccountAccountsPayable JournalAccountType = "ACCOUNTS_PAYABLE"
+
+	// Revenue
+	AccountRevenue           JournalAccountType = "REVENUE"
+	AccountAdjustmentRevenue JournalAccountType = "ADJUSTMENT_REVENUE"
+
+	// Contra-Revenue
+	AccountCreditsIssued JournalAccountType = "CREDITS_ISSUED"
+	AccountDiscounts     JournalAccountType = "DISCOUNTS"
+
+	// Expenses
+	AccountPayrollExpense    JournalAccountType = "PAYROLL_EXPENSE"
+	AccountAdjustmentExpense JournalAccountType = "ADJUSTMENT_EXPENSE"
 
 	// AECommission rate constants
 	// These rates are percentages (0.05 = 5%)
@@ -194,6 +227,12 @@ const (
 	EmploymentStatusActive     EmploymentStatus = "EMPLOYMENT_STATUS_ACTIVE"
 	EmploymentStatusInactive   EmploymentStatus = "EMPLOYMENT_STATUS_INACTIVE"
 	EmploymentStatusTerminated EmploymentStatus = "EMPLOYMENT_STATUS_TERMINATED"
+
+	// Line item types
+	LineItemTypeTimesheet  LineItemType = "LINE_ITEM_TYPE_TIMESHEET"
+	LineItemTypeSalary     LineItemType = "LINE_ITEM_TYPE_SALARY"
+	LineItemTypeCommission LineItemType = "LINE_ITEM_TYPE_COMMISSION"
+	LineItemTypeAdjustment LineItemType = "LINE_ITEM_TYPE_ADJUSTMENT"
 
 	CompensationTypeFullyVariable    CompensationType = "COMPENSATION_TYPE_FULLY_VARIABLE"
 	CompensationTypeSalaried         CompensationType = "COMPENSATION_TYPE_SALARIED"
@@ -357,27 +396,52 @@ func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
 // the term Invoice, these can mean either an invoice or bill in relationship to Snowpack.
 type Invoice struct {
 	gorm.Model
-	Name             string       `json:"name"`
-	AccountID        uint         `json:"account_id"`
-	Account          Account      `json:"account"`
-	ProjectID        *uint        `json:"project_id"`
-	Project          Project      `json:"project"`
-	PeriodStart      time.Time    `json:"period_start"`
-	PeriodEnd        time.Time    `json:"period_end"`
-	Entries          []Entry      `json:"entries"`
-	Adjustments      []Adjustment `json:"adjustments"`
-	AcceptedAt       time.Time    `json:"accepted_at"`
-	SentAt           time.Time    `json:"sent_at"`
-	DueAt            time.Time    `json:"due_at"`
-	ClosedAt         time.Time    `json:"closed_at"`
-	State            string       `json:"state"`
-	Type             string       `json:"type"`
-	TotalHours       float64      `json:"total_hours"`
-	TotalFees        float64      `json:"total_fees"`
-	TotalAdjustments float64      `json:"total_adjustments"`
-	TotalAmount      float64      `json:"total_amount"`
-	JournalID        *uint        `json:"journal_id"`
-	GCSFile          string       `json:"file"`
+	Name             string            `json:"name"`
+	AccountID        uint              `json:"account_id"`
+	Account          Account           `json:"account"`
+	ProjectID        *uint             `json:"project_id"`
+	Project          Project           `json:"project"`
+	PeriodStart      time.Time         `json:"period_start"`
+	PeriodEnd        time.Time         `json:"period_end"`
+	Entries          []Entry           `json:"entries"`
+	Adjustments      []Adjustment      `json:"adjustments"`
+	LineItems        []InvoiceLineItem `json:"line_items"`
+	AcceptedAt       time.Time         `json:"accepted_at"`
+	SentAt           time.Time         `json:"sent_at"`
+	DueAt            time.Time         `json:"due_at"`
+	ClosedAt         time.Time         `json:"closed_at"`
+	State            string            `json:"state"`
+	Type             string            `json:"type"`
+	TotalHours       float64           `json:"total_hours"`
+	TotalFees        float64           `json:"total_fees"`
+	TotalAdjustments float64           `json:"total_adjustments"`
+	TotalAmount      float64           `json:"total_amount"`
+	JournalID        *uint             `json:"journal_id"`
+	GCSFile          string            `json:"file"`
+}
+
+// InvoiceLineItem represents a single line item on an invoice or bill
+// For invoices: entries are rolled up by billing code
+// For bills: separate lines for salary, commission, timesheet, adjustments
+type InvoiceLineItem struct {
+	gorm.Model
+	InvoiceID   uint    `json:"invoice_id"`
+	Type        string  `json:"type"` // LineItemType
+	Description string  `json:"description"`
+	Quantity    float64 `json:"quantity"` // Hours for timesheets
+	Rate        float64 `json:"rate"`     // Hourly rate (for display, in dollars)
+	Amount      int64   `json:"amount"`   // Total in cents
+
+	// Source references for traceability
+	BillingCodeID *uint        `json:"billing_code_id,omitempty"`
+	BillingCode   *BillingCode `json:"billing_code,omitempty" gorm:"foreignKey:BillingCodeID"`
+	EmployeeID    *uint        `json:"employee_id,omitempty"`
+	Employee      *Employee    `json:"employee,omitempty" gorm:"foreignKey:EmployeeID"`
+	EntryIDs      string       `json:"entry_ids,omitempty"` // JSON array of entry IDs
+	AdjustmentID  *uint        `json:"adjustment_id,omitempty"`
+	Adjustment    *Adjustment  `json:"adjustment,omitempty" gorm:"foreignKey:AdjustmentID"`
+	CommissionID  *uint        `json:"commission_id,omitempty"`
+	Commission    *Commission  `json:"commission,omitempty" gorm:"foreignKey:CommissionID"`
 }
 
 // Adjustment
@@ -419,22 +483,70 @@ type Commission struct {
 // linked to the employees.
 type Bill struct {
 	gorm.Model
-	Name             string       `json:"name"`
-	EmployeeID       uint         `json:"user_id"`
-	Employee         Employee     `json:"user"`
-	PeriodStart      time.Time    `json:"period_start"`
-	PeriodEnd        time.Time    `json:"period_end"`
-	Entries          []Entry      `json:"entries"`
-	Adjustments      []Adjustment `json:"adjustments"`
-	Commissions      []Commission `json:"commissions" gorm:"foreignKey:BillID"`
-	AcceptedAt       *time.Time   `json:"accepted_at"`
-	ClosedAt         *time.Time   `json:"closed_at"`
-	TotalHours       float64      `json:"total_hours"`
-	TotalFees        int          `json:"total_fees"`
-	TotalAdjustments float64      `json:"total_adjustments"`
-	TotalCommissions int          `json:"total_commissions"`
-	TotalAmount      int          `json:"total_amount"`
-	GCSFile          string       `json:"file"`
+	Name             string         `json:"name"`
+	State            BillState      `json:"state"`
+	EmployeeID       uint           `json:"user_id"`
+	Employee         Employee       `json:"user"`
+	PeriodStart      time.Time      `json:"period_start"`
+	PeriodEnd        time.Time      `json:"period_end"`
+	Entries          []Entry        `json:"entries"`
+	Adjustments      []Adjustment   `json:"adjustments"`
+	Commissions      []Commission   `json:"commissions" gorm:"foreignKey:BillID"`
+	LineItems        []BillLineItem `json:"line_items"`
+	AcceptedAt       *time.Time     `json:"accepted_at"`
+	ClosedAt         *time.Time     `json:"closed_at"`
+	TotalHours       float64        `json:"total_hours"`
+	TotalFees        int            `json:"total_fees"`
+	TotalAdjustments float64        `json:"total_adjustments"`
+	TotalCommissions int            `json:"total_commissions"`
+	TotalAmount      int            `json:"total_amount"`
+	GCSFile          string         `json:"file"`
+}
+
+// BillLineItem represents a single line item on a payroll bill
+// Separate lines for: salary, commission, timesheet hours, adjustments
+type BillLineItem struct {
+	gorm.Model
+	BillID      uint    `json:"bill_id"`
+	Type        string  `json:"type"` // LineItemType
+	Description string  `json:"description"`
+	Quantity    float64 `json:"quantity"` // Hours for timesheets
+	Rate        float64 `json:"rate"`     // Hourly rate (for display, in dollars)
+	Amount      int64   `json:"amount"`   // Total in cents
+
+	// Source references for traceability
+	BillingCodeID *uint        `json:"billing_code_id,omitempty"`
+	BillingCode   *BillingCode `json:"billing_code,omitempty" gorm:"foreignKey:BillingCodeID"`
+	EntryIDs      string       `json:"entry_ids,omitempty"` // JSON array of entry IDs
+	AdjustmentID  *uint        `json:"adjustment_id,omitempty"`
+	Adjustment    *Adjustment  `json:"adjustment,omitempty" gorm:"foreignKey:AdjustmentID"`
+	CommissionID  *uint        `json:"commission_id,omitempty"`
+	Commission    *Commission  `json:"commission,omitempty" gorm:"foreignKey:CommissionID"`
+}
+
+// VerifyJournalBalance checks that all journal entries balance (total debits = total credits)
+// Returns the net balance (should be 0) and an error if they don't balance
+func (a *App) VerifyJournalBalance() (int64, error) {
+	var totalDebits int64
+	var totalCredits int64
+
+	if err := a.DB.Raw("SELECT COALESCE(SUM(debit), 0) FROM journals").Scan(&totalDebits).Error; err != nil {
+		return 0, fmt.Errorf("failed to sum debits: %w", err)
+	}
+
+	if err := a.DB.Raw("SELECT COALESCE(SUM(credit), 0) FROM journals").Scan(&totalCredits).Error; err != nil {
+		return 0, fmt.Errorf("failed to sum credits: %w", err)
+	}
+
+	balance := totalDebits - totalCredits
+	log.Printf("Journal Balance: Debits=$%.2f, Credits=$%.2f, Net=$%.2f",
+		float64(totalDebits)/100, float64(totalCredits)/100, float64(balance)/100)
+
+	if balance != 0 {
+		return balance, fmt.Errorf("journal entries are unbalanced by $%.2f", float64(balance)/100)
+	}
+
+	return 0, nil
 }
 
 // Journal refers to a single entry in a journal, this is a single line item that is used to track
@@ -452,21 +564,82 @@ type Journal struct {
 	Credit     int64   `json:"credit"`
 }
 
+// CommitmentSegment represents a time period with a specific commitment level
+type CommitmentSegment struct {
+	StartDate  string `json:"start_date"` // Format: "2006-01-02"
+	EndDate    string `json:"end_date"`   // Format: "2006-01-02"
+	Commitment int    `json:"commitment"` // Weekly hours
+}
+
+// CommitmentSchedule represents variable commitment over time
+type CommitmentSchedule struct {
+	Segments []CommitmentSegment `json:"segments"`
+}
+
 type StaffingAssignment struct {
 	// StaffingAssignment is a record of an employee's assignment to a project
 	gorm.Model
 	// This is a many-to-many relationship between employees and projects
 	// An employee can be assigned to multiple projects, and a project can have multiple employees
 	// assigned to it. This is a join table that links the two together.
-	// The commitment is the weekly commitment of the employee to the project
-	EmployeeID uint      `json:"employee_id"`
-	Employee   Employee  `json:"employee"`
-	ProjectID  uint      `json:"project_id"`
-	Project    Project   `json:"project"`
-	Commitment int       `json:"commitment"`
-	StartDate  time.Time `json:"start_date"`
-	EndDate    time.Time `json:"end_date"`
-	Entries    []Entry   `json:"entries"`
+	EmployeeID uint     `json:"employee_id"`
+	Employee   Employee `json:"employee"`
+	ProjectID  uint     `json:"project_id"`
+	Project    Project  `json:"project"`
+
+	// Legacy fields - kept for backward compatibility and as defaults
+	Commitment int       `json:"commitment"` // Default/fallback weekly commitment
+	StartDate  time.Time `json:"start_date"` // Overall assignment start
+	EndDate    time.Time `json:"end_date"`   // Overall assignment end
+
+	// New flexible scheduling - JSON field for variable commitments over time
+	// If null/empty, falls back to simple Commitment for entire period
+	CommitmentSchedule string `json:"commitment_schedule" gorm:"type:text"` // JSON-serialized CommitmentSchedule
+
+	Entries []Entry `json:"entries"`
+}
+
+// GetCommitmentForWeek returns the commitment hours for a specific week
+// Uses segments if available, otherwise falls back to simple Commitment field
+func (sa *StaffingAssignment) GetCommitmentForWeek(weekStart time.Time) int {
+	// Try to parse commitment schedule first
+	if sa.CommitmentSchedule != "" {
+		var schedule CommitmentSchedule
+		if err := json.Unmarshal([]byte(sa.CommitmentSchedule), &schedule); err == nil {
+			// Find which segment contains this week
+			for _, segment := range schedule.Segments {
+				segStart, _ := time.Parse("2006-01-02", segment.StartDate)
+				segEnd, _ := time.Parse("2006-01-02", segment.EndDate)
+
+				if (weekStart.Equal(segStart) || weekStart.After(segStart)) &&
+					(weekStart.Equal(segEnd) || weekStart.Before(segEnd)) {
+					return segment.Commitment
+				}
+			}
+		}
+	}
+
+	// Fallback to simple commitment
+	return sa.Commitment
+}
+
+// GetSegments returns the commitment segments, creating a simple one if schedule is empty
+func (sa *StaffingAssignment) GetSegments() []CommitmentSegment {
+	if sa.CommitmentSchedule != "" {
+		var schedule CommitmentSchedule
+		if err := json.Unmarshal([]byte(sa.CommitmentSchedule), &schedule); err == nil {
+			return schedule.Segments
+		}
+	}
+
+	// Return a simple single segment from legacy fields
+	return []CommitmentSegment{
+		{
+			StartDate:  sa.StartDate.Format("2006-01-02"),
+			EndDate:    sa.EndDate.Format("2006-01-02"),
+			Commitment: sa.Commitment,
+		},
+	}
 }
 
 type Asset struct {
@@ -626,13 +799,15 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 	}
 	var multiplier float64
 	for _, adjustment := range adjustments {
-		if adjustment.Type == AdjustmentTypeCredit.String() {
-			multiplier = -1.0
-		} else {
-			multiplier = 1.0
-		}
 		if adjustment.State != AdjustmentStateVoid.String() {
-			totalAdjustments += adjustment.Amount * multiplier
+			// Always use absolute value, then apply sign based on type
+			absAmount := math.Abs(adjustment.Amount)
+			if adjustment.Type == AdjustmentTypeCredit.String() {
+				multiplier = -1.0
+			} else {
+				multiplier = 1.0
+			}
+			totalAdjustments += absAmount * multiplier
 		}
 	}
 	i.TotalHours = totalHours
@@ -642,7 +817,234 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 	a.DB.Omit(clause.Associations).Save(&i)
 }
 
-type InvoiceLineItem struct {
+// GenerateInvoiceLineItems creates line items for an invoice
+// Entries are rolled up by billing code, adjustments are separate line items
+func (a *App) GenerateInvoiceLineItems(invoice *Invoice) error {
+	// Delete existing line items
+	a.DB.Where("invoice_id = ?", invoice.ID).Delete(&InvoiceLineItem{})
+
+	// Load entries with billing codes
+	var entries []Entry
+	if err := a.DB.Preload("BillingCode").Preload("BillingCode.Rate").
+		Where("invoice_id = ? AND state != ?", invoice.ID, EntryStateVoid.String()).
+		Find(&entries).Error; err != nil {
+		return fmt.Errorf("failed to load entries: %w", err)
+	}
+
+	// Group entries by billing code
+	entriesByBillingCode := make(map[uint][]Entry)
+	for _, entry := range entries {
+		entriesByBillingCode[entry.BillingCodeID] = append(entriesByBillingCode[entry.BillingCodeID], entry)
+	}
+
+	// Create line items for each billing code
+	for billingCodeID, bcEntries := range entriesByBillingCode {
+		var totalHours float64
+		var totalAmount int64
+		var entryIDs []uint
+		var billingCode BillingCode
+		var rate float64
+
+		for _, entry := range bcEntries {
+			totalHours += entry.Duration().Hours()
+			totalAmount += int64(entry.Fee)
+			entryIDs = append(entryIDs, entry.ID)
+			billingCode = entry.BillingCode
+			if billingCode.Rate.Amount > 0 {
+				rate = billingCode.Rate.Amount
+			}
+		}
+
+		// Marshal entry IDs to JSON
+		entryIDsJSON, _ := json.Marshal(entryIDs)
+
+		description := fmt.Sprintf("%s - %.1f hours", billingCode.Name, totalHours)
+
+		lineItem := InvoiceLineItem{
+			InvoiceID:     invoice.ID,
+			Type:          LineItemTypeTimesheet.String(),
+			Description:   description,
+			Quantity:      totalHours,
+			Rate:          rate,
+			Amount:        totalAmount,
+			BillingCodeID: &billingCodeID,
+			EntryIDs:      string(entryIDsJSON),
+		}
+
+		if err := a.DB.Create(&lineItem).Error; err != nil {
+			return fmt.Errorf("failed to create timesheet line item: %w", err)
+		}
+	}
+
+	// Create line items for adjustments
+	var adjustments []Adjustment
+	if err := a.DB.Where("invoice_id = ? AND state != ?", invoice.ID, AdjustmentStateVoid.String()).
+		Find(&adjustments).Error; err != nil {
+		return fmt.Errorf("failed to load adjustments: %w", err)
+	}
+
+	for _, adjustment := range adjustments {
+		amount := int64(math.Abs(adjustment.Amount) * 100) // Convert to cents
+		if adjustment.Type == AdjustmentTypeCredit.String() {
+			amount = -amount // Credits are negative
+		}
+
+		adjType := "Fee"
+		if adjustment.Type == AdjustmentTypeCredit.String() {
+			adjType = "Credit"
+		}
+		description := fmt.Sprintf("%s: %s", adjType, adjustment.Notes)
+
+		lineItem := InvoiceLineItem{
+			InvoiceID:    invoice.ID,
+			Type:         LineItemTypeAdjustment.String(),
+			Description:  description,
+			Quantity:     0,
+			Rate:         0,
+			Amount:       amount,
+			AdjustmentID: &adjustment.ID,
+		}
+
+		if err := a.DB.Create(&lineItem).Error; err != nil {
+			return fmt.Errorf("failed to create adjustment line item: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GenerateBillLineItems creates line items for a bill
+// Separate lines for: timesheet (grouped by billing code), commission, adjustments
+func (a *App) GenerateBillLineItems(bill *Bill) error {
+	// Delete existing line items
+	a.DB.Where("bill_id = ?", bill.ID).Delete(&BillLineItem{})
+
+	// Load employee
+	var employee Employee
+	if err := a.DB.Where("id = ?", bill.EmployeeID).First(&employee).Error; err != nil {
+		return fmt.Errorf("failed to load employee: %w", err)
+	}
+
+	// Group timesheet entries by billing code
+	var entries []Entry
+	if err := a.DB.Preload("BillingCode").Preload("BillingCode.InternalRate").
+		Where("bill_id = ? AND state != ?", bill.ID, EntryStateVoid.String()).
+		Find(&entries).Error; err != nil {
+		return fmt.Errorf("failed to load entries: %w", err)
+	}
+
+	entriesByBillingCode := make(map[uint][]Entry)
+	for _, entry := range entries {
+		entriesByBillingCode[entry.BillingCodeID] = append(entriesByBillingCode[entry.BillingCodeID], entry)
+	}
+
+	// Create line items for each billing code
+	for billingCodeID, bcEntries := range entriesByBillingCode {
+		var totalHours float64
+		var totalAmount int64
+		var entryIDs []uint
+		var billingCode BillingCode
+		var rate float64
+
+		for _, entry := range bcEntries {
+			hours := entry.Duration().Hours()
+			totalHours += hours
+
+			// Calculate internal cost
+			internalRate := a.GetEmployeeBillRate(&employee, entry.BillingCodeID)
+			totalAmount += int64(internalRate * hours * 100)
+
+			entryIDs = append(entryIDs, entry.ID)
+			billingCode = entry.BillingCode
+			rate = internalRate
+		}
+
+		entryIDsJSON, _ := json.Marshal(entryIDs)
+
+		description := fmt.Sprintf("%s - %.1f hours", billingCode.Name, totalHours)
+
+		lineItem := BillLineItem{
+			BillID:        bill.ID,
+			Type:          LineItemTypeTimesheet.String(),
+			Description:   description,
+			Quantity:      totalHours,
+			Rate:          rate,
+			Amount:        totalAmount,
+			BillingCodeID: &billingCodeID,
+			EntryIDs:      string(entryIDsJSON),
+		}
+
+		if err := a.DB.Create(&lineItem).Error; err != nil {
+			return fmt.Errorf("failed to create timesheet line item: %w", err)
+		}
+	}
+
+	// Create line items for commissions
+	var commissions []Commission
+	if err := a.DB.Where("bill_id = ?", bill.ID).Find(&commissions).Error; err != nil {
+		return fmt.Errorf("failed to load commissions: %w", err)
+	}
+
+	for _, commission := range commissions {
+		description := fmt.Sprintf("Commission - %s", commission.Role)
+		if commission.ProjectName != "" {
+			description = fmt.Sprintf("Commission - %s (%s)", commission.Role, commission.ProjectName)
+		}
+
+		lineItem := BillLineItem{
+			BillID:       bill.ID,
+			Type:         LineItemTypeCommission.String(),
+			Description:  description,
+			Quantity:     0,
+			Rate:         0,
+			Amount:       int64(commission.Amount),
+			CommissionID: &commission.ID,
+		}
+
+		if err := a.DB.Create(&lineItem).Error; err != nil {
+			return fmt.Errorf("failed to create commission line item: %w", err)
+		}
+	}
+
+	// Create line items for adjustments
+	var adjustments []Adjustment
+	if err := a.DB.Where("bill_id = ? AND state != ?", bill.ID, AdjustmentStateVoid.String()).
+		Find(&adjustments).Error; err != nil {
+		return fmt.Errorf("failed to load adjustments: %w", err)
+	}
+
+	for _, adjustment := range adjustments {
+		amount := int64(math.Abs(adjustment.Amount) * 100)
+		if adjustment.Type == AdjustmentTypeCredit.String() {
+			amount = -amount
+		}
+
+		adjType := "Fee"
+		if adjustment.Type == AdjustmentTypeCredit.String() {
+			adjType = "Credit"
+		}
+		description := fmt.Sprintf("%s: %s", adjType, adjustment.Notes)
+
+		lineItem := BillLineItem{
+			BillID:       bill.ID,
+			Type:         LineItemTypeAdjustment.String(),
+			Description:  description,
+			Quantity:     0,
+			Rate:         0,
+			Amount:       amount,
+			AdjustmentID: &adjustment.ID,
+		}
+
+		if err := a.DB.Create(&lineItem).Error; err != nil {
+			return fmt.Errorf("failed to create adjustment line item: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// InvoiceLineItemDisplay is used for PDF generation and display purposes
+type InvoiceLineItemDisplay struct {
 	BillingCode    string  `json:"billing_code"`
 	Project        string  `json:"project"`
 	ProjectName    string  `json:"project_name"`
@@ -653,7 +1055,8 @@ type InvoiceLineItem struct {
 	Total          float64 `json:"total"`
 }
 
-type BillLineItem struct {
+// BillLineItemDisplay is used for PDF generation and display purposes
+type BillLineItemDisplay struct {
 	BillingCode     string  `json:"billing_code"`
 	BillingCodeCode string  `json:"billing_code_code"`
 	Hours           float64 `json:"hours"`
@@ -671,51 +1074,36 @@ type invoiceEntry struct {
 	hoursFormatted string
 }
 
-func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItem {
-	var invoiceLineItems []InvoiceLineItem
-	var entries []Entry
-	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").Preload("Project").Where("invoice_id = ? AND state != ?", i.ID, EntryStateVoid.String()).Find(&entries)
+func (a *App) GetInvoiceLineItems(i *Invoice) []InvoiceLineItemDisplay {
+	// Load line items from database (created at invoice approval)
+	var dbLineItems []InvoiceLineItem
+	a.DB.Preload("BillingCode").Preload("BillingCode.Rate").
+		Where("invoice_id = ? AND type = ?", i.ID, LineItemTypeTimesheet.String()).
+		Find(&dbLineItems)
 
-	// Create a map to index line items - use a composite key of project ID + billing code
-	billingCodeMap := make(map[string]InvoiceLineItem)
-
-	// Populate the list of line items
-	for _, entry := range entries {
-		// Create a unique key that includes both project and billing code
-		mapKey := fmt.Sprintf("%d-%s", entry.ProjectID, entry.BillingCode.Code)
-
-		if lineItem, exists := billingCodeMap[mapKey]; exists {
-			// Update the existing line item
-			lineItem.Hours += entry.Duration().Hours()
-			lineItem.Total = lineItem.Hours * lineItem.Rate
-			billingCodeMap[mapKey] = lineItem
-		} else {
-			// Create a new line item
-			billingCodeMap[mapKey] = InvoiceLineItem{
-				BillingCode: entry.BillingCode.Code,
-				Project:     entry.BillingCode.Name,
-				ProjectName: entry.Project.Name,
-				Hours:       entry.Duration().Hours(),
-				Rate:        entry.BillingCode.Rate.Amount,
-				Total:       entry.Duration().Hours() * entry.BillingCode.Rate.Amount,
-			}
+	// Convert database line items to display format
+	var displayLineItems []InvoiceLineItemDisplay
+	for _, lineItem := range dbLineItems {
+		billingCodeCode := ""
+		billingCodeName := ""
+		if lineItem.BillingCode != nil {
+			billingCodeCode = lineItem.BillingCode.Code
+			billingCodeName = lineItem.BillingCode.Name
 		}
+
+		displayLineItems = append(displayLineItems, InvoiceLineItemDisplay{
+			BillingCode:    billingCodeCode,
+			Project:        billingCodeName,
+			ProjectName:    "", // Not stored on line item, but not critical for display
+			Hours:          lineItem.Quantity,
+			HoursFormatted: fmt.Sprintf("%.2f", lineItem.Quantity),
+			Rate:           lineItem.Rate,
+			RateFormatted:  fmt.Sprintf("%.2f", lineItem.Rate),
+			Total:          float64(lineItem.Amount) / 100.0, // Convert from cents
+		})
 	}
 
-	// Convert the map values to a slice
-	for _, lineItem := range billingCodeMap {
-		lineItem.HoursFormatted = fmt.Sprintf("%.2f", lineItem.Hours)
-		lineItem.RateFormatted = fmt.Sprintf("%.2f", lineItem.Rate)
-		invoiceLineItems = append(invoiceLineItems, lineItem)
-	}
-
-	for i, _ := range invoiceLineItems {
-		invoiceLineItems[i].Total = invoiceLineItems[i].Hours * invoiceLineItems[i].Rate
-		invoiceLineItems[i].HoursFormatted = fmt.Sprintf("%.2f", invoiceLineItems[i].Hours)
-		invoiceLineItems[i].RateFormatted = fmt.Sprintf("%.2f", invoiceLineItems[i].Rate)
-	}
-
-	return invoiceLineItems
+	return displayLineItems
 }
 
 func (a *App) GetInvoiceEntries(i *Invoice) []invoiceEntry {
@@ -934,23 +1322,23 @@ type DraftInvoice struct {
 }
 
 type AcceptedInvoice struct {
-	InvoiceID      uint              `json:"ID"`
-	InvoiceName    string            `json:"invoice_name"`
-	AccountID      uint              `json:"account_id"`
-	AccountName    string            `json:"account_name"`
-	ProjectID      uint              `json:"project_id"`
-	ProjectName    string            `json:"project_name"`
-	PeriodStart    string            `json:"period_start"`
-	PeriodEnd      string            `json:"period_end"`
-	File           string            `json:"file"`
-	LineItemsCount int               `json:"line_items_count"`
-	TotalHours     float64           `json:"total_hours"`
-	TotalFees      float64           `json:"total_fees"`
-	State          string            `json:"state"`
-	SentAt         string            `json:"sent_at"`
-	DueAt          string            `json:"due_at"`
-	ClosedAt       string            `json:"closed_at"`
-	LineItems      []InvoiceLineItem `json:"line_items"`
+	InvoiceID      uint                     `json:"ID"`
+	InvoiceName    string                   `json:"invoice_name"`
+	AccountID      uint                     `json:"account_id"`
+	AccountName    string                   `json:"account_name"`
+	ProjectID      uint                     `json:"project_id"`
+	ProjectName    string                   `json:"project_name"`
+	PeriodStart    string                   `json:"period_start"`
+	PeriodEnd      string                   `json:"period_end"`
+	File           string                   `json:"file"`
+	LineItemsCount int                      `json:"line_items_count"`
+	TotalHours     float64                  `json:"total_hours"`
+	TotalFees      float64                  `json:"total_fees"`
+	State          string                   `json:"state"`
+	SentAt         string                   `json:"sent_at"`
+	DueAt          string                   `json:"due_at"`
+	ClosedAt       string                   `json:"closed_at"`
+	LineItems      []InvoiceLineItemDisplay `json:"line_items"`
 }
 
 func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
@@ -981,14 +1369,14 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		employeeRole := entry.Employee.User.Role
 		createdByName := employeeName
 		var impersonateAsUserName string
-		
+
 		// Handle impersonation
 		if entry.ImpersonateAsUserID != nil {
 			impersonateAsUserName = entry.ImpersonateAsUser.FirstName + " " + entry.ImpersonateAsUser.LastName
 			employeeName = impersonateAsUserName // Show impersonated user's name as primary
 		}
 
-		// Calculate duration 
+		// Calculate duration
 		durationHours := float64(entry.End.Sub(entry.Start).Minutes()) / 60.0
 
 		draftEntry := DraftEntry{
@@ -1207,6 +1595,7 @@ func (a *App) GenerateBills(i *Invoice) {
 			log.Printf("Creating new bill for employee ID: %d", user)
 			bill = Bill{
 				Name:        "Payroll " + userObj.FirstName + " " + userObj.LastName + " " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
+				State:       BillStateDraft,
 				EmployeeID:  user,
 				PeriodStart: firstOfMonth,
 				PeriodEnd:   lastOfMonth,
@@ -1238,6 +1627,16 @@ func (a *App) GenerateBills(i *Invoice) {
 
 		// Recalculate bill totals from all entries in the database
 		a.RecalculateBillTotals(&bill)
+
+		// Generate line items for the bill (salary, timesheet by billing code, commission, adjustments)
+		log.Printf("Generating line items for bill ID: %d", bill.ID)
+		if err := a.GenerateBillLineItems(&bill); err != nil {
+			log.Printf("Warning: Failed to generate line items for bill %d: %v", bill.ID, err)
+		}
+
+		// Note: Journal entries are NOT booked here. They are booked at invoice approval (as accruals)
+		// and then moved to AP when the invoice is sent/paid by calling BookBillAccrual explicitly.
+		// This allows bills to be created without prematurely moving accruals to AP or double-booking expenses.
 
 		// Note: SaveBillToGCS is not called here to avoid requiring GCS credentials
 		// during testing. Callers should explicitly call SaveBillToGCS if needed.
@@ -1306,6 +1705,18 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 		log.Printf("  Adjustment ID %d: $%.2f", adjustment.ID, float64(adjustmentAmount)/100)
 	}
 
+	// Calculate total commissions
+	var commissions []Commission
+	bill.TotalCommissions = 0
+	if err := a.DB.Where("bill_id = ?", bill.ID).Find(&commissions).Error; err != nil {
+		log.Printf("Error loading commissions for bill ID %d: %v", bill.ID, err)
+	} else {
+		for _, commission := range commissions {
+			bill.TotalCommissions += commission.Amount
+			log.Printf("  Commission ID %d (%s): $%.2f", commission.ID, commission.Role, float64(commission.Amount)/100)
+		}
+	}
+
 	// Update the total amount
 	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount))
 	bill.TotalHours = math.Round(bill.TotalHours*100) / 100
@@ -1325,8 +1736,22 @@ func (a *App) MarkBillPaid(b *Bill) {
 	// Recalculate bill totals first to ensure accurate values
 	a.RecalculateBillTotals(b)
 
+	// Approve and process any draft adjustments on this bill
+	var adjustments []Adjustment
+	if err := a.DB.Where("bill_id = ? AND state = ?", b.ID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
+		if len(adjustments) > 0 {
+			log.Printf("Found %d draft adjustments to approve and process on bill %d", len(adjustments), b.ID)
+			for _, adj := range adjustments {
+				adj.State = AdjustmentStateApproved.String()
+				a.DB.Save(&adj)
+				log.Printf("Approved adjustment ID %d (amount: $%.2f)", adj.ID, adj.Amount)
+			}
+		}
+	}
+
 	// Now mark the bill as paid
 	nowTime := time.Now()
+	b.State = BillStatePaid
 	b.ClosedAt = &nowTime
 
 	// Save the updated bill
@@ -1334,108 +1759,45 @@ func (a *App) MarkBillPaid(b *Bill) {
 		log.Printf("Error saving bill as paid: %v", err)
 		return
 	}
+
+	// Record cash payment and clear accounts payable (includes adjustments)
+	log.Printf("Recording cash payment for bill ID: %d", b.ID)
+	if err := a.RecordBillCashPayment(b); err != nil {
+		log.Printf("Warning: Failed to record cash payment for bill %d: %v", b.ID, err)
+	}
+
 	log.Printf("Bill ID %d marked as paid with accurate totals", b.ID)
-
-	// Get the User
-	var userObj Employee
-	a.DB.Where("id = ?", b.EmployeeID).First(&userObj)
-	// Now add a journal entry to reflect the bill
-	journal := Journal{
-		Account:    AccountAPStaffPayroll.String(),
-		SubAccount: userObj.FirstName + " " + userObj.LastName,
-		Debit:      int64(b.TotalAmount), // Use the total amount which includes fees, commissions, and adjustments
-		Credit:     0,
-		Memo:       b.Name,
-		BillID:     &b.ID,
-	}
-	if err := a.DB.Create(&journal).Error; err != nil {
-		log.Printf("Error creating journal entry for bill: %v", err)
-	} else {
-		log.Printf("Created journal entry for bill ID %d with amount $%.2f", b.ID, float64(b.TotalAmount)/100)
-	}
 }
 
-func (a *App) AddJournalEntries(i *Invoice) {
-	// First we need to add the entries for the total fee of the invoice
-	var project Project
-	var account Account
+func (a *App) GetBillLineItems(b *Bill) []BillLineItemDisplay {
+	// Load line items from database (created at bill generation)
+	var dbLineItems []BillLineItem
+	a.DB.Preload("BillingCode").
+		Where("bill_id = ? AND type = ?", b.ID, LineItemTypeTimesheet.String()).
+		Find(&dbLineItems)
 
-	if i.ProjectID != nil && *i.ProjectID != 0 {
-		a.DB.Preload("Account").Where("id = ?", *i.ProjectID).First(&project)
-		account = project.Account
-	} else {
-		// If no project is associated, load the account directly
-		a.DB.Where("id = ?", i.AccountID).First(&account)
-	}
-
-	journal := Journal{
-		Account:    AccountARClientBillable.String(),
-		SubAccount: account.LegalName,
-		Debit:      0,
-		Credit:     int64(i.TotalFees * 100),
-		Memo:       i.Name,
-		InvoiceID:  &i.ID,
-	}
-	a.DB.Create(&journal)
-	// Associate the invoice
-	i.JournalID = &journal.ID
-	a.DB.Save(&i)
-	// Now we need to add an entry for any adjustments
-	if i.TotalAdjustments != 0 {
-		adjustmentJournal := Journal{
-			Account:    AccountARClientFee.String(),
-			SubAccount: account.LegalName,
-			Debit:      0,
-			Credit:     int64(i.TotalAdjustments * 100),
-			Memo:       i.Name,
-			InvoiceID:  &i.ID,
+	// Convert database line items to display format
+	var displayLineItems []BillLineItemDisplay
+	for _, lineItem := range dbLineItems {
+		billingCodeName := ""
+		billingCodeCode := ""
+		if lineItem.BillingCode != nil {
+			billingCodeName = lineItem.BillingCode.Name
+			billingCodeCode = lineItem.BillingCode.Code
 		}
-		a.DB.Create(&adjustmentJournal)
-	}
-}
 
-func (a *App) GetBillLineItems(b *Bill) []BillLineItem {
-	var billLineItems []BillLineItem
-	var entries []Entry
-	a.DB.Preload("BillingCode").Preload("BillingCode.InternalRate").Where("bill_id = ? AND state != ?", b.ID, EntryStateVoid.String()).Find(&entries)
-
-	// Create a map to index line items
-	billingCodeMap := make(map[string]BillLineItem)
-
-	// Populate the list of line items
-	for _, entry := range entries {
-		billingCode := entry.BillingCode.Code
-		if lineItem, exists := billingCodeMap[billingCode]; exists {
-			// Update the existing line item
-			lineItem.Hours += entry.Duration().Hours()
-			lineItem.Total = lineItem.Hours * lineItem.Rate
-			billingCodeMap[billingCode] = lineItem
-		} else {
-			// Create a new line item
-			billingCodeMap[billingCode] = BillLineItem{
-				BillingCode:     entry.BillingCode.Name,
-				BillingCodeCode: entry.BillingCode.Code,
-				Hours:           entry.Duration().Hours(),
-				Rate:            entry.BillingCode.InternalRate.Amount,
-				Total:           entry.Duration().Hours() * entry.BillingCode.InternalRate.Amount,
-			}
-		}
+		displayLineItems = append(displayLineItems, BillLineItemDisplay{
+			BillingCode:     billingCodeName,
+			BillingCodeCode: billingCodeCode,
+			Hours:           lineItem.Quantity,
+			HoursFormatted:  fmt.Sprintf("%.2f", lineItem.Quantity),
+			Rate:            lineItem.Rate,
+			RateFormatted:   fmt.Sprintf("%.2f", lineItem.Rate),
+			Total:           float64(lineItem.Amount) / 100.0, // Convert from cents
+		})
 	}
 
-	// Convert the map values to a slice
-	for _, lineItem := range billingCodeMap {
-		lineItem.HoursFormatted = fmt.Sprintf("%.2f", lineItem.Hours)
-		lineItem.RateFormatted = fmt.Sprintf("%.2f", lineItem.Rate)
-		billLineItems = append(billLineItems, lineItem)
-	}
-
-	for i, _ := range billLineItems {
-		billLineItems[i].Total = billLineItems[i].Hours * billLineItems[i].Rate
-		billLineItems[i].HoursFormatted = fmt.Sprintf("%.2f", billLineItems[i].Hours)
-		billLineItems[i].RateFormatted = fmt.Sprintf("%.2f", billLineItems[i].Rate)
-	}
-
-	return billLineItems
+	return displayLineItems
 }
 
 // CalculateCommissionRate determines the appropriate commission rate based on role, project type, and deal size
@@ -1506,8 +1868,8 @@ func (a *App) CalculateCommissionAmount(project *Project, role string, invoiceTo
 	log.Printf("Commission calculation - Role: %s, Project Type: %s, Invoice Total: $%d, Rate: %.2f%%",
 		role, project.ProjectType, totalProjectValue, rate*100)
 
-	// Calculate commission amount (in cents)
-	commissionAmount := int(float64(totalProjectValue) * rate * 100)
+	// Calculate commission amount (in cents) - use math.Round to avoid truncation
+	commissionAmount := int(math.Round(float64(totalProjectValue) * rate * 100))
 
 	log.Printf("Calculated commission amount: $%.2f", float64(commissionAmount)/100)
 

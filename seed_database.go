@@ -21,6 +21,7 @@ func timePtr(t time.Time) *time.Time {
 func (a *App) SeedDatabase() {
 
 	// Delete all existing data except the existing development user
+	a.DB.Exec("DELETE FROM journals")
 	a.DB.Exec("DELETE FROM adjustments")
 	a.DB.Exec("DELETE FROM invoices")
 	a.DB.Exec("DELETE FROM entries")
@@ -1079,4 +1080,19 @@ func (a *App) SeedDatabase() {
 		AcceptedAt:  time.Now().AddDate(0, 0, -45),
 	}
 	_ = a.DB.Create(&voidInvoice)
+
+	// Verify journal balance (should be zero for double-entry accounting)
+	log.Println("Verifying journal balance...")
+	var totalDebits int64
+	var totalCredits int64
+	a.DB.Raw("SELECT COALESCE(SUM(debit), 0) FROM journals").Scan(&totalDebits)
+	a.DB.Raw("SELECT COALESCE(SUM(credit), 0) FROM journals").Scan(&totalCredits)
+	balance := totalDebits - totalCredits
+	log.Printf("Journal Balance Check: Total Debits: $%.2f, Total Credits: $%.2f, Net Balance: $%.2f",
+		float64(totalDebits)/100, float64(totalCredits)/100, float64(balance)/100)
+	if balance == 0 {
+		log.Println("✓ Journal balance is zero - double-entry accounting is balanced")
+	} else {
+		log.Printf("WARNING: Journal balance is NOT zero - double-entry accounting is unbalanced by $%.2f", float64(balance)/100)
+	}
 }

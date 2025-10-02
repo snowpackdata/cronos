@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -168,10 +169,48 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 		entry.State = EntryStateApproved.String()
 		a.DB.Save(&entry)
 	}
+
+	// Also approve all draft adjustments on this invoice
+	var adjustments []Adjustment
+	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
+		log.Printf("Found %d draft adjustments to approve", len(adjustments))
+		for _, adj := range adjustments {
+			adj.State = AdjustmentStateApproved.String()
+			a.DB.Save(&adj)
+			log.Printf("Approved adjustment ID %d (type: %s, amount: $%.2f)", adj.ID, adj.Type, adj.Amount)
+		}
+	}
+
+	// Update invoice totals to include adjustments
+	a.UpdateInvoiceTotals(&invoice)
+
 	a.DB.Save(&invoice)
 
-	// Reload invoice with updated entries before generating bills
-	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+	// Reload invoice with updated entries and account
+	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
+
+	// Generate line items (entries rolled up by billing code, adjustments as separate lines)
+	log.Printf("Generating line items for invoice ID: %d", invoiceID)
+	if err := a.GenerateInvoiceLineItems(&invoice); err != nil {
+		log.Printf("Warning: Failed to generate line items for invoice %d: %v", invoiceID, err)
+		return fmt.Errorf("failed to generate line items: %w", err)
+	}
+
+	// Book accrual journal entries for approved work
+	log.Printf("Booking accrual journal entries for invoice ID: %d", invoiceID)
+	if err := a.BookInvoiceAccrual(&invoice); err != nil {
+		log.Printf("Warning: Failed to book accrual for invoice %d: %v", invoiceID, err)
+	}
+
+	// Book adjustment accruals for all approved adjustments (only at approval - not at later states)
+	log.Printf("Booking accrual journal entries for adjustments on invoice ID: %d", invoiceID)
+	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateApproved.String()).Find(&adjustments).Error; err == nil {
+		for _, adj := range adjustments {
+			if err := a.BookAdjustmentAccrual(&adj); err != nil {
+				log.Printf("Warning: Failed to book adjustment accrual for adjustment %d: %v", adj.ID, err)
+			}
+		}
+	}
 
 	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_APPROVED
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_APPROVED")
@@ -206,7 +245,29 @@ func (a *App) SendInvoice(invoiceID uint) error {
 		a.DB.Save(&entry)
 	}
 
+	// Also approve and process any draft adjustments added after initial approval
+	var adjustments []Adjustment
+	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
+		if len(adjustments) > 0 {
+			log.Printf("Found %d draft adjustments to approve and process", len(adjustments))
+			for _, adj := range adjustments {
+				adj.State = AdjustmentStateApproved.String()
+				a.DB.Save(&adj)
+				log.Printf("Approved adjustment ID %d (type: %s, amount: $%.2f)", adj.ID, adj.Type, adj.Amount)
+			}
+		}
+	}
+
+	// Update invoice totals to include all adjustments
+	a.UpdateInvoiceTotals(&invoice)
+
 	a.DB.Save(&invoice)
+
+	// Move from accrued receivables to formal accounts receivable (includes adjustments)
+	log.Printf("Moving accrued receivables to AR for invoice ID: %d", invoiceID)
+	if err := a.MoveInvoiceToAccountsReceivable(&invoice); err != nil {
+		log.Printf("Warning: Failed to move to AR for invoice %d: %v", invoiceID, err)
+	}
 
 	// Reload invoice with updated entries before generating bills
 	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
@@ -214,6 +275,21 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_SENT
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_SENT")
 	a.GenerateBills(&invoice)
+
+	// Move accrued payroll to AP for all bills associated with this invoice
+	log.Printf("Moving accrued payroll to AP for invoice ID: %d", invoiceID)
+	var bills []Bill
+	if err := a.DB.Preload("Entries").Preload("Entries.Employee").
+		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
+		Where("entries.invoice_id = ?", invoiceID).
+		Group("bills.id").
+		Find(&bills).Error; err == nil {
+		for _, bill := range bills {
+			if err := a.BookBillAccrual(&bill); err != nil {
+				log.Printf("Warning: Failed to move accruals to AP for bill %d: %v", bill.ID, err)
+			}
+		}
+	}
 
 	// Reload entries with bill associations and save PDFs
 	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
@@ -315,6 +391,22 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 		}
 	}
 
+	// Also approve and process any draft adjustments added after sending
+	var adjustments []Adjustment
+	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
+		if len(adjustments) > 0 {
+			log.Printf("Found %d draft adjustments to approve and process", len(adjustments))
+			for _, adj := range adjustments {
+				adj.State = AdjustmentStateApproved.String()
+				a.DB.Save(&adj)
+				log.Printf("Approved adjustment ID %d (type: %s, amount: $%.2f)", adj.ID, adj.Type, adj.Amount)
+			}
+		}
+	}
+
+	// Update invoice totals to include all adjustments
+	a.UpdateInvoiceTotals(&invoice)
+
 	// Reload invoice with updated entries before generating bills
 	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
 
@@ -323,7 +415,22 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_PAID")
 	a.GenerateBills(&invoice)
 
-	// Add commissions to bills if applicable
+	// Move accrued payroll to AP for all bills associated with this invoice
+	log.Printf("Moving accrued payroll to AP for invoice ID: %d", invoiceID)
+	var bills []Bill
+	if err := a.DB.Preload("Entries").Preload("Entries.Employee").
+		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
+		Where("entries.invoice_id = ?", invoiceID).
+		Group("bills.id").
+		Find(&bills).Error; err == nil {
+		for _, bill := range bills {
+			if err := a.BookBillAccrual(&bill); err != nil {
+				log.Printf("Warning: Failed to move accruals to AP for bill %d: %v", bill.ID, err)
+			}
+		}
+	}
+
+	// Add commissions to bills if applicable (commissions book their own journal entries)
 	log.Printf("Adding commissions to bills for invoice ID: %d", invoice.ID)
 	a.AddCommissionsToBills(&invoice)
 
@@ -332,14 +439,30 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
 	a.SaveBillPDFsForInvoice(&invoice)
 
+	// Record cash receipt and clear accounts receivable (includes adjustments)
+	log.Printf("Recording cash payment for invoice ID: %d", invoiceID)
+	if err := a.RecordInvoiceCashPayment(&invoice); err != nil {
+		log.Printf("Warning: Failed to record cash payment for invoice %d: %v", invoiceID, err)
+	}
+
 	log.Printf("Successfully processed invoice ID: %d", invoice.ID)
 	return nil
 }
 
 // VoidInvoice cancels the invoice and transitions it to the "void" state along with any associated entries
+// This also creates reversing journal entries to undo any accruals, AR, or cash entries
 func (a *App) VoidInvoice(invoiceID uint) error {
+	log.Printf("VoidInvoice called for invoice ID: %d", invoiceID)
+
 	var invoice Invoice
 	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
+
+	// Reverse all journal entries for this invoice
+	log.Printf("Reversing journal entries for invoice ID: %d", invoiceID)
+	if err := a.ReverseInvoiceJournalEntries(&invoice); err != nil {
+		log.Printf("Warning: Failed to reverse journal entries for invoice %d: %v", invoiceID, err)
+	}
+
 	// Invoice can be voided at any point
 	invoice.State = InvoiceStateVoid.String()
 	for _, entry := range invoice.Entries {
@@ -347,6 +470,8 @@ func (a *App) VoidInvoice(invoiceID uint) error {
 		a.DB.Save(&entry)
 	}
 	a.DB.Save(&invoice)
+
+	log.Printf("Successfully voided invoice ID: %d", invoiceID)
 	return nil
 }
 
@@ -596,7 +721,7 @@ func (a *App) processProjectCommission(invoice *Invoice, projectID uint) {
 
 	// If it's a direct project invoice, use the invoice total
 	if invoice.ProjectID != nil && *invoice.ProjectID == projectID {
-		projectInvoiceTotal = invoice.TotalFees
+		projectInvoiceTotal = float64(invoice.TotalFees) / 100.0 // Convert cents to dollars
 		log.Printf("Using direct invoice total for project %d: $%.2f", projectID, projectInvoiceTotal)
 	} else {
 		// Otherwise, sum the fees from entries for this specific project
@@ -738,6 +863,44 @@ func (a *App) processCommission(project *Project, role string, staffID uint, sta
 	log.Printf("Updated bill ID: %d, new total commissions: $%.2f, new total amount: $%.2f",
 		bill.ID, float64(bill.TotalCommissions)/100, float64(bill.TotalAmount)/100)
 
+	// Book the commission as a payroll expense journal entry
+	// Get employee details for subaccount
+	var employee Employee
+	if err := a.DB.Where("id = ?", staffID).First(&employee).Error; err != nil {
+		log.Printf("Error loading employee for journal entry: %v", err)
+		return
+	}
+
+	subAccount := fmt.Sprintf("%d:%s %s", employee.ID, employee.FirstName, employee.LastName)
+
+	// DR: PAYROLL_EXPENSE
+	commissionExpense := Journal{
+		Account:    AccountPayrollExpense.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Commission expense for %s on project %s", role, project.Name),
+		Debit:      int64(commissionAmount),
+		Credit:     0,
+	}
+	if err := a.DB.Create(&commissionExpense).Error; err != nil {
+		log.Printf("Warning: Failed to book commission expense: %v", err)
+	}
+
+	// CR: ACCOUNTS_PAYABLE
+	commissionAP := Journal{
+		Account:    AccountAccountsPayable.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Commission payable for %s on project %s", role, project.Name),
+		Debit:      0,
+		Credit:     int64(commissionAmount),
+	}
+	if err := a.DB.Create(&commissionAP).Error; err != nil {
+		log.Printf("Warning: Failed to book commission AP: %v", err)
+	}
+
+	log.Printf("Booked commission journal entries for $%.2f", float64(commissionAmount)/100)
+
 	// Verify commission was properly saved
 	var verifyCommission Commission
 	if err := a.DB.Where("ID = ?", commission.ID).First(&verifyCommission).Error; err != nil || verifyCommission.ID == 0 {
@@ -755,4 +918,905 @@ func (a *App) processCommission(project *Project, role string, staffID uint, sta
 	}
 
 	log.Printf("Completed commission processing for %s", staffName)
+}
+
+// BookInvoiceAccrual books accrual journal entries when an invoice is approved
+// Books both revenue and expense sides:
+// - DR: ACCRUED_RECEIVABLES, CR: REVENUE (for client billable amount)
+// - DR: PAYROLL_EXPENSE, CR: ACCRUED_PAYROLL (for staff payable amount)
+func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
+	log.Printf("BookInvoiceAccrual: Processing invoice ID %d using line items", invoice.ID)
+
+	// Load invoice line items
+	var lineItems []InvoiceLineItem
+	if err := a.DB.Preload("Employee").Where("invoice_id = ?", invoice.ID).Find(&lineItems).Error; err != nil {
+		return fmt.Errorf("failed to load invoice line items: %w", err)
+	}
+
+	// Calculate revenue total from line items
+	var revenueAmount int64 = 0
+	for _, lineItem := range lineItems {
+		revenueAmount += lineItem.Amount
+		log.Printf("  Line item: %s - $%.2f", lineItem.Description, float64(lineItem.Amount)/100)
+	}
+
+	// Create subaccount identifier for revenue
+	subAccount := fmt.Sprintf("%d:%s", invoice.AccountID, invoice.Account.Name)
+
+	// Book revenue side if there's revenue to recognize
+	if revenueAmount > 0 {
+		// Book: DR ACCRUED_RECEIVABLES
+		accrualDR := Journal{
+			Account:    AccountAccruedReceivables.String(),
+			SubAccount: subAccount,
+			InvoiceID:  &invoice.ID,
+			Memo:       fmt.Sprintf("Accrued receivables for approved work on invoice #%d", invoice.ID),
+			Debit:      revenueAmount,
+			Credit:     0,
+		}
+		if err := a.DB.Create(&accrualDR).Error; err != nil {
+			return fmt.Errorf("failed to book accrued receivables DR: %w", err)
+		}
+
+		// Book: CR REVENUE
+		revenueCR := Journal{
+			Account:    AccountRevenue.String(),
+			SubAccount: subAccount,
+			InvoiceID:  &invoice.ID,
+			Memo:       fmt.Sprintf("Revenue recognized for approved work on invoice #%d", invoice.ID),
+			Debit:      0,
+			Credit:     revenueAmount,
+		}
+		if err := a.DB.Create(&revenueCR).Error; err != nil {
+			return fmt.Errorf("failed to book revenue CR: %w", err)
+		}
+
+		log.Printf("Booked revenue accrual for invoice ID %d: $%.2f", invoice.ID, float64(revenueAmount)/100)
+	}
+
+	// Now book payroll expense accruals from bills
+	// We need to load bills associated with this invoice through entries
+	var bills []Bill
+	if err := a.DB.Preload("LineItems").Preload("LineItems.Employee").Preload("Employee").
+		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
+		Where("entries.invoice_id = ?", invoice.ID).
+		Group("bills.id").
+		Find(&bills).Error; err != nil {
+		log.Printf("Warning: Could not load bills for invoice %d: %v", invoice.ID, err)
+		return nil
+	}
+
+	// Book payroll expense accruals for each bill's timesheet line items
+	for _, bill := range bills {
+		var totalPayrollExpense int64 = 0
+		
+		// Sum up timesheet line items only (not commissions or adjustments yet)
+		for _, lineItem := range bill.LineItems {
+			if lineItem.Type == LineItemTypeTimesheet.String() {
+				totalPayrollExpense += lineItem.Amount
+			}
+		}
+
+		if totalPayrollExpense == 0 {
+			continue
+		}
+
+		employeeSubAccount := fmt.Sprintf("%d:%s %s", bill.EmployeeID, bill.Employee.FirstName, bill.Employee.LastName)
+
+		// Book: DR PAYROLL_EXPENSE
+		expenseDR := Journal{
+			Account:    AccountPayrollExpense.String(),
+			SubAccount: employeeSubAccount,
+			InvoiceID:  &invoice.ID,
+			BillID:     &bill.ID,
+			Memo:       fmt.Sprintf("Payroll expense accrued for approved work on invoice #%d", invoice.ID),
+			Debit:      totalPayrollExpense,
+			Credit:     0,
+		}
+		if err := a.DB.Create(&expenseDR).Error; err != nil {
+			log.Printf("Warning: Failed to book payroll expense DR for bill %d: %v", bill.ID, err)
+			continue
+		}
+
+		// Book: CR ACCRUED_PAYROLL
+		payrollCR := Journal{
+			Account:    AccountAccruedPayroll.String(),
+			SubAccount: employeeSubAccount,
+			InvoiceID:  &invoice.ID,
+			BillID:     &bill.ID,
+			Memo:       fmt.Sprintf("Accrued payroll for approved work on invoice #%d", invoice.ID),
+			Debit:      0,
+			Credit:     totalPayrollExpense,
+		}
+		if err := a.DB.Create(&payrollCR).Error; err != nil {
+			log.Printf("Warning: Failed to book accrued payroll CR for bill %d: %v", bill.ID, err)
+			continue
+		}
+
+		log.Printf("Booked payroll expense accrual for bill %d (employee %d) on invoice ID %d: $%.2f",
+			bill.ID, bill.EmployeeID, invoice.ID, float64(totalPayrollExpense)/100)
+	}
+
+	log.Printf("Successfully booked all accruals for invoice ID %d using line items", invoice.ID)
+	return nil
+}
+
+// BookBillAccrual handles journal entries when a bill is created
+// Since accruals are already booked at invoice approval, this moves them to AP
+// Commissions are booked as new expenses since they don't exist at invoice approval time
+func (a *App) BookBillAccrual(bill *Bill) error {
+	log.Printf("BookBillAccrual: Processing bill ID %d using line items", bill.ID)
+
+	// Load employee once
+	var employee Employee
+	if err := a.DB.First(&employee, bill.EmployeeID).Error; err != nil {
+		log.Printf("Error loading employee %d for bill %d", bill.EmployeeID, bill.ID)
+		return fmt.Errorf("failed to load employee: %w", err)
+	}
+
+	employeeID := employee.ID
+	employeeName := fmt.Sprintf("%s %s", employee.FirstName, employee.LastName)
+	subAccount := fmt.Sprintf("%d:%s", employeeID, employeeName)
+
+	// Only process variable or base+variable compensation
+	if employee.CompensationType != string(CompensationTypeFullyVariable) &&
+		employee.CompensationType != string(CompensationTypeBasePlusVariable) {
+		log.Printf("Employee %d has fixed salary, no AP booking needed", employee.ID)
+		return nil
+	}
+
+	// Load line items for this bill
+	var lineItems []BillLineItem
+	if err := a.DB.Where("bill_id = ?", bill.ID).Find(&lineItems).Error; err != nil {
+		return fmt.Errorf("failed to load bill line items: %w", err)
+	}
+
+	// Calculate total from timesheet and adjustment line items (commissions handled separately)
+	var totalAPAmount int64 = 0
+	for _, lineItem := range lineItems {
+		if lineItem.Type == LineItemTypeTimesheet.String() || lineItem.Type == LineItemTypeAdjustment.String() {
+			totalAPAmount += lineItem.Amount
+			log.Printf("  Line item: %s - $%.2f", lineItem.Description, float64(lineItem.Amount)/100)
+		}
+	}
+
+	if totalAPAmount == 0 {
+		log.Printf("No variable line items to process for bill ID %d", bill.ID)
+		return nil
+	}
+
+	// Check if we've already moved accruals to AP for this bill
+	var existingAPEntries []Journal
+	a.DB.Where("bill_id = ? AND account = ?", bill.ID, AccountAccountsPayable.String()).Find(&existingAPEntries)
+
+	if len(existingAPEntries) > 0 {
+		log.Printf("Accruals already moved to AP for bill ID %d, skipping", bill.ID)
+		return nil
+	}
+
+	// Check if accruals exist (from invoice approval)
+	var existingAccruals []Journal
+	a.DB.Where("sub_account = ? AND account = ? AND credit > 0",
+		subAccount, AccountAccruedPayroll.String()).Find(&existingAccruals)
+
+	if len(existingAccruals) > 0 {
+		// Accruals exist, reverse them
+		log.Printf("Moving accrued payroll to AP for bill ID %d (accrued: $%.2f)", bill.ID, float64(totalAPAmount)/100)
+
+		// Reverse the accrued payroll (debit to contra it)
+		reverseAccrual := Journal{
+			Account:    AccountAccruedPayroll.String(),
+			SubAccount: subAccount,
+			BillID:     &bill.ID,
+			Memo:       fmt.Sprintf("Move accrued payroll to AP for bill #%d", bill.ID),
+			Debit:      totalAPAmount,
+			Credit:     0,
+		}
+		if err := a.DB.Create(&reverseAccrual).Error; err != nil {
+			log.Printf("Warning: Failed to reverse accrued payroll: %v", err)
+		}
+
+		// Book formal Accounts Payable
+		apEntry := Journal{
+			Account:    AccountAccountsPayable.String(),
+			SubAccount: subAccount,
+			BillID:     &bill.ID,
+			Memo:       fmt.Sprintf("Accounts payable for bill #%d", bill.ID),
+			Debit:      0,
+			Credit:     totalAPAmount,
+		}
+		if err := a.DB.Create(&apEntry).Error; err != nil {
+			return fmt.Errorf("failed to book accounts payable: %w", err)
+		}
+
+		log.Printf("Successfully moved accruals to AP for bill ID %d: $%.2f", bill.ID, float64(totalAPAmount)/100)
+	} else {
+		// No existing accruals (shouldn't happen if invoice was approved, but handle it)
+		log.Printf("No existing accruals found for bill ID %d, booking new expense", bill.ID)
+
+		// Book all as new payroll expense
+		expenseDR := Journal{
+			Account:    AccountPayrollExpense.String(),
+			SubAccount: subAccount,
+			BillID:     &bill.ID,
+			Memo:       fmt.Sprintf("Payroll expense for bill #%d", bill.ID),
+			Debit:      totalAPAmount,
+			Credit:     0,
+		}
+		if err := a.DB.Create(&expenseDR).Error; err != nil {
+			return fmt.Errorf("failed to book payroll expense DR: %w", err)
+		}
+
+		// Book CR ACCOUNTS_PAYABLE
+		apEntry := Journal{
+			Account:    AccountAccountsPayable.String(),
+			SubAccount: subAccount,
+			BillID:     &bill.ID,
+			Memo:       fmt.Sprintf("Accounts payable for bill #%d", bill.ID),
+			Debit:      0,
+			Credit:     totalAPAmount,
+		}
+		if err := a.DB.Create(&apEntry).Error; err != nil {
+			return fmt.Errorf("failed to book accounts payable CR: %w", err)
+		}
+
+		log.Printf("Successfully booked expense and AP for bill ID %d: $%.2f", bill.ID, float64(totalAPAmount)/100)
+	}
+
+	return nil
+}
+
+// MoveInvoiceToAccountsReceivable moves accrued receivables to formal AR when invoice is sent
+// Reverses: DR ACCRUED_RECEIVABLES, CR: (contra)
+// Books: DR ACCOUNTS_RECEIVABLE
+func (a *App) MoveInvoiceToAccountsReceivable(invoice *Invoice) error {
+	log.Printf("MoveInvoiceToAccountsReceivable: Processing invoice ID %d", invoice.ID)
+
+	// Find existing accrued receivables journal entries for this invoice
+	var accrualEntries []Journal
+	if err := a.DB.Where("invoice_id = ? AND account = ?", invoice.ID, AccountAccruedReceivables.String()).Find(&accrualEntries).Error; err != nil {
+		return fmt.Errorf("failed to find accrual entries: %w", err)
+	}
+
+	if len(accrualEntries) == 0 {
+		log.Printf("No accrual entries found for invoice ID %d - skipping AR conversion", invoice.ID)
+		return nil
+	}
+
+	// Calculate NET total from accrual entries (debits - credits)
+	// This includes both the main invoice entries AND adjustments (fees/credits)
+	var totalDebits int64 = 0
+	var totalCredits int64 = 0
+	var subAccount string
+	for _, entry := range accrualEntries {
+		totalDebits += entry.Debit
+		totalCredits += entry.Credit
+		subAccount = entry.SubAccount
+	}
+
+	netAmount := totalDebits - totalCredits
+	if netAmount == 0 {
+		return nil
+	}
+
+	// Reverse the accrued receivables (net amount)
+	reverseAccrual := Journal{
+		Account:    AccountAccruedReceivables.String(),
+		SubAccount: subAccount,
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Move accrued receivables to AR for sent invoice #%d", invoice.ID),
+		Debit:      totalCredits, // Reverse the credits
+		Credit:     totalDebits,  // Reverse the debits
+	}
+	if err := a.DB.Create(&reverseAccrual).Error; err != nil {
+		return fmt.Errorf("failed to reverse accrued receivables: %w", err)
+	}
+
+	// Book formal Accounts Receivable (net amount)
+	arEntry := Journal{
+		Account:    AccountAccountsReceivable.String(),
+		SubAccount: subAccount,
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Accounts receivable for sent invoice #%d", invoice.ID),
+		Debit:      netAmount,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&arEntry).Error; err != nil {
+		return fmt.Errorf("failed to book accounts receivable: %w", err)
+	}
+
+	log.Printf("Successfully moved invoice ID %d to AR: $%.2f (net of adjustments)", invoice.ID, float64(netAmount)/100)
+	return nil
+}
+
+// RecordInvoiceCashPayment records cash receipt and clears AR when invoice is paid
+// Reverses: DR ACCOUNTS_RECEIVABLE, CR: (contra)
+// Books: DR CASH
+func (a *App) RecordInvoiceCashPayment(invoice *Invoice) error {
+	log.Printf("RecordInvoiceCashPayment: Processing invoice ID %d", invoice.ID)
+
+	// Find existing AR entries for this invoice
+	var arEntries []Journal
+	if err := a.DB.Where("invoice_id = ? AND account = ?", invoice.ID, AccountAccountsReceivable.String()).Find(&arEntries).Error; err != nil {
+		return fmt.Errorf("failed to find AR entries: %w", err)
+	}
+
+	if len(arEntries) == 0 {
+		log.Printf("No AR entries found for invoice ID %d - skipping cash recording", invoice.ID)
+		return nil
+	}
+
+	// Calculate total from AR entries
+	var totalAmount int64 = 0
+	var subAccount string
+	for _, entry := range arEntries {
+		totalAmount += entry.Debit - entry.Credit
+	}
+
+	if totalAmount == 0 {
+		return nil
+	}
+
+	subAccount = arEntries[0].SubAccount
+
+	// Clear the accounts receivable (credit to contra it)
+	clearAR := Journal{
+		Account:    AccountAccountsReceivable.String(),
+		SubAccount: subAccount,
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Clear AR for paid invoice #%d", invoice.ID),
+		Debit:      0,
+		Credit:     totalAmount,
+	}
+	if err := a.DB.Create(&clearAR).Error; err != nil {
+		return fmt.Errorf("failed to clear accounts receivable: %w", err)
+	}
+
+	// Record cash receipt
+	cashEntry := Journal{
+		Account:    AccountCash.String(),
+		SubAccount: subAccount,
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Cash received for invoice #%d", invoice.ID),
+		Debit:      totalAmount,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&cashEntry).Error; err != nil {
+		return fmt.Errorf("failed to record cash receipt: %w", err)
+	}
+
+	log.Printf("Successfully recorded cash payment for invoice ID %d: $%.2f", invoice.ID, float64(totalAmount)/100)
+	return nil
+}
+
+// MoveBillToAccountsPayable moves accrued payroll to formal AP when bill is accepted
+// Reverses: CR ACCRUED_PAYROLL, DR: (contra)
+// Books: CR ACCOUNTS_PAYABLE
+func (a *App) MoveBillToAccountsPayable(bill *Bill) error {
+	log.Printf("MoveBillToAccountsPayable: Processing bill ID %d", bill.ID)
+
+	// Find existing accrued payroll entries for this bill
+	var accrualEntries []Journal
+	if err := a.DB.Where("bill_id = ? AND account = ?", bill.ID, AccountAccruedPayroll.String()).Find(&accrualEntries).Error; err != nil {
+		return fmt.Errorf("failed to find accrual entries: %w", err)
+	}
+
+	if len(accrualEntries) == 0 {
+		log.Printf("No accrual entries found for bill ID %d - skipping AP conversion", bill.ID)
+		return nil
+	}
+
+	// Calculate total from accrual entries
+	var totalAmount int64 = 0
+	var subAccount string
+	for _, entry := range accrualEntries {
+		totalAmount += entry.Credit
+		subAccount = entry.SubAccount
+	}
+
+	if totalAmount == 0 {
+		return nil
+	}
+
+	// Reverse the accrued payroll (debit to contra it)
+	reverseAccrual := Journal{
+		Account:    AccountAccruedPayroll.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Move accrued payroll to AP for accepted bill #%d", bill.ID),
+		Debit:      totalAmount,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&reverseAccrual).Error; err != nil {
+		return fmt.Errorf("failed to reverse accrued payroll: %w", err)
+	}
+
+	// Book formal Accounts Payable
+	apEntry := Journal{
+		Account:    AccountAccountsPayable.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Accounts payable for accepted bill #%d", bill.ID),
+		Debit:      0,
+		Credit:     totalAmount,
+	}
+	if err := a.DB.Create(&apEntry).Error; err != nil {
+		return fmt.Errorf("failed to book accounts payable: %w", err)
+	}
+
+	log.Printf("Successfully moved bill ID %d to AP: $%.2f", bill.ID, float64(totalAmount)/100)
+	return nil
+}
+
+// RecordBillCashPayment records cash payment and clears AP when bill is paid
+// Reverses: CR ACCOUNTS_PAYABLE, DR: (contra)
+// Books: CR CASH
+func (a *App) RecordBillCashPayment(bill *Bill) error {
+	log.Printf("RecordBillCashPayment: Processing bill ID %d", bill.ID)
+
+	// Find existing AP entries for this bill
+	var apEntries []Journal
+	if err := a.DB.Where("bill_id = ? AND account = ?", bill.ID, AccountAccountsPayable.String()).Find(&apEntries).Error; err != nil {
+		return fmt.Errorf("failed to find AP entries: %w", err)
+	}
+
+	if len(apEntries) == 0 {
+		log.Printf("No AP entries found for bill ID %d - skipping cash recording", bill.ID)
+		return nil
+	}
+
+	// Calculate total from AP entries
+	var totalAmount int64 = 0
+	var subAccount string
+	for _, entry := range apEntries {
+		totalAmount += entry.Credit - entry.Debit
+	}
+
+	if totalAmount == 0 {
+		return nil
+	}
+
+	subAccount = apEntries[0].SubAccount
+
+	// Clear the accounts payable (debit to contra it)
+	clearAP := Journal{
+		Account:    AccountAccountsPayable.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Clear AP for paid bill #%d", bill.ID),
+		Debit:      totalAmount,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&clearAP).Error; err != nil {
+		return fmt.Errorf("failed to clear accounts payable: %w", err)
+	}
+
+	// Record cash payment
+	cashEntry := Journal{
+		Account:    AccountCash.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Cash paid for bill #%d", bill.ID),
+		Debit:      0,
+		Credit:     totalAmount,
+	}
+	if err := a.DB.Create(&cashEntry).Error; err != nil {
+		return fmt.Errorf("failed to record cash payment: %w", err)
+	}
+
+	log.Printf("Successfully recorded cash payment for bill ID %d: $%.2f", bill.ID, float64(totalAmount)/100)
+	return nil
+}
+
+// ReverseInvoiceJournalEntries creates reversing entries for all journal entries associated with an invoice
+// This is called when an invoice is voided to undo all accounting effects
+func (a *App) ReverseInvoiceJournalEntries(invoice *Invoice) error {
+	log.Printf("ReverseInvoiceJournalEntries: Processing invoice ID %d", invoice.ID)
+
+	// Find all journal entries for this invoice
+	var journalEntries []Journal
+	if err := a.DB.Where("invoice_id = ?", invoice.ID).Find(&journalEntries).Error; err != nil {
+		return fmt.Errorf("failed to find journal entries: %w", err)
+	}
+
+	if len(journalEntries) == 0 {
+		log.Printf("No journal entries found for invoice ID %d", invoice.ID)
+		return nil
+	}
+
+	log.Printf("Found %d journal entries to reverse for invoice ID %d", len(journalEntries), invoice.ID)
+
+	// Create reversing entries (swap debit and credit)
+	for _, entry := range journalEntries {
+		reversingEntry := Journal{
+			Account:    entry.Account,
+			SubAccount: entry.SubAccount,
+			InvoiceID:  &invoice.ID,
+			Memo:       fmt.Sprintf("VOID: Reverse %s", entry.Memo),
+			Debit:      entry.Credit, // Swap debit and credit
+			Credit:     entry.Debit,
+		}
+		if err := a.DB.Create(&reversingEntry).Error; err != nil {
+			log.Printf("Warning: Failed to create reversing entry for journal ID %d: %v", entry.ID, err)
+		}
+	}
+
+	log.Printf("Successfully reversed %d journal entries for invoice ID %d", len(journalEntries), invoice.ID)
+	return nil
+}
+
+// ReverseBillJournalEntries creates reversing entries for all journal entries associated with a bill
+// This is called when a bill is voided to undo all accounting effects
+func (a *App) ReverseBillJournalEntries(bill *Bill) error {
+	log.Printf("ReverseBillJournalEntries: Processing bill ID %d", bill.ID)
+
+	// Find all journal entries for this bill
+	var journalEntries []Journal
+	if err := a.DB.Where("bill_id = ?", bill.ID).Find(&journalEntries).Error; err != nil {
+		return fmt.Errorf("failed to find journal entries: %w", err)
+	}
+
+	if len(journalEntries) == 0 {
+		log.Printf("No journal entries found for bill ID %d", bill.ID)
+		return nil
+	}
+
+	log.Printf("Found %d journal entries to reverse for bill ID %d", len(journalEntries), bill.ID)
+
+	// Create reversing entries (swap debit and credit)
+	for _, entry := range journalEntries {
+		reversingEntry := Journal{
+			Account:    entry.Account,
+			SubAccount: entry.SubAccount,
+			BillID:     &bill.ID,
+			Memo:       fmt.Sprintf("VOID: Reverse %s", entry.Memo),
+			Debit:      entry.Credit, // Swap debit and credit
+			Credit:     entry.Debit,
+		}
+		if err := a.DB.Create(&reversingEntry).Error; err != nil {
+			log.Printf("Warning: Failed to create reversing entry for journal ID %d: %v", entry.ID, err)
+		}
+	}
+
+	log.Printf("Successfully reversed %d journal entries for bill ID %d", len(journalEntries), bill.ID)
+	return nil
+}
+
+// BookAdjustmentAccrual books the initial accrual for an adjustment when it's approved
+// Called only once at approval, then the adjustment follows the same transitions as the invoice/bill
+func (a *App) BookAdjustmentAccrual(adjustment *Adjustment) error {
+	log.Printf("BookAdjustmentAccrual: Processing adjustment ID %d", adjustment.ID)
+
+	if adjustment.Amount == 0 {
+		log.Printf("Adjustment amount is zero, skipping journal entry")
+		return nil
+	}
+
+	// Always use absolute value - the type field determines if it's a credit or fee
+	amountCents := int64(math.Abs(adjustment.Amount) * 100)
+
+	// Handle invoice adjustments
+	if adjustment.InvoiceID != nil {
+		var invoice Invoice
+		if err := a.DB.Preload("Account").First(&invoice, *adjustment.InvoiceID).Error; err != nil {
+			return fmt.Errorf("failed to load invoice: %w", err)
+		}
+
+		subAccount := fmt.Sprintf("%d:%s", invoice.AccountID, invoice.Account.Name)
+		isCredit := adjustment.Type == AdjustmentTypeCredit.String()
+
+		if isCredit {
+			// Credit reduces what we expect to receive
+			// CR: ACCRUED_RECEIVABLES (reduce asset)
+			// DR: CREDITS_ISSUED (contra-revenue)
+			a.DB.Create(&Journal{
+				Account:    string(AccountAccruedReceivables),
+				SubAccount: subAccount,
+				InvoiceID:  adjustment.InvoiceID,
+				Memo:       fmt.Sprintf("Adjustment: Credit issued - %s", adjustment.Notes),
+				Debit:      0,
+				Credit:     amountCents,
+			})
+			a.DB.Create(&Journal{
+				Account:    string(AccountCreditsIssued),
+				SubAccount: subAccount,
+				InvoiceID:  adjustment.InvoiceID,
+				Memo:       fmt.Sprintf("Adjustment: Credit issued - %s", adjustment.Notes),
+				Debit:      amountCents,
+				Credit:     0,
+			})
+		} else {
+			// Fee increases what we expect to receive
+			// DR: ACCRUED_RECEIVABLES (increase asset)
+			// CR: ADJUSTMENT_REVENUE
+			a.DB.Create(&Journal{
+				Account:    string(AccountAccruedReceivables),
+				SubAccount: subAccount,
+				InvoiceID:  adjustment.InvoiceID,
+				Memo:       fmt.Sprintf("Adjustment: Fee added - %s", adjustment.Notes),
+				Debit:      amountCents,
+				Credit:     0,
+			})
+			a.DB.Create(&Journal{
+				Account:    string(AccountAdjustmentRevenue),
+				SubAccount: subAccount,
+				InvoiceID:  adjustment.InvoiceID,
+				Memo:       fmt.Sprintf("Adjustment: Fee added - %s", adjustment.Notes),
+				Debit:      0,
+				Credit:     amountCents,
+			})
+		}
+
+		log.Printf("Recorded invoice adjustment accrual for adjustment ID %d: $%.2f", adjustment.ID, adjustment.Amount)
+		return nil
+	}
+
+	// Handle bill adjustments (not typically used, but supported)
+	if adjustment.BillID != nil {
+		var bill Bill
+		if err := a.DB.Preload("Employee").First(&bill, *adjustment.BillID).Error; err != nil {
+			return fmt.Errorf("failed to load bill: %w", err)
+		}
+
+		subAccount := fmt.Sprintf("%d:%s %s", bill.EmployeeID, bill.Employee.FirstName, bill.Employee.LastName)
+
+		// DR: ADJUSTMENT_EXPENSE, CR: ACCRUED_PAYROLL
+		a.DB.Create(&Journal{
+			Account:    string(AccountAdjustmentExpense),
+			SubAccount: subAccount,
+			BillID:     adjustment.BillID,
+			Memo:       fmt.Sprintf("Adjustment: Expense addition - %s", adjustment.Notes),
+			Debit:      amountCents,
+			Credit:     0,
+		})
+		a.DB.Create(&Journal{
+			Account:    string(AccountAccruedPayroll),
+			SubAccount: subAccount,
+			BillID:     adjustment.BillID,
+			Memo:       fmt.Sprintf("Adjustment: Accrued payroll - %s", adjustment.Notes),
+			Debit:      0,
+			Credit:     amountCents,
+		})
+
+		log.Printf("Recorded bill adjustment accrual for adjustment ID %d: $%.2f", adjustment.ID, adjustment.Amount)
+		return nil
+	}
+
+	return fmt.Errorf("adjustment must have either invoice_id or bill_id")
+}
+
+// RecordAdjustmentJournal creates a journal entry for an invoice or bill adjustment (credit/discount/fee)
+// This handles adjustments based on the parent invoice/bill state
+func (a *App) RecordAdjustmentJournal(adjustment *Adjustment) error {
+	log.Printf("RecordAdjustmentJournal: Processing adjustment ID %d", adjustment.ID)
+
+	if adjustment.Amount == 0 {
+		log.Printf("Adjustment amount is zero, skipping journal entry")
+		return nil
+	}
+
+	amountCents := int64(adjustment.Amount * 100)
+
+	// Handle invoice adjustments
+	if adjustment.InvoiceID != nil {
+		var invoice Invoice
+		if err := a.DB.Preload("Account").First(&invoice, *adjustment.InvoiceID).Error; err != nil {
+			return fmt.Errorf("failed to load invoice: %w", err)
+		}
+
+		subAccount := fmt.Sprintf("%d:%s", invoice.AccountID, invoice.Account.Name)
+
+		// Determine if this is a credit (reduces revenue) or fee (increases revenue)
+		isCredit := adjustment.Type == AdjustmentTypeCredit.String()
+		var revenueAccount JournalAccountType
+		if isCredit {
+			revenueAccount = AccountCreditsIssued // Contra-revenue
+		} else {
+			revenueAccount = AccountAdjustmentRevenue
+		}
+
+		// Book based on invoice state
+		switch invoice.State {
+		case InvoiceStateDraft.String():
+			// Draft: Don't book yet, will be included when invoice is approved
+			log.Printf("Invoice is draft, adjustment will be booked on approval")
+			return nil
+
+		case InvoiceStateApproved.String():
+			// Approved: Book to accrued receivables
+			if isCredit {
+				// Credit reduces what we expect to receive
+				// CR: ACCRUED_RECEIVABLES (reduce asset)
+				// DR: CREDITS_ISSUED (contra-revenue)
+				a.DB.Create(&Journal{
+					Account:    string(AccountAccruedReceivables),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Credit issued - %s", adjustment.Notes),
+					Debit:      0,
+					Credit:     amountCents,
+				})
+				a.DB.Create(&Journal{
+					Account:    string(revenueAccount),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Credit issued - %s", adjustment.Notes),
+					Debit:      amountCents,
+					Credit:     0,
+				})
+			} else {
+				// Fee increases what we expect to receive
+				// DR: ACCRUED_RECEIVABLES (increase asset)
+				// CR: ADJUSTMENT_REVENUE
+				a.DB.Create(&Journal{
+					Account:    string(AccountAccruedReceivables),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Fee added - %s", adjustment.Notes),
+					Debit:      amountCents,
+					Credit:     0,
+				})
+				a.DB.Create(&Journal{
+					Account:    string(revenueAccount),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Fee added - %s", adjustment.Notes),
+					Debit:      0,
+					Credit:     amountCents,
+				})
+			}
+
+		case InvoiceStateSent.String():
+			// Sent: Book to accounts receivable
+			if isCredit {
+				// CR: ACCOUNTS_RECEIVABLE (reduce asset)
+				// DR: CREDITS_ISSUED
+				a.DB.Create(&Journal{
+					Account:    string(AccountAccountsReceivable),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Credit issued - %s", adjustment.Notes),
+					Debit:      0,
+					Credit:     amountCents,
+				})
+				a.DB.Create(&Journal{
+					Account:    string(revenueAccount),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Credit issued - %s", adjustment.Notes),
+					Debit:      amountCents,
+					Credit:     0,
+				})
+			} else {
+				// DR: ACCOUNTS_RECEIVABLE (increase asset)
+				// CR: ADJUSTMENT_REVENUE
+				a.DB.Create(&Journal{
+					Account:    string(AccountAccountsReceivable),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Fee added - %s", adjustment.Notes),
+					Debit:      amountCents,
+					Credit:     0,
+				})
+				a.DB.Create(&Journal{
+					Account:    string(revenueAccount),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Fee added - %s", adjustment.Notes),
+					Debit:      0,
+					Credit:     amountCents,
+				})
+			}
+
+		case InvoiceStatePaid.String():
+			// Paid: This is complex - the adjustment affects both revenue and cash
+			// We need to record it as a separate transaction
+			if isCredit {
+				// We're giving back cash (refund) and reducing revenue
+				// DR: CREDITS_ISSUED, CR: CASH
+				a.DB.Create(&Journal{
+					Account:    string(revenueAccount),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Credit issued on paid invoice - %s", adjustment.Notes),
+					Debit:      amountCents,
+					Credit:     0,
+				})
+				a.DB.Create(&Journal{
+					Account:    string(AccountCash),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Refund for credit - %s", adjustment.Notes),
+					Debit:      0,
+					Credit:     amountCents,
+				})
+			} else {
+				// We're receiving additional cash and increasing revenue
+				// DR: CASH, CR: ADJUSTMENT_REVENUE
+				a.DB.Create(&Journal{
+					Account:    string(AccountCash),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Additional payment for fee - %s", adjustment.Notes),
+					Debit:      amountCents,
+					Credit:     0,
+				})
+				a.DB.Create(&Journal{
+					Account:    string(revenueAccount),
+					SubAccount: subAccount,
+					InvoiceID:  adjustment.InvoiceID,
+					Memo:       fmt.Sprintf("Adjustment: Fee added to paid invoice - %s", adjustment.Notes),
+					Debit:      0,
+					Credit:     amountCents,
+				})
+			}
+		}
+
+		log.Printf("Recorded invoice adjustment journal for invoice ID %d (state: %s): $%.2f",
+			invoice.ID, invoice.State, adjustment.Amount)
+		return nil
+	}
+
+	// Handle bill adjustments
+	if adjustment.BillID != nil {
+		var bill Bill
+		if err := a.DB.Preload("Employee").First(&bill, *adjustment.BillID).Error; err != nil {
+			return fmt.Errorf("failed to load bill: %w", err)
+		}
+
+		subAccount := fmt.Sprintf("%d:%s %s", bill.EmployeeID, bill.Employee.FirstName, bill.Employee.LastName)
+
+		// Determine bill state (draft, accepted, paid)
+		isDraft := bill.AcceptedAt == nil || bill.AcceptedAt.IsZero()
+		isPaid := bill.ClosedAt != nil && !bill.ClosedAt.IsZero()
+
+		if isDraft {
+			// Draft: Don't book yet
+			log.Printf("Bill is draft, adjustment will be booked when bill is accepted")
+			return nil
+		} else if isPaid {
+			// Paid: Book as additional expense and cash payment
+			// DR: ADJUSTMENT_EXPENSE, CR: CASH
+			a.DB.Create(&Journal{
+				Account:    string(AccountAdjustmentExpense),
+				SubAccount: subAccount,
+				BillID:     adjustment.BillID,
+				Memo:       fmt.Sprintf("Adjustment: Expense on paid bill - %s", adjustment.Notes),
+				Debit:      amountCents,
+				Credit:     0,
+			})
+			a.DB.Create(&Journal{
+				Account:    string(AccountCash),
+				SubAccount: subAccount,
+				BillID:     adjustment.BillID,
+				Memo:       fmt.Sprintf("Adjustment: Additional payment - %s", adjustment.Notes),
+				Debit:      0,
+				Credit:     amountCents,
+			})
+		} else {
+			// Accepted but unpaid: Book to accounts payable
+			// DR: ADJUSTMENT_EXPENSE, CR: ACCOUNTS_PAYABLE
+			a.DB.Create(&Journal{
+				Account:    string(AccountAdjustmentExpense),
+				SubAccount: subAccount,
+				BillID:     adjustment.BillID,
+				Memo:       fmt.Sprintf("Adjustment: Expense addition - %s", adjustment.Notes),
+				Debit:      amountCents,
+				Credit:     0,
+			})
+			a.DB.Create(&Journal{
+				Account:    string(AccountAccountsPayable),
+				SubAccount: subAccount,
+				BillID:     adjustment.BillID,
+				Memo:       fmt.Sprintf("Adjustment: AP addition - %s", adjustment.Notes),
+				Debit:      0,
+				Credit:     amountCents,
+			})
+		}
+
+		log.Printf("Recorded bill adjustment journal for bill ID %d: $%.2f", bill.ID, adjustment.Amount)
+		return nil
+	}
+
+	return fmt.Errorf("adjustment must have either invoice_id or bill_id")
 }
