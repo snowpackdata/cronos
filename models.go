@@ -165,12 +165,27 @@ const (
 	AdjustmentStatePaid     AdjustmentState = "ADJUSTMENT_STATE_PAID"
 	AdjustmentStateVoid     AdjustmentState = "ADJUSTMENT_STATE_VOID"
 
-	AccountARClientBillable JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_BILLABLE"
-	AccountAPStaffPayroll   JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_PAYROLL"
-	AccountARIncome         JournalAccountType = "ACCOUNTS_RECEIVABLE_INCOME"
-	AccountAPDiscount       JournalAccountType = "ACCOUNTS_PAYABLE_EXPENSE_DISCOUNT"
-	AccountAPStaffBonus     JournalAccountType = "ACCOUNTS_PAYABLE_STAFF_BONUS"
-	AccountARClientFee      JournalAccountType = "ACCOUNTS_RECEIVABLE_CLIENT_FEE"
+	// New accrual accounting structure
+	// Assets
+	AccountAccruedReceivables JournalAccountType = "ACCRUED_RECEIVABLES"
+	AccountAccountsReceivable JournalAccountType = "ACCOUNTS_RECEIVABLE"
+	AccountCash               JournalAccountType = "CASH"
+
+	// Liabilities
+	AccountAccruedPayroll  JournalAccountType = "ACCRUED_PAYROLL"
+	AccountAccountsPayable JournalAccountType = "ACCOUNTS_PAYABLE"
+
+	// Revenue
+	AccountRevenue           JournalAccountType = "REVENUE"
+	AccountAdjustmentRevenue JournalAccountType = "ADJUSTMENT_REVENUE"
+
+	// Contra-Revenue
+	AccountCreditsIssued JournalAccountType = "CREDITS_ISSUED"
+	AccountDiscounts     JournalAccountType = "DISCOUNTS"
+
+	// Expenses
+	AccountPayrollExpense    JournalAccountType = "PAYROLL_EXPENSE"
+	AccountAdjustmentExpense JournalAccountType = "ADJUSTMENT_EXPENSE"
 
 	// AECommission rate constants
 	// These rates are percentages (0.05 = 5%)
@@ -438,6 +453,31 @@ type Bill struct {
 	GCSFile          string       `json:"file"`
 }
 
+// VerifyJournalBalance checks that all journal entries balance (total debits = total credits)
+// Returns the net balance (should be 0) and an error if they don't balance
+func (a *App) VerifyJournalBalance() (int64, error) {
+	var totalDebits int64
+	var totalCredits int64
+
+	if err := a.DB.Raw("SELECT COALESCE(SUM(debit), 0) FROM journals").Scan(&totalDebits).Error; err != nil {
+		return 0, fmt.Errorf("failed to sum debits: %w", err)
+	}
+
+	if err := a.DB.Raw("SELECT COALESCE(SUM(credit), 0) FROM journals").Scan(&totalCredits).Error; err != nil {
+		return 0, fmt.Errorf("failed to sum credits: %w", err)
+	}
+
+	balance := totalDebits - totalCredits
+	log.Printf("Journal Balance: Debits=$%.2f, Credits=$%.2f, Net=$%.2f",
+		float64(totalDebits)/100, float64(totalCredits)/100, float64(balance)/100)
+
+	if balance != 0 {
+		return balance, fmt.Errorf("journal entries are unbalanced by $%.2f", float64(balance)/100)
+	}
+
+	return 0, nil
+}
+
 // Journal refers to a single entry in a journal, this is a single line item that is used to track
 // the debits and credits for a specific account.
 type Journal struct {
@@ -688,13 +728,15 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 	}
 	var multiplier float64
 	for _, adjustment := range adjustments {
-		if adjustment.Type == AdjustmentTypeCredit.String() {
-			multiplier = -1.0
-		} else {
-			multiplier = 1.0
-		}
 		if adjustment.State != AdjustmentStateVoid.String() {
-			totalAdjustments += adjustment.Amount * multiplier
+			// Always use absolute value, then apply sign based on type
+			absAmount := math.Abs(adjustment.Amount)
+			if adjustment.Type == AdjustmentTypeCredit.String() {
+				multiplier = -1.0
+			} else {
+				multiplier = 1.0
+			}
+			totalAdjustments += absAmount * multiplier
 		}
 	}
 	i.TotalHours = totalHours
@@ -1301,6 +1343,10 @@ func (a *App) GenerateBills(i *Invoice) {
 		// Recalculate bill totals from all entries in the database
 		a.RecalculateBillTotals(&bill)
 
+		// Note: Journal entries are NOT booked here. They are booked at invoice approval (as accruals)
+		// and then moved to AP when the invoice is sent/paid by calling BookBillAccrual explicitly.
+		// This allows bills to be created without prematurely moving accruals to AP or double-booking expenses.
+
 		// Note: SaveBillToGCS is not called here to avoid requiring GCS credentials
 		// during testing. Callers should explicitly call SaveBillToGCS if needed.
 	}
@@ -1368,6 +1414,18 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 		log.Printf("  Adjustment ID %d: $%.2f", adjustment.ID, float64(adjustmentAmount)/100)
 	}
 
+	// Calculate total commissions
+	var commissions []Commission
+	bill.TotalCommissions = 0
+	if err := a.DB.Where("bill_id = ?", bill.ID).Find(&commissions).Error; err != nil {
+		log.Printf("Error loading commissions for bill ID %d: %v", bill.ID, err)
+	} else {
+		for _, commission := range commissions {
+			bill.TotalCommissions += commission.Amount
+			log.Printf("  Commission ID %d (%s): $%.2f", commission.ID, commission.Role, float64(commission.Amount)/100)
+		}
+	}
+
 	// Update the total amount
 	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount))
 	bill.TotalHours = math.Round(bill.TotalHours*100) / 100
@@ -1387,6 +1445,19 @@ func (a *App) MarkBillPaid(b *Bill) {
 	// Recalculate bill totals first to ensure accurate values
 	a.RecalculateBillTotals(b)
 
+	// Approve and process any draft adjustments on this bill
+	var adjustments []Adjustment
+	if err := a.DB.Where("bill_id = ? AND state = ?", b.ID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
+		if len(adjustments) > 0 {
+			log.Printf("Found %d draft adjustments to approve and process on bill %d", len(adjustments), b.ID)
+			for _, adj := range adjustments {
+				adj.State = AdjustmentStateApproved.String()
+				a.DB.Save(&adj)
+				log.Printf("Approved adjustment ID %d (amount: $%.2f)", adj.ID, adj.Amount)
+			}
+		}
+	}
+
 	// Now mark the bill as paid
 	nowTime := time.Now()
 	b.ClosedAt = &nowTime
@@ -1396,64 +1467,14 @@ func (a *App) MarkBillPaid(b *Bill) {
 		log.Printf("Error saving bill as paid: %v", err)
 		return
 	}
+
+	// Record cash payment and clear accounts payable (includes adjustments)
+	log.Printf("Recording cash payment for bill ID: %d", b.ID)
+	if err := a.RecordBillCashPayment(b); err != nil {
+		log.Printf("Warning: Failed to record cash payment for bill %d: %v", b.ID, err)
+	}
+
 	log.Printf("Bill ID %d marked as paid with accurate totals", b.ID)
-
-	// Get the User
-	var userObj Employee
-	a.DB.Where("id = ?", b.EmployeeID).First(&userObj)
-	// Now add a journal entry to reflect the bill
-	journal := Journal{
-		Account:    AccountAPStaffPayroll.String(),
-		SubAccount: userObj.FirstName + " " + userObj.LastName,
-		Debit:      int64(b.TotalAmount), // Use the total amount which includes fees, commissions, and adjustments
-		Credit:     0,
-		Memo:       b.Name,
-		BillID:     &b.ID,
-	}
-	if err := a.DB.Create(&journal).Error; err != nil {
-		log.Printf("Error creating journal entry for bill: %v", err)
-	} else {
-		log.Printf("Created journal entry for bill ID %d with amount $%.2f", b.ID, float64(b.TotalAmount)/100)
-	}
-}
-
-func (a *App) AddJournalEntries(i *Invoice) {
-	// First we need to add the entries for the total fee of the invoice
-	var project Project
-	var account Account
-
-	if i.ProjectID != nil && *i.ProjectID != 0 {
-		a.DB.Preload("Account").Where("id = ?", *i.ProjectID).First(&project)
-		account = project.Account
-	} else {
-		// If no project is associated, load the account directly
-		a.DB.Where("id = ?", i.AccountID).First(&account)
-	}
-
-	journal := Journal{
-		Account:    AccountARClientBillable.String(),
-		SubAccount: account.LegalName,
-		Debit:      0,
-		Credit:     int64(i.TotalFees * 100),
-		Memo:       i.Name,
-		InvoiceID:  &i.ID,
-	}
-	a.DB.Create(&journal)
-	// Associate the invoice
-	i.JournalID = &journal.ID
-	a.DB.Save(&i)
-	// Now we need to add an entry for any adjustments
-	if i.TotalAdjustments != 0 {
-		adjustmentJournal := Journal{
-			Account:    AccountARClientFee.String(),
-			SubAccount: account.LegalName,
-			Debit:      0,
-			Credit:     int64(i.TotalAdjustments * 100),
-			Memo:       i.Name,
-			InvoiceID:  &i.ID,
-		}
-		a.DB.Create(&adjustmentJournal)
-	}
 }
 
 func (a *App) GetBillLineItems(b *Bill) []BillLineItem {
@@ -1568,8 +1589,8 @@ func (a *App) CalculateCommissionAmount(project *Project, role string, invoiceTo
 	log.Printf("Commission calculation - Role: %s, Project Type: %s, Invoice Total: $%d, Rate: %.2f%%",
 		role, project.ProjectType, totalProjectValue, rate*100)
 
-	// Calculate commission amount (in cents)
-	commissionAmount := int(float64(totalProjectValue) * rate * 100)
+	// Calculate commission amount (in cents) - use math.Round to avoid truncation
+	commissionAmount := int(math.Round(float64(totalProjectValue) * rate * 100))
 
 	log.Printf("Calculated commission amount: $%.2f", float64(commissionAmount)/100)
 
