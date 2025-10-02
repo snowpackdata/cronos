@@ -189,6 +189,13 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 	// Reload invoice with updated entries and account
 	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
 
+	// Generate line items (entries rolled up by billing code, adjustments as separate lines)
+	log.Printf("Generating line items for invoice ID: %d", invoiceID)
+	if err := a.GenerateInvoiceLineItems(&invoice); err != nil {
+		log.Printf("Warning: Failed to generate line items for invoice %d: %v", invoiceID, err)
+		return fmt.Errorf("failed to generate line items: %w", err)
+	}
+
 	// Book accrual journal entries for approved work
 	log.Printf("Booking accrual journal entries for invoice ID: %d", invoiceID)
 	if err := a.BookInvoiceAccrual(&invoice); err != nil {
@@ -918,22 +925,19 @@ func (a *App) processCommission(project *Project, role string, staffID uint, sta
 // - DR: ACCRUED_RECEIVABLES, CR: REVENUE (for client billable amount)
 // - DR: PAYROLL_EXPENSE, CR: ACCRUED_PAYROLL (for staff payable amount)
 func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
-	log.Printf("BookInvoiceAccrual: Processing invoice ID %d", invoice.ID)
+	log.Printf("BookInvoiceAccrual: Processing invoice ID %d using line items", invoice.ID)
 
-	// Calculate revenue total from approved entries
-	var revenueAmount int64 = 0
-	for _, entry := range invoice.Entries {
-		if entry.State == EntryStateApproved.String() {
-			revenueAmount += int64(entry.Fee)
-		}
+	// Load invoice line items
+	var lineItems []InvoiceLineItem
+	if err := a.DB.Preload("Employee").Where("invoice_id = ?", invoice.ID).Find(&lineItems).Error; err != nil {
+		return fmt.Errorf("failed to load invoice line items: %w", err)
 	}
 
-	// Include adjustments in revenue
-	var adjustments []Adjustment
-	if err := a.DB.Where("invoice_id = ? AND state != ?", invoice.ID, AdjustmentStateVoid).Find(&adjustments).Error; err == nil {
-		for _, adj := range adjustments {
-			revenueAmount += int64(adj.Amount * 100)
-		}
+	// Calculate revenue total from line items
+	var revenueAmount int64 = 0
+	for _, lineItem := range lineItems {
+		revenueAmount += lineItem.Amount
+		log.Printf("  Line item: %s - $%.2f", lineItem.Description, float64(lineItem.Amount)/100)
 	}
 
 	// Create subaccount identifier for revenue
@@ -970,69 +974,47 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 		log.Printf("Booked revenue accrual for invoice ID %d: $%.2f", invoice.ID, float64(revenueAmount)/100)
 	}
 
-	// Now book payroll expense accruals for ALL approved entries
-	// Group by employee to create one journal entry per employee
-	employeeExpenses := make(map[uint]int64)
-	employeeNames := make(map[uint]string)
-	employeeCache := make(map[uint]*Employee)
-
-	for _, entry := range invoice.Entries {
-		if entry.State != EntryStateApproved.String() {
-			continue
-		}
-
-		// Load employee (with caching to avoid duplicate queries)
-		employee, exists := employeeCache[entry.EmployeeID]
-		if !exists {
-			var emp Employee
-			if err := a.DB.First(&emp, entry.EmployeeID).Error; err != nil {
-				log.Printf("Warning: Could not find employee %d for entry %d", entry.EmployeeID, entry.ID)
-				continue
-			}
-			employee = &emp
-			employeeCache[entry.EmployeeID] = employee
-		}
-
-		// Only accrue for variable or base+variable compensation
-		if employee.CompensationType == string(CompensationTypeFullyVariable) ||
-			employee.CompensationType == string(CompensationTypeBasePlusVariable) {
-
-			if _, exists := employeeExpenses[employee.ID]; !exists {
-				employeeExpenses[employee.ID] = 0
-				employeeNames[employee.ID] = fmt.Sprintf("%s %s", employee.FirstName, employee.LastName)
-			}
-
-			// Calculate the internal/employee cost using the same logic as bills
-			hourAmount := entry.Duration().Hours()
-			rate := a.GetEmployeeBillRate(employee, entry.BillingCodeID)
-			internalFee := int64(hourAmount * rate * 100)
-
-			employeeExpenses[employee.ID] += internalFee
-
-			log.Printf("  Entry ID %d for employee %d: %.2f hours at $%.2f/hr = $%.2f",
-				entry.ID, employee.ID, hourAmount, rate, float64(internalFee)/100)
-		}
+	// Now book payroll expense accruals from bills
+	// We need to load bills associated with this invoice through entries
+	var bills []Bill
+	if err := a.DB.Preload("LineItems").Preload("LineItems.Employee").Preload("Employee").
+		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
+		Where("entries.invoice_id = ?", invoice.ID).
+		Group("bills.id").
+		Find(&bills).Error; err != nil {
+		log.Printf("Warning: Could not load bills for invoice %d: %v", invoice.ID, err)
+		return nil
 	}
 
-	// Book payroll expense accruals for each employee
-	for employeeID, amount := range employeeExpenses {
-		if amount == 0 {
+	// Book payroll expense accruals for each bill's timesheet line items
+	for _, bill := range bills {
+		var totalPayrollExpense int64 = 0
+		
+		// Sum up timesheet line items only (not commissions or adjustments yet)
+		for _, lineItem := range bill.LineItems {
+			if lineItem.Type == LineItemTypeTimesheet.String() {
+				totalPayrollExpense += lineItem.Amount
+			}
+		}
+
+		if totalPayrollExpense == 0 {
 			continue
 		}
 
-		employeeSubAccount := fmt.Sprintf("%d:%s", employeeID, employeeNames[employeeID])
+		employeeSubAccount := fmt.Sprintf("%d:%s %s", bill.EmployeeID, bill.Employee.FirstName, bill.Employee.LastName)
 
 		// Book: DR PAYROLL_EXPENSE
 		expenseDR := Journal{
 			Account:    AccountPayrollExpense.String(),
 			SubAccount: employeeSubAccount,
 			InvoiceID:  &invoice.ID,
+			BillID:     &bill.ID,
 			Memo:       fmt.Sprintf("Payroll expense accrued for approved work on invoice #%d", invoice.ID),
-			Debit:      amount,
+			Debit:      totalPayrollExpense,
 			Credit:     0,
 		}
 		if err := a.DB.Create(&expenseDR).Error; err != nil {
-			log.Printf("Warning: Failed to book payroll expense DR for employee %d: %v", employeeID, err)
+			log.Printf("Warning: Failed to book payroll expense DR for bill %d: %v", bill.ID, err)
 			continue
 		}
 
@@ -1041,20 +1023,21 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 			Account:    AccountAccruedPayroll.String(),
 			SubAccount: employeeSubAccount,
 			InvoiceID:  &invoice.ID,
+			BillID:     &bill.ID,
 			Memo:       fmt.Sprintf("Accrued payroll for approved work on invoice #%d", invoice.ID),
 			Debit:      0,
-			Credit:     amount,
+			Credit:     totalPayrollExpense,
 		}
 		if err := a.DB.Create(&payrollCR).Error; err != nil {
-			log.Printf("Warning: Failed to book accrued payroll CR for employee %d: %v", employeeID, err)
+			log.Printf("Warning: Failed to book accrued payroll CR for bill %d: %v", bill.ID, err)
 			continue
 		}
 
-		log.Printf("Booked payroll expense accrual for employee %d on invoice ID %d: $%.2f",
-			employeeID, invoice.ID, float64(amount)/100)
+		log.Printf("Booked payroll expense accrual for bill %d (employee %d) on invoice ID %d: $%.2f",
+			bill.ID, bill.EmployeeID, invoice.ID, float64(totalPayrollExpense)/100)
 	}
 
-	log.Printf("Successfully booked all accruals for invoice ID %d", invoice.ID)
+	log.Printf("Successfully booked all accruals for invoice ID %d using line items", invoice.ID)
 	return nil
 }
 
@@ -1062,7 +1045,7 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 // Since accruals are already booked at invoice approval, this moves them to AP
 // Commissions are booked as new expenses since they don't exist at invoice approval time
 func (a *App) BookBillAccrual(bill *Bill) error {
-	log.Printf("BookBillAccrual: Processing bill ID %d", bill.ID)
+	log.Printf("BookBillAccrual: Processing bill ID %d using line items", bill.ID)
 
 	// Load employee once
 	var employee Employee
@@ -1082,40 +1065,25 @@ func (a *App) BookBillAccrual(bill *Bill) error {
 		return nil
 	}
 
-	// Calculate internal cost for entries (this was already accrued at invoice approval)
-	var entriesAmount int64 = 0
-	for _, entry := range bill.Entries {
-		if entry.State == EntryStateVoid.String() {
-			continue
-		}
-
-		hourAmount := entry.Duration().Hours()
-		rate := a.GetEmployeeBillRate(&employee, entry.BillingCodeID)
-		internalFee := int64(hourAmount * rate * 100)
-
-		entriesAmount += internalFee
+	// Load line items for this bill
+	var lineItems []BillLineItem
+	if err := a.DB.Where("bill_id = ?", bill.ID).Find(&lineItems).Error; err != nil {
+		return fmt.Errorf("failed to load bill line items: %w", err)
 	}
 
-	// Calculate adjustments separately
-	var adjustmentsAmount int64 = 0
-	var adjustments []Adjustment
-	if err := a.DB.Where("bill_id = ? AND state != ?", bill.ID, AdjustmentStateVoid).Find(&adjustments).Error; err == nil {
-		for _, adj := range adjustments {
-			adjustmentsAmount += int64(adj.Amount * 100)
+	// Calculate total from timesheet and adjustment line items (commissions handled separately)
+	var totalAPAmount int64 = 0
+	for _, lineItem := range lineItems {
+		if lineItem.Type == LineItemTypeTimesheet.String() || lineItem.Type == LineItemTypeAdjustment.String() {
+			totalAPAmount += lineItem.Amount
+			log.Printf("  Line item: %s - $%.2f", lineItem.Description, float64(lineItem.Amount)/100)
 		}
 	}
-
-	// Note: Commissions are NOT handled here - they're booked directly when created via AddCommissionsToBills
-	// Total AP will be entries + adjustments (commissions are booked separately)
-	totalAPAmount := entriesAmount + adjustmentsAmount
 
 	if totalAPAmount == 0 {
-		log.Printf("No variable entries to process for bill ID %d", bill.ID)
+		log.Printf("No variable line items to process for bill ID %d", bill.ID)
 		return nil
 	}
-
-	log.Printf("Bill breakdown - Entries: $%.2f, Adjustments: $%.2f, Total AP: $%.2f",
-		float64(entriesAmount)/100, float64(adjustmentsAmount)/100, float64(totalAPAmount)/100)
 
 	// Check if we've already moved accruals to AP for this bill
 	var existingAPEntries []Journal
@@ -1132,7 +1100,7 @@ func (a *App) BookBillAccrual(bill *Bill) error {
 		subAccount, AccountAccruedPayroll.String()).Find(&existingAccruals)
 
 	if len(existingAccruals) > 0 {
-		// Accruals exist for entries and adjustments, reverse them
+		// Accruals exist, reverse them
 		log.Printf("Moving accrued payroll to AP for bill ID %d (accrued: $%.2f)", bill.ID, float64(totalAPAmount)/100)
 
 		// Reverse the accrued payroll (debit to contra it)
@@ -1148,8 +1116,7 @@ func (a *App) BookBillAccrual(bill *Bill) error {
 			log.Printf("Warning: Failed to reverse accrued payroll: %v", err)
 		}
 
-		// Book formal Accounts Payable for entries and adjustments
-		// (Commissions will have their own AP entries created when they're added)
+		// Book formal Accounts Payable
 		apEntry := Journal{
 			Account:    AccountAccountsPayable.String(),
 			SubAccount: subAccount,
