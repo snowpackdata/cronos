@@ -204,6 +204,33 @@ const (
 	AccountPayrollExpense    JournalAccountType = "PAYROLL_EXPENSE"
 	AccountAdjustmentExpense JournalAccountType = "ADJUSTMENT_EXPENSE"
 
+	// Operating Expenses (from Beancount)
+	AccountOperatingExpensesSaaS          JournalAccountType = "OPERATING_EXPENSES_SAAS"
+	AccountOperatingExpensesTravel        JournalAccountType = "OPERATING_EXPENSES_TRAVEL"
+	AccountOperatingExpensesEquipment     JournalAccountType = "OPERATING_EXPENSES_EQUIPMENT"
+	AccountOperatingExpensesFees          JournalAccountType = "OPERATING_EXPENSES_FEES"
+	AccountOperatingExpensesLegal         JournalAccountType = "OPERATING_EXPENSES_LEGAL"
+	AccountOperatingExpensesDiscretionary JournalAccountType = "OPERATING_EXPENSES_DISCRETIONARY"
+	AccountOperatingExpensesTaxes         JournalAccountType = "OPERATING_EXPENSES_TAXES"
+	AccountOperatingExpensesVendors       JournalAccountType = "OPERATING_EXPENSES_VENDORS"
+	AccountOperatingExpensesOffice        JournalAccountType = "OPERATING_EXPENSES_OFFICE"
+	AccountOwnerDistributions             JournalAccountType = "OWNER_DISTRIBUTIONS"
+
+	// Additional Assets/Liabilities (from Beancount)
+	AccountEquipment         JournalAccountType = "EQUIPMENT"
+	AccountCreditCardPayable JournalAccountType = "CREDIT_CARD_PAYABLE"
+	AccountEquityOwnership   JournalAccountType = "EQUITY_OWNERSHIP"
+	AccountEquityPool        JournalAccountType = "EQUITY_POOL"
+	AccountEquipmentExpense  JournalAccountType = "EQUIPMENT_EXPENSE"
+
+	// Catch-all accounts
+	AccountOtherAssets      JournalAccountType = "OTHER_ASSETS"
+	AccountOtherLiabilities JournalAccountType = "OTHER_LIABILITIES"
+	AccountOtherIncome      JournalAccountType = "OTHER_INCOME"
+	AccountOtherExpenses    JournalAccountType = "OTHER_EXPENSES"
+	AccountEquity           JournalAccountType = "EQUITY"
+	AccountUnclassified     JournalAccountType = "UNCLASSIFIED"
+
 	// AECommission rate constants
 	// These rates are percentages (0.05 = 5%)
 	AECommissionRateNewSmall = 0.08 // Projects under $10,000
@@ -280,6 +307,16 @@ type Client struct {
 	Title     string `json:"title"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+}
+
+// GoogleAuth stores OAuth tokens for Google Calendar integration
+type GoogleAuth struct {
+	gorm.Model
+	UserID       uint      `json:"user_id" gorm:"uniqueIndex"`
+	User         User      `json:"user"`
+	AccessToken  string    `json:"-" gorm:"type:text"`
+	RefreshToken string    `json:"-" gorm:"type:text"`
+	TokenExpiry  time.Time `json:"token_expiry"`
 }
 
 type Account struct {
@@ -372,6 +409,7 @@ type Entry struct {
 	End                  time.Time          `json:"end"`
 	DurationMinutes      float64            `json:"duration_minutes"` // Auto-calculated: End - Start in minutes
 	Internal             bool               `json:"internal" gorm:"index:idx_employee_internal"`
+	IsMeeting            bool               `json:"is_meeting" gorm:"default:false"`
 	Bill                 Bill               `json:"bill"`
 	BillID               *uint              `json:"bill_id"`
 	Invoice              Invoice            `json:"invoice"`
@@ -562,6 +600,30 @@ type Journal struct {
 	Memo       string  `json:"memo"`
 	Debit      int64   `json:"debit"`
 	Credit     int64   `json:"credit"`
+}
+
+// OfflineJournal represents journal entries imported from external sources (e.g., Beancount)
+type OfflineJournal struct {
+	gorm.Model
+	Date        time.Time `gorm:"index" json:"date"`
+	Account     string    `gorm:"index" json:"account"`
+	SubAccount  string    `json:"sub_account"`
+	Description string    `json:"description"`
+	Debit       int64     `json:"debit"`  // in cents
+	Credit      int64     `json:"credit"` // in cents
+
+	// Deduplication - SHA256 of date+account+subaccount+description+amounts
+	ContentHash string `gorm:"uniqueIndex" json:"content_hash"`
+	Source      string `gorm:"default:'beancount'" json:"source"`
+
+	// Review workflow: pending_review, approved, duplicate, excluded
+	Status string `gorm:"default:'pending_review';index" json:"status"`
+
+	// Audit trail
+	ImportedAt time.Time  `json:"imported_at"`
+	ReviewedAt *time.Time `json:"reviewed_at,omitempty"`
+	ReviewedBy *uint      `json:"reviewed_by,omitempty"` // Staff ID
+	Notes      string     `json:"notes,omitempty"`
 }
 
 // CommitmentSegment represents a time period with a specific commitment level
@@ -1180,6 +1242,7 @@ type ApiEntry struct {
 	ImpersonateAsUserID *uint     `json:"impersonate_as_user_id,omitempty"`
 	EmployeeName        string    `json:"employee_name,omitempty"`
 	IsBeingImpersonated bool      `json:"is_being_impersonated,omitempty"`
+	IsMeeting           bool      `json:"is_meeting"`
 }
 
 func (e *Entry) GetAPIEntry() ApiEntry {
@@ -1222,6 +1285,7 @@ func (e *Entry) GetAPIEntry() ApiEntry {
 		Fee:                 float64(e.Fee) / 100.0,
 		ImpersonateAsUserID: e.ImpersonateAsUserID,
 		EmployeeName:        e.Employee.FirstName + " " + e.Employee.LastName,
+		IsMeeting:           e.IsMeeting,
 	}
 }
 
