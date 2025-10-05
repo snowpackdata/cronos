@@ -299,6 +299,12 @@ type Employee struct {
 	EntryPayEligibleState   string       `json:"entry_pay_eligible_state"`
 }
 
+// IsOwner returns true if the employee is an owner (has "partner" in their title)
+// Owner distributions are not tax-deductible and should be tracked separately from payroll
+func (e *Employee) IsOwner() bool {
+	return strings.Contains(strings.ToLower(e.Title), "partner")
+}
+
 type Client struct {
 	// Client refers to an external customer that may access the site to see time entries
 	gorm.Model

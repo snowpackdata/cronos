@@ -873,9 +873,14 @@ func (a *App) processCommission(project *Project, role string, staffID uint, sta
 
 	subAccount := fmt.Sprintf("%d:%s %s", employee.ID, employee.FirstName, employee.LastName)
 
-	// DR: PAYROLL_EXPENSE
+	// DR: PAYROLL_EXPENSE or OWNER_DISTRIBUTIONS (based on employee title)
+	expenseAccount := AccountPayrollExpense
+	if employee.IsOwner() {
+		expenseAccount = AccountOwnerDistributions
+	}
+
 	commissionExpense := Journal{
-		Account:    AccountPayrollExpense.String(),
+		Account:    expenseAccount.String(),
 		SubAccount: subAccount,
 		BillID:     &bill.ID,
 		Memo:       fmt.Sprintf("Commission expense for %s on project %s", role, project.Name),
@@ -989,7 +994,7 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 	// Book payroll expense accruals for each bill's timesheet line items
 	for _, bill := range bills {
 		var totalPayrollExpense int64 = 0
-		
+
 		// Sum up timesheet line items only (not commissions or adjustments yet)
 		for _, lineItem := range bill.LineItems {
 			if lineItem.Type == LineItemTypeTimesheet.String() {
@@ -1003,13 +1008,20 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 
 		employeeSubAccount := fmt.Sprintf("%d:%s %s", bill.EmployeeID, bill.Employee.FirstName, bill.Employee.LastName)
 
-		// Book: DR PAYROLL_EXPENSE
+		// Book: DR PAYROLL_EXPENSE or OWNER_DISTRIBUTIONS (based on employee title)
+		expenseAccount := AccountPayrollExpense
+		expenseType := "Payroll expense"
+		if bill.Employee.IsOwner() {
+			expenseAccount = AccountOwnerDistributions
+			expenseType = "Owner distribution"
+		}
+
 		expenseDR := Journal{
-			Account:    AccountPayrollExpense.String(),
+			Account:    expenseAccount.String(),
 			SubAccount: employeeSubAccount,
 			InvoiceID:  &invoice.ID,
 			BillID:     &bill.ID,
-			Memo:       fmt.Sprintf("Payroll expense accrued for approved work on invoice #%d", invoice.ID),
+			Memo:       fmt.Sprintf("%s accrued for approved work on invoice #%d", expenseType, invoice.ID),
 			Debit:      totalPayrollExpense,
 			Credit:     0,
 		}
