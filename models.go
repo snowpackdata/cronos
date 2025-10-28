@@ -380,6 +380,7 @@ type Project struct {
 	AE                  *Employee            `json:"ae"`
 	SDRID               *uint                `json:"sdr_id"`
 	SDR                 *Employee            `json:"sdr"`
+	HubspotDealID       *uint                `json:"hubspot_deal_id"` // HubSpot Deal ID for CRM integration
 	StaffingAssignments []StaffingAssignment `json:"staffing_assignments"`
 	Assets              []Asset              `json:"assets"`
 }
