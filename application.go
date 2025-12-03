@@ -60,7 +60,11 @@ func (a *App) InitializeLocal(user, password, connection, database string) {
 			Colorful:                  true,        // Disable color
 		},
 	)
-	port := "3306"
+	// Check for custom port from environment, default to 5432 for Postgres
+	port := os.Getenv("DB_PORT")
+	if port == "" {
+		port = "5432"
+	}
 	dbURI := fmt.Sprintf("host=127.0.0.1 user=%s password=%s port=%s database=%s sslmode=disable TimeZone=UTC", user, password, port, database)
 	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{Logger: newLogger})
 
@@ -130,6 +134,14 @@ func (a *App) Migrate() {
 	_ = a.DB.AutoMigrate(&BillLineItem{})
 	_ = a.DB.AutoMigrate(&StaffingAssignment{})
 	_ = a.DB.AutoMigrate(&Asset{})
+	_ = a.DB.AutoMigrate(&ChartOfAccount{})
+	_ = a.DB.AutoMigrate(&Subaccount{})
+	_ = a.DB.AutoMigrate(&ExpenseCategory{})
+	_ = a.DB.AutoMigrate(&ExpenseTag{})
+	_ = a.DB.AutoMigrate(&Expense{})
+	_ = a.DB.AutoMigrate(&ExpenseTagAssignment{})
+	_ = a.DB.AutoMigrate(&RecurringEntry{})
+	_ = a.DB.AutoMigrate(&RecurringBillLineItem{})
 }
 
 // GenerateSecureFilename generates a hash from the filename of an invoice
