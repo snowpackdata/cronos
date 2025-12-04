@@ -141,7 +141,7 @@ func (a *App) UpdateExpenseTag(id uint, name, description string, active bool, b
 func (a *App) DeleteExpenseTag(id uint) error {
 	// Check if tag is in use
 	var count int64
-	if err := a.DB.Model(&ExpenseTagAssignment{}).Where("tag_id = ?", id).Count(&count).Error; err != nil {
+	if err := a.DB.Model(&ExpenseTagAssignment{}).Where("expense_tag_id = ?", id).Count(&count).Error; err != nil {
 		return fmt.Errorf("failed to check tag usage: %w", err)
 	}
 
@@ -195,4 +195,3 @@ func (a *App) GetExpensesByTag(tagID uint) ([]Expense, error) {
 
 	return expenses, nil
 }
-

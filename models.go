@@ -1041,9 +1041,9 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 		totalExpensesInt += expense.Amount
 	}
 	i.TotalHours = totalHours
-	i.TotalFees = float64(totalFeesInt / 100)
+	i.TotalFees = float64(totalFeesInt) / 100.0
 	i.TotalAdjustments = totalAdjustments
-	i.TotalExpenses = float64(totalExpensesInt / 100)
+	i.TotalExpenses = float64(totalExpensesInt) / 100.0
 	i.TotalAmount = i.TotalFees + i.TotalAdjustments + i.TotalExpenses
 	a.DB.Omit(clause.Associations).Save(&i)
 }
@@ -2401,10 +2401,10 @@ func (a *App) RefreshAssetURLIfExpired(asset *Asset) error {
 	} else if asset.Url != "" {
 		urlPrefix = asset.Url
 	}
-	
+
 	// Check if URL is a public URL (no query parameters) vs signed URL (has query params)
 	isPublicURL := asset.Url != "" && !strings.Contains(asset.Url, "?")
-	
+
 	if asset.ExpiresAt == nil {
 		needsRefresh = true
 		log.Printf("Asset %d: no expiration (URL: %s...), needs refresh", asset.ID, urlPrefix)
@@ -2465,10 +2465,10 @@ func (a *App) RefreshAssetsURLsIfExpired(assets []Asset) error {
 	if len(assets) == 0 {
 		return nil
 	}
-	
+
 	log.Printf("Checking %d assets for expired URLs...", len(assets))
 	refreshed := 0
-	
+
 	for i := range assets {
 		if err := a.RefreshAssetURLIfExpired(&assets[i]); err != nil {
 			log.Printf("Warning: failed to refresh asset %d: %v", assets[i].ID, err)
@@ -2477,11 +2477,11 @@ func (a *App) RefreshAssetsURLsIfExpired(assets []Asset) error {
 			refreshed++
 		}
 	}
-	
+
 	if refreshed > 0 {
 		log.Printf("Refreshed %d/%d asset URLs", refreshed, len(assets))
 	}
-	
+
 	return nil
 }
 
@@ -2525,12 +2525,12 @@ func (a *App) approveClientExpense(expense *Expense, approverID uint) error {
 	var eligibleInvoices []Invoice
 	if project.Account.ProjectsSingleInvoice {
 		// Single invoice for all projects
-		a.DB.Where("account_id = ? AND type = ? AND state = ?",
+		a.DB.Preload("Account").Where("account_id = ? AND type = ? AND state = ?",
 			project.AccountID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
 			Order("period_end desc").Find(&eligibleInvoices)
 	} else {
 		// Separate invoices per project
-		a.DB.Where("account_id = ? AND project_id = ? AND type = ? AND state = ?",
+		a.DB.Preload("Account").Where("account_id = ? AND project_id = ? AND type = ? AND state = ?",
 			project.AccountID, expense.ProjectID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
 			Order("period_end desc").Find(&eligibleInvoices)
 	}
@@ -2548,11 +2548,11 @@ func (a *App) approveClientExpense(expense *Expense, approverID uint) error {
 
 		// Query again for the new invoice
 		if project.Account.ProjectsSingleInvoice {
-			a.DB.Where("account_id = ? AND type = ? AND state = ?",
+			a.DB.Preload("Account").Where("account_id = ? AND type = ? AND state = ?",
 				project.AccountID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
 				Order("period_end desc").First(&invoice)
 		} else {
-			a.DB.Where("account_id = ? AND project_id = ? AND type = ? AND state = ?",
+			a.DB.Preload("Account").Where("account_id = ? AND project_id = ? AND type = ? AND state = ?",
 				project.AccountID, expense.ProjectID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
 				Order("period_end desc").First(&invoice)
 		}
@@ -2731,4 +2731,3 @@ func (a *App) GetTagSpendSummary(tagID uint) (totalSpent int, budget *int, remai
 
 	return totalSpent, nil, nil, nil
 }
-
