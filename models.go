@@ -122,6 +122,12 @@ func (l LineItemType) String() string {
 	return string(l)
 }
 
+type ExpenseState string
+
+func (e ExpenseState) String() string {
+	return string(e)
+}
+
 const (
 	HOUR                      = 60.0
 	DEFAULT_PASSWORD          = "DEFAULT_PASSWORD"
@@ -154,7 +160,9 @@ const (
 
 	EntryStateUnaffiliated EntryState = "ENTRY_STATE_UNAFFILIATED"
 	EntryStateDraft        EntryState = "ENTRY_STATE_DRAFT"
+	EntryStateRejected     EntryState = "ENTRY_STATE_REJECTED" // Rejected - staff NOT paid, shows red in UI
 	EntryStateApproved     EntryState = "ENTRY_STATE_APPROVED"
+	EntryStateExcluded     EntryState = "ENTRY_STATE_EXCLUDED" // Staff paid, but not billed to client
 	EntryStateSent         EntryState = "ENTRY_STATE_SENT"
 	EntryStatePaid         EntryState = "ENTRY_STATE_PAID"
 	EntryStateVoid         EntryState = "ENTRY_STATE_VOID"
@@ -189,8 +197,9 @@ const (
 	AccountCash               JournalAccountType = "CASH"
 
 	// Liabilities
-	AccountAccruedPayroll  JournalAccountType = "ACCRUED_PAYROLL"
-	AccountAccountsPayable JournalAccountType = "ACCOUNTS_PAYABLE"
+	AccountAccruedPayroll         JournalAccountType = "ACCRUED_PAYROLL"
+	AccountAccountsPayable        JournalAccountType = "ACCOUNTS_PAYABLE"
+	AccountAccruedExpensesPayable JournalAccountType = "ACCRUED_EXPENSES_PAYABLE" // Contra account for unreconciled expenses
 
 	// Revenue
 	AccountRevenue           JournalAccountType = "REVENUE"
@@ -222,6 +231,9 @@ const (
 	AccountEquityOwnership   JournalAccountType = "EQUITY_OWNERSHIP"
 	AccountEquityPool        JournalAccountType = "EQUITY_POOL"
 	AccountEquipmentExpense  JournalAccountType = "EQUIPMENT_EXPENSE"
+
+	// Pass-through Expense Accounts
+	AccountExpensePassThrough JournalAccountType = "EXPENSE_PASS_THROUGH"
 
 	// Catch-all accounts
 	AccountOtherAssets      JournalAccountType = "OTHER_ASSETS"
@@ -260,6 +272,15 @@ const (
 	LineItemTypeSalary     LineItemType = "LINE_ITEM_TYPE_SALARY"
 	LineItemTypeCommission LineItemType = "LINE_ITEM_TYPE_COMMISSION"
 	LineItemTypeAdjustment LineItemType = "LINE_ITEM_TYPE_ADJUSTMENT"
+	LineItemTypeExpense    LineItemType = "LINE_ITEM_TYPE_EXPENSE"
+
+	// Expense states
+	ExpenseStateDraft     ExpenseState = "EXPENSE_STATE_DRAFT"
+	ExpenseStateSubmitted ExpenseState = "EXPENSE_STATE_SUBMITTED"
+	ExpenseStateApproved  ExpenseState = "EXPENSE_STATE_APPROVED"
+	ExpenseStateRejected  ExpenseState = "EXPENSE_STATE_REJECTED"
+	ExpenseStateInvoiced  ExpenseState = "EXPENSE_STATE_INVOICED"
+	ExpenseStatePaid      ExpenseState = "EXPENSE_STATE_PAID"
 
 	CompensationTypeFullyVariable    CompensationType = "COMPENSATION_TYPE_FULLY_VARIABLE"
 	CompensationTypeSalaried         CompensationType = "COMPENSATION_TYPE_SALARIED"
@@ -288,6 +309,8 @@ type Employee struct {
 	EmploymentStatus        string       `json:"employment_status"` // "active", "inactive", "terminated"
 	StartDate               time.Time    `json:"start_date"`
 	EndDate                 time.Time    `json:"end_date"`
+	HeadshotAssetID         *uint        `json:"headshot_asset_id"`
+	HeadshotAsset           *Asset       `json:"headshot_asset" gorm:"foreignKey:HeadshotAssetID"`
 	Entries                 []Entry      `json:"entries"`
 	Commissions             []Commission `json:"commissions" gorm:"foreignKey:StaffID"`
 	CapacityWeekly          int          `json:"capacity_weekly"`
@@ -303,6 +326,40 @@ type Employee struct {
 // Owner distributions are not tax-deductible and should be tracked separately from payroll
 func (e *Employee) IsOwner() bool {
 	return strings.Contains(strings.ToLower(e.Title), "partner")
+}
+
+// RecurringEntry represents a template for auto-generating regular payroll entries
+// Used for base salary, monthly bonuses, or other fixed compensation
+type RecurringEntry struct {
+	gorm.Model
+	EmployeeID  uint       `json:"employee_id"`
+	Employee    Employee   `json:"employee"`
+	Type        string     `json:"type"`        // "base_salary", "bonus", "stipend"
+	Description string     `json:"description"` // e.g., "Monthly Base Salary"
+	Amount      int        `json:"amount"`      // Amount in cents (monthly)
+	Frequency   string     `json:"frequency"`   // "monthly", "biweekly", "annual"
+	StartDate   time.Time  `json:"start_date"`  // When to start generating
+	EndDate     *time.Time `json:"end_date"`    // Optional end date
+	IsActive    bool       `json:"is_active"`   // Can be toggled on/off
+
+	// Generation tracking
+	LastGeneratedDate *time.Time `json:"last_generated_date"` // Last time we created entries
+	LastGeneratedFor  *time.Time `json:"last_generated_for"`  // Which period we generated for
+}
+
+// RecurringBillLineItem represents an auto-generated line item for a bill
+// Created from RecurringEntry templates, separate from timesheet entries
+type RecurringBillLineItem struct {
+	gorm.Model
+	BillID           uint           `json:"bill_id"`
+	Bill             Bill           `json:"bill"`
+	RecurringEntryID uint           `json:"recurring_entry_id"`
+	RecurringEntry   RecurringEntry `json:"recurring_entry"`
+	Description      string         `json:"description"`
+	Amount           int            `json:"amount"` // Amount in cents
+	PeriodStart      time.Time      `json:"period_start"`
+	PeriodEnd        time.Time      `json:"period_end"`
+	State            string         `json:"state"` // "pending", "approved", "paid"
 }
 
 type Client struct {
@@ -449,6 +506,7 @@ type Invoice struct {
 	PeriodEnd        time.Time         `json:"period_end"`
 	Entries          []Entry           `json:"entries"`
 	Adjustments      []Adjustment      `json:"adjustments"`
+	Expenses         []Expense         `json:"expenses"`
 	LineItems        []InvoiceLineItem `json:"line_items"`
 	AcceptedAt       time.Time         `json:"accepted_at"`
 	SentAt           time.Time         `json:"sent_at"`
@@ -459,6 +517,7 @@ type Invoice struct {
 	TotalHours       float64           `json:"total_hours"`
 	TotalFees        float64           `json:"total_fees"`
 	TotalAdjustments float64           `json:"total_adjustments"`
+	TotalExpenses    float64           `json:"total_expenses"`
 	TotalAmount      float64           `json:"total_amount"`
 	JournalID        *uint             `json:"journal_id"`
 	GCSFile          string            `json:"file"`
@@ -486,6 +545,8 @@ type InvoiceLineItem struct {
 	Adjustment    *Adjustment  `json:"adjustment,omitempty" gorm:"foreignKey:AdjustmentID"`
 	CommissionID  *uint        `json:"commission_id,omitempty"`
 	Commission    *Commission  `json:"commission,omitempty" gorm:"foreignKey:CommissionID"`
+	ExpenseID     *uint        `json:"expense_id,omitempty"`
+	Expense       *Expense     `json:"expense,omitempty" gorm:"foreignKey:ExpenseID"`
 }
 
 // Adjustment
@@ -527,24 +588,25 @@ type Commission struct {
 // linked to the employees.
 type Bill struct {
 	gorm.Model
-	Name             string         `json:"name"`
-	State            BillState      `json:"state"`
-	EmployeeID       uint           `json:"user_id"`
-	Employee         Employee       `json:"user"`
-	PeriodStart      time.Time      `json:"period_start"`
-	PeriodEnd        time.Time      `json:"period_end"`
-	Entries          []Entry        `json:"entries"`
-	Adjustments      []Adjustment   `json:"adjustments"`
-	Commissions      []Commission   `json:"commissions" gorm:"foreignKey:BillID"`
-	LineItems        []BillLineItem `json:"line_items"`
-	AcceptedAt       *time.Time     `json:"accepted_at"`
-	ClosedAt         *time.Time     `json:"closed_at"`
-	TotalHours       float64        `json:"total_hours"`
-	TotalFees        int            `json:"total_fees"`
-	TotalAdjustments float64        `json:"total_adjustments"`
-	TotalCommissions int            `json:"total_commissions"`
-	TotalAmount      int            `json:"total_amount"`
-	GCSFile          string         `json:"file"`
+	Name                   string                  `json:"name"`
+	State                  BillState               `json:"state"`
+	EmployeeID             uint                    `json:"user_id"`
+	Employee               Employee                `json:"user"`
+	PeriodStart            time.Time               `json:"period_start"`
+	PeriodEnd              time.Time               `json:"period_end"`
+	Entries                []Entry                 `json:"entries"`
+	Adjustments            []Adjustment            `json:"adjustments"`
+	Commissions            []Commission            `json:"commissions" gorm:"foreignKey:BillID"`
+	LineItems              []BillLineItem          `json:"line_items"`
+	RecurringBillLineItems []RecurringBillLineItem `json:"recurring_bill_line_items" gorm:"foreignKey:BillID"`
+	AcceptedAt             *time.Time              `json:"accepted_at"`
+	ClosedAt               *time.Time              `json:"closed_at"`
+	TotalHours             float64                 `json:"total_hours"`
+	TotalFees              int                     `json:"total_fees"`
+	TotalAdjustments       float64                 `json:"total_adjustments"`
+	TotalCommissions       int                     `json:"total_commissions"`
+	TotalAmount            int                     `json:"total_amount"`
+	GCSFile                string                  `json:"file"`
 }
 
 // BillLineItem represents a single line item on a payroll bill
@@ -597,15 +659,17 @@ func (a *App) VerifyJournalBalance() (int64, error) {
 // the debits and credits for a specific account.
 type Journal struct {
 	gorm.Model
-	Account    string  `json:"account"`
-	SubAccount string  `json:"sub_account"`
-	Invoice    Invoice `json:"invoice"`
-	InvoiceID  *uint   `json:"invoice_id"`
-	Bill       Bill    `json:"bill"`
-	BillID     *uint   `json:"bill_id"`
-	Memo       string  `json:"memo"`
-	Debit      int64   `json:"debit"`
-	Credit     int64   `json:"credit"`
+	Account                 string                `json:"account"`
+	SubAccount              string                `json:"sub_account"`
+	Invoice                 Invoice               `json:"invoice"`
+	InvoiceID               *uint                 `json:"invoice_id"`
+	Bill                    Bill                  `json:"bill"`
+	BillID                  *uint                 `json:"bill_id"`
+	RecurringBillLineItem   RecurringBillLineItem `json:"recurring_bill_line_item"`
+	RecurringBillLineItemID *uint                 `json:"recurring_bill_line_item_id"`
+	Memo                    string                `json:"memo"`
+	Debit                   int64                 `json:"debit"`
+	Credit                  int64                 `json:"credit"`
 }
 
 // OfflineJournal represents journal entries imported from external sources (e.g., Beancount)
@@ -622,7 +686,7 @@ type OfflineJournal struct {
 	ContentHash string `gorm:"uniqueIndex" json:"content_hash"`
 	Source      string `gorm:"default:'beancount'" json:"source"`
 
-	// Review workflow: pending_review, approved, duplicate, excluded
+	// Review workflow: pending_review, approved, duplicate, excluded, posted
 	Status string `gorm:"default:'pending_review';index" json:"status"`
 
 	// Audit trail
@@ -630,6 +694,12 @@ type OfflineJournal struct {
 	ReviewedAt *time.Time `json:"reviewed_at,omitempty"`
 	ReviewedBy *uint      `json:"reviewed_by,omitempty"` // Staff ID
 	Notes      string     `json:"notes,omitempty"`
+
+	// Reconciliation - link to an expense if this is a payment for an internal expense
+	ReconciledExpenseID *uint      `json:"reconciled_expense_id"`
+	ReconciledAt        *time.Time `json:"reconciled_at"`
+	ReconciledBy        *uint      `json:"reconciled_by"` // Staff ID who reconciled
+	ReconciledExpense   *Expense   `json:"reconciled_expense" gorm:"foreignKey:ReconciledExpenseID"`
 }
 
 // CommitmentSegment represents a time period with a specific commitment level
@@ -736,6 +806,92 @@ type Asset struct {
 	Version       *int       `json:"version"`                   // Version number of the asset
 	GCSObjectPath *string    `json:"gcs_object_path,omitempty"` // Actual GCS object path, e.g., assets/projects/1/file.txt
 }
+
+// ChartOfAccount represents a configurable GL account in the system
+// This allows dynamic creation of accounts beyond the predefined constants
+type ChartOfAccount struct {
+	gorm.Model
+	AccountCode     string `json:"account_code" gorm:"unique;not null"` // e.g., "OPERATING_EXPENSES_SAAS"
+	AccountName     string `json:"account_name"`                        // e.g., "Operating Expenses - SaaS"
+	AccountType     string `json:"account_type"`                        // "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
+	ParentID        *uint  `json:"parent_id"`                           // For hierarchical accounts
+	IsActive        bool   `json:"is_active" gorm:"default:true"`
+	Description     string `json:"description"`
+	IsSystemDefined bool   `json:"is_system_defined" gorm:"default:false"` // True for predefined constants
+}
+
+// Subaccount represents a sub-ledger account (e.g., specific vendors, clients, employees)
+type Subaccount struct {
+	gorm.Model
+	Code        string `json:"code" gorm:"not null;uniqueIndex:idx_subaccount_code_account"` // e.g., "AWS", "VANTA_INC", "EMPLOYEE_123"
+	Name        string `json:"name"`                                                         // e.g., "Amazon Web Services", "Vanta Inc"
+	AccountCode string `json:"account_code" gorm:"uniqueIndex:idx_subaccount_code_account"`  // Link to ChartOfAccount code
+	Type        string `json:"type"`                                                         // "VENDOR", "CLIENT", "EMPLOYEE", "CUSTOM"
+	IsActive    bool   `json:"is_active" gorm:"default:true"`
+}
+
+// Expense represents a pass-through expense that will be billed to a client
+type Expense struct {
+	gorm.Model
+	ProjectID       *uint     `json:"project_id"` // Nullable - internal expenses don't need a project
+	Project         *Project  `json:"project" gorm:"foreignKey:ProjectID"`
+	SubmitterID     uint      `json:"submitter_id"`
+	Submitter       Employee  `json:"submitter"`
+	ApproverID      *uint     `json:"approver_id"`
+	Approver        *Employee `json:"approver" gorm:"foreignKey:ApproverID"`
+	InvoiceID       *uint     `json:"invoice_id"`
+	Invoice         *Invoice  `json:"invoice"`
+	Amount          int       `json:"amount"` // Amount in cents
+	Date            time.Time `json:"date"`
+	Description     string    `json:"description" gorm:"type:varchar(2048)"`
+	State           string    `json:"state"` // ExpenseState
+	ReceiptID       *uint     `json:"receipt_id"`
+	Receipt         *Asset    `json:"receipt" gorm:"foreignKey:ReceiptID"`
+	RejectionReason string    `json:"rejection_reason,omitempty"`
+
+	// New fields for flexible GL booking
+	ExpenseAccountCode string `json:"expense_account_code"` // Which expense account to debit (e.g., "OPERATING_EXPENSES_SAAS")
+	SubaccountCode     string `json:"subaccount_code"`      // Which subaccount to use (e.g., "AWS", vendor name)
+	PaymentAccountCode string `json:"payment_account_code"` // Which account was used to pay (e.g., "CASH", "CREDIT_CARD_CHASE")
+
+	// Category and Tags
+	CategoryID uint            `json:"category_id"` // Required category
+	Category   ExpenseCategory `json:"category"`
+	Tags       []ExpenseTag    `json:"tags" gorm:"many2many:expense_tag_assignments;joinForeignKey:expense_id;joinReferences:expense_tag_id"`
+
+	// Reconciliation - link to actual bank/CC transaction
+	ReconciledOfflineJournalID *uint           `json:"reconciled_offline_journal_id"` // Link to the actual bank/CC transaction
+	ReconciledAt               *time.Time      `json:"reconciled_at"`
+	ReconciledBy               *uint           `json:"reconciled_by"` // Staff ID who reconciled
+	ReconciledOfflineJournal   *OfflineJournal `json:"reconciled_offline_journal" gorm:"foreignKey:ReconciledOfflineJournalID"`
+}
+
+// ExpenseCategory represents a required categorization for expenses
+type ExpenseCategory struct {
+	gorm.Model
+	Name          string `json:"name" gorm:"type:varchar(255);uniqueIndex"`
+	Description   string `json:"description" gorm:"type:varchar(1024)"`
+	GLAccountCode string `json:"gl_account_code" gorm:"type:varchar(100)"` // Maps to Chart of Accounts (e.g., OPERATING_EXPENSES_TRAVEL)
+	Active        bool   `json:"active" gorm:"default:true"`
+}
+
+// ExpenseTag represents an optional tag for grouping expenses with budget tracking
+type ExpenseTag struct {
+	gorm.Model
+	Name        string    `json:"name" gorm:"type:varchar(255);uniqueIndex"`
+	Description string    `json:"description" gorm:"type:varchar(1024)"`
+	Active      bool      `json:"active" gorm:"default:true"`
+	Budget      *int      `json:"budget"` // Budget in cents, nullable
+	Expenses    []Expense `json:"-" gorm:"many2many:expense_tag_assignments;joinForeignKey:expense_tag_id;joinReferences:expense_id"`
+}
+
+// ExpenseTagAssignment is the junction table for expense-to-tag many-to-many relationship
+type ExpenseTagAssignment struct {
+	ExpenseID uint      `gorm:"primaryKey;column:expense_id"`
+	TagID     uint      `gorm:"primaryKey;column:expense_tag_id"`
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+}
+
 type AssetType string
 
 func (s AssetType) String() string {
@@ -854,10 +1010,13 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 	var totalHours float64
 	var totalFeesInt int
 	var totalAdjustments float64
+	var totalExpensesInt int
 	var entries []Entry
 	a.DB.Where("invoice_id = ?", i.ID).Find(&entries)
 	var adjustments []Adjustment
 	a.DB.Where("invoice_id = ?", i.ID).Find(&adjustments)
+	var expenses []Expense
+	a.DB.Where("invoice_id = ? AND state = ?", i.ID, ExpenseStateInvoiced.String()).Find(&expenses)
 
 	for _, entry := range entries {
 		if entry.State != EntryStateVoid.String() {
@@ -878,10 +1037,14 @@ func (a *App) UpdateInvoiceTotals(i *Invoice) {
 			totalAdjustments += absAmount * multiplier
 		}
 	}
+	for _, expense := range expenses {
+		totalExpensesInt += expense.Amount
+	}
 	i.TotalHours = totalHours
 	i.TotalFees = float64(totalFeesInt / 100)
 	i.TotalAdjustments = totalAdjustments
-	i.TotalAmount = i.TotalFees + i.TotalAdjustments
+	i.TotalExpenses = float64(totalExpensesInt / 100)
+	i.TotalAmount = i.TotalFees + i.TotalAdjustments + i.TotalExpenses
 	a.DB.Omit(clause.Associations).Save(&i)
 }
 
@@ -892,9 +1055,14 @@ func (a *App) GenerateInvoiceLineItems(invoice *Invoice) error {
 	a.DB.Where("invoice_id = ?", invoice.ID).Delete(&InvoiceLineItem{})
 
 	// Load entries with billing codes
+	// Exclude VOID (reversed), REJECTED (never approved), and EXCLUDED (approved but not billed to client)
 	var entries []Entry
 	if err := a.DB.Preload("BillingCode").Preload("BillingCode.Rate").
-		Where("invoice_id = ? AND state != ?", invoice.ID, EntryStateVoid.String()).
+		Where("invoice_id = ? AND state NOT IN ?", invoice.ID, []string{
+			EntryStateVoid.String(),
+			EntryStateRejected.String(),
+			EntryStateExcluded.String(),
+		}).
 		Find(&entries).Error; err != nil {
 		return fmt.Errorf("failed to load entries: %w", err)
 	}
@@ -978,6 +1146,31 @@ func (a *App) GenerateInvoiceLineItems(invoice *Invoice) error {
 		}
 	}
 
+	// Create line items for expenses
+	var expenses []Expense
+	if err := a.DB.Where("invoice_id = ? AND state = ?", invoice.ID, ExpenseStateInvoiced.String()).
+		Find(&expenses).Error; err != nil {
+		return fmt.Errorf("failed to load expenses: %w", err)
+	}
+
+	for _, expense := range expenses {
+		description := fmt.Sprintf("Expense: %s", expense.Description)
+
+		lineItem := InvoiceLineItem{
+			InvoiceID:   invoice.ID,
+			Type:        LineItemTypeExpense.String(),
+			Description: description,
+			Quantity:    0,
+			Rate:        0,
+			Amount:      int64(expense.Amount),
+			ExpenseID:   &expense.ID,
+		}
+
+		if err := a.DB.Create(&lineItem).Error; err != nil {
+			return fmt.Errorf("failed to create expense line item: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -994,9 +1187,14 @@ func (a *App) GenerateBillLineItems(bill *Bill) error {
 	}
 
 	// Group timesheet entries by billing code
+	// Exclude VOID (reversed) and REJECTED (never approved, not paid)
+	// EXCLUDED entries are included (staff gets paid for excluded work, just not billed to client)
 	var entries []Entry
 	if err := a.DB.Preload("BillingCode").Preload("BillingCode.InternalRate").
-		Where("bill_id = ? AND state != ?", bill.ID, EntryStateVoid.String()).
+		Where("bill_id = ? AND state NOT IN ?", bill.ID, []string{
+			EntryStateVoid.String(),
+			EntryStateRejected.String(),
+		}).
 		Find(&entries).Error; err != nil {
 		return fmt.Errorf("failed to load entries: %w", err)
 	}
@@ -1013,8 +1211,9 @@ func (a *App) GenerateBillLineItems(bill *Bill) error {
 		var entryIDs []uint
 		var billingCode BillingCode
 		var rate float64
+		var earliestDate, latestDate time.Time
 
-		for _, entry := range bcEntries {
+		for i, entry := range bcEntries {
 			hours := entry.Duration().Hours()
 			totalHours += hours
 
@@ -1025,11 +1224,25 @@ func (a *App) GenerateBillLineItems(bill *Bill) error {
 			entryIDs = append(entryIDs, entry.ID)
 			billingCode = entry.BillingCode
 			rate = internalRate
+
+			// Track date range
+			if i == 0 || entry.Start.Before(earliestDate) {
+				earliestDate = entry.Start
+			}
+			if i == 0 || entry.Start.After(latestDate) {
+				latestDate = entry.Start
+			}
 		}
 
 		entryIDsJSON, _ := json.Marshal(entryIDs)
 
-		description := fmt.Sprintf("%s - %.1f hours", billingCode.Name, totalHours)
+		// Include entry count and date range in description for better traceability
+		description := fmt.Sprintf("%s - %.1f hours (%d entries: %s - %s)",
+			billingCode.Name,
+			totalHours,
+			len(entryIDs),
+			earliestDate.Format("01/02"),
+			latestDate.Format("01/02"))
 
 		lineItem := BillLineItem{
 			BillID:        bill.ID,
@@ -1383,9 +1596,11 @@ type DraftInvoice struct {
 	PeriodStart      string       `json:"period_start"`
 	PeriodEnd        string       `json:"period_end"`
 	LineItems        []DraftEntry `json:"line_items"`
+	Expenses         []Expense    `json:"expenses"`
 	Adjustments      []Adjustment `json:"adjustments"`
 	TotalHours       float64      `json:"total_hours"`
 	TotalFees        float64      `json:"total_fees"`
+	TotalExpenses    float64      `json:"total_expenses"`
 	TotalAdjustments float64      `json:"total_adjustments"`
 	TotalAmount      float64      `json:"total_amount"`
 	PeriodClosed     bool         `json:"period_closed"`
@@ -1494,7 +1709,24 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 			totalAdjustments += adjustment.Amount
 		}
 	}
-	totalAmount = totalFees + totalAdjustments
+
+	// Load approved expenses for this invoice with their associations
+	var expenses []Expense
+	a.DB.Where("invoice_id = ? AND state = ?", i.ID, ExpenseStateApproved).
+		Preload("Project").
+		Preload("Submitter").
+		Preload("Receipt").
+		Preload("Category").
+		Preload("Tags").
+		Find(&expenses)
+
+	// Sum expenses
+	var totalExpenses float64
+	for _, expense := range expenses {
+		totalExpenses += float64(expense.Amount) / 100.0
+	}
+
+	totalAmount = totalFees + totalExpenses + totalAdjustments
 
 	return DraftInvoice{
 		InvoiceID:        i.ID,
@@ -1506,9 +1738,11 @@ func (a *App) GetDraftInvoice(i *Invoice) DraftInvoice {
 		PeriodStart:      i.PeriodStart.Format("01/02/2006"),
 		PeriodEnd:        i.PeriodEnd.Format("01/02/2006"),
 		LineItems:        draftEntries,
+		Expenses:         expenses,
 		Adjustments:      adjustments,
 		TotalHours:       totalHours,
 		TotalFees:        totalFees,
+		TotalExpenses:    totalExpenses,
 		TotalAdjustments: totalAdjustments,
 		TotalAmount:      totalAmount,
 		PeriodClosed:     periodClosed,
@@ -1787,12 +2021,24 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 		}
 	}
 
-	// Update the total amount
-	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount))
+	// Calculate total recurring entries (base salary, etc.)
+	var recurringLineItems []RecurringBillLineItem
+	totalRecurringAmount := 0
+	if err := a.DB.Where("bill_id = ? AND state != ?", bill.ID, "void").Find(&recurringLineItems).Error; err != nil {
+		log.Printf("Error loading recurring line items for bill ID %d: %v", bill.ID, err)
+	} else {
+		for _, item := range recurringLineItems {
+			totalRecurringAmount += item.Amount
+			log.Printf("  Recurring: %s - $%.2f", item.Description, float64(item.Amount)/100)
+		}
+	}
+
+	// Update the total amount (fees + commissions + adjustments + recurring)
+	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount)) + totalRecurringAmount
 	bill.TotalHours = math.Round(bill.TotalHours*100) / 100
 
-	log.Printf("Bill totals recalculated - Hours: %.2f, Fees: $%.2f, Total: $%.2f",
-		bill.TotalHours, float64(bill.TotalFees)/100, float64(bill.TotalAmount)/100)
+	log.Printf("Bill totals recalculated - Hours: %.2f, Fees: $%.2f, Recurring: $%.2f, Total: $%.2f",
+		bill.TotalHours, float64(bill.TotalFees)/100, float64(totalRecurringAmount)/100, float64(bill.TotalAmount)/100)
 
 	// Save the bill
 	if err := a.DB.Save(&bill).Error; err != nil {
@@ -1802,27 +2048,23 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 	}
 }
 
-func (a *App) MarkBillPaid(b *Bill) {
+// MarkBillPaid marks a bill as paid with the specified payment date
+// paymentDate is the actual date the payment was made (can be backdated)
+func (a *App) MarkBillPaid(b *Bill, paymentDate time.Time) {
+	log.Printf("MarkBillPaid called for bill ID: %d, payment date: %s", b.ID, paymentDate.Format("2006-01-02"))
+
 	// Recalculate bill totals first to ensure accurate values
 	a.RecalculateBillTotals(b)
 
-	// Approve and process any draft adjustments on this bill
-	var adjustments []Adjustment
-	if err := a.DB.Where("bill_id = ? AND state = ?", b.ID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
-		if len(adjustments) > 0 {
-			log.Printf("Found %d draft adjustments to approve and process on bill %d", len(adjustments), b.ID)
-			for _, adj := range adjustments {
-				adj.State = AdjustmentStateApproved.String()
-				a.DB.Save(&adj)
-				log.Printf("Approved adjustment ID %d (amount: $%.2f)", adj.ID, adj.Amount)
-			}
-		}
+	// Batch approve any draft adjustments on this bill
+	result := a.DB.Model(&Adjustment{}).Where("bill_id = ? AND state = ?", b.ID, AdjustmentStateDraft.String()).Update("state", AdjustmentStateApproved.String())
+	if result.Error == nil && result.RowsAffected > 0 {
+		log.Printf("Batch approved %d draft adjustments on bill %d", result.RowsAffected, b.ID)
 	}
 
-	// Now mark the bill as paid
-	nowTime := time.Now()
+	// Now mark the bill as paid with the provided payment date
 	b.State = BillStatePaid
-	b.ClosedAt = &nowTime
+	b.ClosedAt = &paymentDate
 
 	// Save the updated bill
 	if err := a.DB.Save(&b).Error; err != nil {
@@ -1831,8 +2073,8 @@ func (a *App) MarkBillPaid(b *Bill) {
 	}
 
 	// Record cash payment and clear accounts payable (includes adjustments)
-	log.Printf("Recording cash payment for bill ID: %d", b.ID)
-	if err := a.RecordBillCashPayment(b); err != nil {
+	log.Printf("Recording cash payment for bill ID: %d on date: %s", b.ID, paymentDate.Format("2006-01-02"))
+	if err := a.RecordBillCashPayment(b, paymentDate); err != nil {
 		log.Printf("Warning: Failed to record cash payment for bill %d: %v", b.ID, err)
 	}
 
@@ -1864,6 +2106,23 @@ func (a *App) GetBillLineItems(b *Bill) []BillLineItemDisplay {
 			Rate:            lineItem.Rate,
 			RateFormatted:   fmt.Sprintf("%.2f", lineItem.Rate),
 			Total:           float64(lineItem.Amount) / 100.0, // Convert from cents
+		})
+	}
+
+	// Load recurring bill line items (e.g., base salary)
+	var recurringLineItems []RecurringBillLineItem
+	a.DB.Where("bill_id = ? AND state != ?", b.ID, "void").Find(&recurringLineItems)
+
+	// Add recurring line items to display
+	for _, recurringItem := range recurringLineItems {
+		displayLineItems = append(displayLineItems, BillLineItemDisplay{
+			BillingCode:     recurringItem.Description, // Use description for the "Description" column
+			BillingCodeCode: "SALARY",                  // Code column
+			Hours:           0,
+			HoursFormatted:  "-",
+			Rate:            0,
+			RateFormatted:   "-",
+			Total:           float64(recurringItem.Amount) / 100.0, // Convert from cents
 		})
 	}
 
@@ -2016,6 +2275,22 @@ func (a *App) GetObjectURL(bucketName, objectName string) string {
 	return fmt.Sprintf("https://storage.googleapis.com/%s/%s", bucketName, objectName)
 }
 
+// MakeObjectPublic makes an object publicly accessible.
+func (a *App) MakeObjectPublic(ctx context.Context, bucketName, objectName string) error {
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to create GCS client")
+	}
+	defer client.Close()
+
+	acl := client.Bucket(bucketName).Object(objectName).ACL()
+	if err := acl.Set(ctx, storage.AllUsers, storage.RoleReader); err != nil {
+		return errors.Wrap(err, "failed to set public ACL")
+	}
+
+	return nil
+}
+
 // DownloadObject downloads an object from GCS.
 func (a *App) DownloadObject(ctx context.Context, bucketName, objectName string) ([]byte, error) {
 	client, err := storage.NewClient(ctx)
@@ -2073,21 +2348,387 @@ func (a *App) ObjectExists(ctx context.Context, bucketName, objectName string) (
 
 // GenerateSignedURL generates a signed URL for accessing a private object.
 // It now returns the generated URL, the expiration time of the URL, and any error.
+// Uses IAM-based signing with service account credentials.
+// Requires GOOGLE_APPLICATION_CREDENTIALS pointing to a service account key file.
+// Falls back to public URLs if service account credentials are not available.
 func (a *App) GenerateSignedURL(bucketName, objectName string) (string, time.Time, error) {
-	client, err := storage.NewClient(context.Background())
+	ctx := context.Background()
+	expiresTime := time.Now().Add(signedURLExpiration)
+
+	client, err := storage.NewClient(ctx)
 	if err != nil {
-		return "", time.Time{}, errors.Wrap(err, "failed to create GCS client")
+		log.Printf("Failed to create storage client for signed URL: %v", err)
+		return a.GetObjectURL(bucketName, objectName), expiresTime, err
 	}
 	defer client.Close()
 
-	expiresTime := time.Now().Add(signedURLExpiration)
-	url, err := client.Bucket(bucketName).SignedURL(objectName, &storage.SignedURLOptions{
+	// Generate signed URL using IAM SignBytes
+	opts := &storage.SignedURLOptions{
+		Scheme:  storage.SigningSchemeV4,
 		Method:  "GET",
 		Expires: expiresTime,
-	})
-	if err != nil {
-		return "", time.Time{}, errors.Wrap(err, "failed to generate signed URL")
 	}
 
+	url, err := client.Bucket(bucketName).SignedURL(objectName, opts)
+	if err != nil {
+		// If signing fails (e.g., using gcloud user credentials instead of service account),
+		// fall back to public URL without logging as error
+		log.Printf("Warning: Cannot generate signed URL for %s/%s: %v - falling back to public URL", bucketName, objectName, err)
+		return a.GetObjectURL(bucketName, objectName), expiresTime, nil
+	}
+
+	log.Printf("Successfully generated signed URL for %s/%s (expires: %v)", bucketName, objectName, expiresTime)
 	return url, expiresTime, nil
 }
+
+// RefreshAssetURLIfExpired checks if an asset's signed URL is expired and regenerates it if needed.
+// Updates the database with the new URL and expiration time.
+// Gracefully handles cases where signed URLs cannot be generated (e.g., missing service account credentials).
+func (a *App) RefreshAssetURLIfExpired(asset *Asset) error {
+	// Skip if asset doesn't have GCS storage info
+	if asset.GCSObjectPath == nil || *asset.GCSObjectPath == "" || asset.BucketName == nil || *asset.BucketName == "" {
+		return nil
+	}
+
+	// Check if URL is expired, missing, or is a public URL (needs to be converted to signed)
+	now := time.Now()
+	needsRefresh := false
+
+	// Log current state for debugging
+	urlPrefix := "unknown"
+	if len(asset.Url) > 30 {
+		urlPrefix = asset.Url[:30]
+	} else if asset.Url != "" {
+		urlPrefix = asset.Url
+	}
+	
+	// Check if URL is a public URL (no query parameters) vs signed URL (has query params)
+	isPublicURL := asset.Url != "" && !strings.Contains(asset.Url, "?")
+	
+	if asset.ExpiresAt == nil {
+		needsRefresh = true
+		log.Printf("Asset %d: no expiration (URL: %s...), needs refresh", asset.ID, urlPrefix)
+	} else if asset.ExpiresAt.Before(now) {
+		needsRefresh = true
+		log.Printf("Asset %d: expired at %v (URL: %s...), needs refresh", asset.ID, asset.ExpiresAt, urlPrefix)
+	} else if isPublicURL {
+		needsRefresh = true
+		log.Printf("Asset %d: converting public URL to signed URL (URL: %s...)", asset.ID, urlPrefix)
+	} else {
+		// Log that it doesn't need refresh
+		log.Printf("Asset %d: still valid until %v (URL: %s...)", asset.ID, asset.ExpiresAt, urlPrefix)
+	}
+
+	if !needsRefresh {
+		return nil
+	}
+
+	// Regenerate signed URL (or fall back to public URL if service account not available)
+	log.Printf("Asset %d: generating signed URL for %s/%s", asset.ID, *asset.BucketName, *asset.GCSObjectPath)
+	newURL, newExpiresAt, err := a.GenerateSignedURL(*asset.BucketName, *asset.GCSObjectPath)
+	// GenerateSignedURL now returns nil error even if it falls back to public URL,
+	// so we only check for actual errors (client creation failures, etc.)
+	if err != nil {
+		// Only log as warning, don't fail the entire request
+		log.Printf("Warning: failed to refresh URL for asset %d: %v", asset.ID, err)
+		return nil
+	}
+
+	log.Printf("Asset %d: new URL starts with: %s (length: %d)", asset.ID, newURL[:min(50, len(newURL))], len(newURL))
+
+	// Update asset in memory
+	asset.Url = newURL
+	asset.ExpiresAt = &newExpiresAt
+
+	// Save to database
+	if err := a.DB.Model(asset).Updates(map[string]interface{}{
+		"url":        newURL,
+		"expires_at": newExpiresAt,
+	}).Error; err != nil {
+		log.Printf("Warning: failed to save refreshed URL for asset %d: %v", asset.ID, err)
+		return nil
+	}
+
+	log.Printf("Asset %d: successfully saved new URL to database", asset.ID)
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// RefreshAssetsURLsIfExpired refreshes signed URLs for a slice of assets if expired.
+func (a *App) RefreshAssetsURLsIfExpired(assets []Asset) error {
+	if len(assets) == 0 {
+		return nil
+	}
+	
+	log.Printf("Checking %d assets for expired URLs...", len(assets))
+	refreshed := 0
+	
+	for i := range assets {
+		if err := a.RefreshAssetURLIfExpired(&assets[i]); err != nil {
+			log.Printf("Warning: failed to refresh asset %d: %v", assets[i].ID, err)
+			// Continue processing other assets instead of failing completely
+		} else if assets[i].ExpiresAt != nil {
+			refreshed++
+		}
+	}
+	
+	if refreshed > 0 {
+		log.Printf("Refreshed %d/%d asset URLs", refreshed, len(assets))
+	}
+	
+	return nil
+}
+
+// ApproveExpense approves an expense (either client or internal)
+func (a *App) ApproveExpense(expenseID uint, approverID uint) error {
+	var expense Expense
+	if err := a.DB.Preload("Project").Preload("Category").First(&expense, expenseID).Error; err != nil {
+		return fmt.Errorf("failed to load expense: %w", err)
+	}
+
+	if expense.State != ExpenseStateSubmitted.String() {
+		return fmt.Errorf("expense must be in submitted state to approve")
+	}
+
+	expense.State = ExpenseStateApproved.String()
+	expense.ApproverID = &approverID
+
+	if err := a.DB.Save(&expense).Error; err != nil {
+		return fmt.Errorf("failed to save approved expense: %w", err)
+	}
+
+	// Check if this is a client expense or internal expense
+	if expense.ProjectID != nil {
+		// CLIENT EXPENSE: Associate with invoice and book with revenue
+		return a.approveClientExpense(&expense, approverID)
+	} else {
+		// INTERNAL EXPENSE: Book directly without invoice
+		return a.approveInternalExpense(&expense, approverID)
+	}
+}
+
+// approveClientExpense handles approval for client pass-through expenses
+func (a *App) approveClientExpense(expense *Expense, approverID uint) error {
+	// Get the project and account
+	var project Project
+	if err := a.DB.Preload("Account").First(&project, expense.ProjectID).Error; err != nil {
+		return fmt.Errorf("failed to load project: %w", err)
+	}
+
+	// Find or create a draft invoice for this project
+	var eligibleInvoices []Invoice
+	if project.Account.ProjectsSingleInvoice {
+		// Single invoice for all projects
+		a.DB.Where("account_id = ? AND type = ? AND state = ?",
+			project.AccountID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
+			Order("period_end desc").Find(&eligibleInvoices)
+	} else {
+		// Separate invoices per project
+		a.DB.Where("account_id = ? AND project_id = ? AND type = ? AND state = ?",
+			project.AccountID, expense.ProjectID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
+			Order("period_end desc").Find(&eligibleInvoices)
+	}
+
+	var invoice Invoice
+	if len(eligibleInvoices) == 0 {
+		// Create a new draft invoice
+		var projectIDPtr *uint
+		if !project.Account.ProjectsSingleInvoice {
+			projectIDPtr = expense.ProjectID // Already a pointer
+		}
+		if err := a.CreateInvoice(project.AccountID, projectIDPtr, expense.Date); err != nil {
+			return fmt.Errorf("failed to create draft invoice: %w", err)
+		}
+
+		// Query again for the new invoice
+		if project.Account.ProjectsSingleInvoice {
+			a.DB.Where("account_id = ? AND type = ? AND state = ?",
+				project.AccountID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
+				Order("period_end desc").First(&invoice)
+		} else {
+			a.DB.Where("account_id = ? AND project_id = ? AND type = ? AND state = ?",
+				project.AccountID, expense.ProjectID, InvoiceTypeAR.String(), InvoiceStateDraft.String()).
+				Order("period_end desc").First(&invoice)
+		}
+	} else {
+		invoice = eligibleInvoices[0]
+	}
+
+	// Associate the expense with the invoice
+	expense.InvoiceID = &invoice.ID
+	if err := a.DB.Save(&expense).Error; err != nil {
+		return fmt.Errorf("failed to associate expense with invoice: %w", err)
+	}
+
+	// Book the expense to the general ledger (with revenue for client reimbursement)
+	if err := a.BookExpenseAccrual(expense, &invoice); err != nil {
+		return fmt.Errorf("failed to book expense accrual: %w", err)
+	}
+
+	log.Printf("Approved client expense ID %d by approver ID %d and added to invoice ID %d", expense.ID, approverID, invoice.ID)
+	return nil
+}
+
+// approveInternalExpense handles approval for internal company expenses (no client billing)
+func (a *App) approveInternalExpense(expense *Expense, approverID uint) error {
+	log.Printf("Approving internal expense ID %d", expense.ID)
+
+	amountCents := int64(expense.Amount)
+
+	// Determine expense category account
+	expenseAccount := "OPERATING_EXPENSES_GENERAL" // Default
+	if expense.Category.GLAccountCode != "" {
+		expenseAccount = expense.Category.GLAccountCode
+	} else if expense.ExpenseAccountCode != "" {
+		expenseAccount = expense.ExpenseAccountCode
+	}
+
+	// Use category name as subaccount if no specific subaccount provided
+	expenseSubAccount := expense.Category.Name
+	if expense.SubaccountCode != "" {
+		expenseSubAccount = expense.SubaccountCode
+	}
+
+	// Store the subaccount code for later reconciliation
+	expense.SubaccountCode = expenseSubAccount
+	if err := a.DB.Save(expense).Error; err != nil {
+		return fmt.Errorf("failed to save expense subaccount: %w", err)
+	}
+
+	// Book DR: [Expense Category]
+	expenseDR := Journal{
+		Account:    expenseAccount,
+		SubAccount: expenseSubAccount,
+		Memo:       fmt.Sprintf("Internal expense: %s", expense.Description),
+		Debit:      amountCents,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&expenseDR).Error; err != nil {
+		return fmt.Errorf("failed to book internal expense debit: %w", err)
+	}
+
+	// Book CR: ACCRUED_EXPENSES_PAYABLE (contra account until reconciled)
+	accrualCR := Journal{
+		Account:    AccountAccruedExpensesPayable.String(),
+		SubAccount: expenseSubAccount,
+		Memo:       fmt.Sprintf("Internal expense accrual: %s", expense.Description),
+		Debit:      0,
+		Credit:     amountCents,
+	}
+	if err := a.DB.Create(&accrualCR).Error; err != nil {
+		return fmt.Errorf("failed to book internal expense accrual credit: %w", err)
+	}
+
+	log.Printf("Booked internal expense ID %d: DR %s/%s, CR ACCRUED_EXPENSES_PAYABLE, amount=$%.2f",
+		expense.ID, expenseAccount, expenseSubAccount, float64(amountCents)/100)
+	return nil
+}
+
+// RejectExpense rejects a submitted expense
+func (a *App) RejectExpense(expenseID uint, approverID uint, reason string) error {
+	var expense Expense
+	if err := a.DB.First(&expense, expenseID).Error; err != nil {
+		return fmt.Errorf("failed to load expense: %w", err)
+	}
+
+	if expense.State != ExpenseStateSubmitted.String() {
+		return fmt.Errorf("expense must be in submitted state to reject")
+	}
+
+	expense.State = ExpenseStateRejected.String()
+	expense.ApproverID = &approverID
+	expense.RejectionReason = reason
+
+	if err := a.DB.Save(&expense).Error; err != nil {
+		return fmt.Errorf("failed to save rejected expense: %w", err)
+	}
+
+	log.Printf("Rejected expense ID %d by approver ID %d: %s", expenseID, approverID, reason)
+	return nil
+}
+
+// AddExpensesToInvoice associates approved expenses with an invoice
+func (a *App) AddExpensesToInvoice(invoiceID uint, expenseIDs []uint) error {
+	var invoice Invoice
+	if err := a.DB.First(&invoice, invoiceID).Error; err != nil {
+		return fmt.Errorf("failed to load invoice: %w", err)
+	}
+
+	if invoice.State != InvoiceStateDraft.String() {
+		return fmt.Errorf("expenses can only be added to draft invoices")
+	}
+
+	// Load and validate expenses
+	for _, expenseID := range expenseIDs {
+		var expense Expense
+		if err := a.DB.Preload("Project").First(&expense, expenseID).Error; err != nil {
+			return fmt.Errorf("failed to load expense %d: %w", expenseID, err)
+		}
+
+		if expense.State != ExpenseStateApproved.String() {
+			return fmt.Errorf("expense %d must be in approved state", expenseID)
+		}
+
+		// Verify expense project matches invoice project or account
+		if invoice.ProjectID != nil {
+			if expense.ProjectID == nil || *expense.ProjectID != *invoice.ProjectID {
+				return fmt.Errorf("expense %d project does not match invoice project", expenseID)
+			}
+		} else {
+			if expense.ProjectID != nil && expense.Project != nil && expense.Project.AccountID != invoice.AccountID {
+				return fmt.Errorf("expense %d account does not match invoice account", expenseID)
+			}
+		}
+
+		// Associate expense with invoice
+		expense.InvoiceID = &invoiceID
+		expense.State = ExpenseStateInvoiced.String()
+		if err := a.DB.Save(&expense).Error; err != nil {
+			return fmt.Errorf("failed to associate expense %d with invoice: %w", expenseID, err)
+		}
+
+		log.Printf("Added expense ID %d to invoice ID %d", expenseID, invoiceID)
+	}
+
+	// Update invoice totals
+	a.UpdateInvoiceTotals(&invoice)
+
+	return nil
+}
+
+// GetTagSpendSummary calculates total approved/invoiced spend and remaining budget for a tag
+func (a *App) GetTagSpendSummary(tagID uint) (totalSpent int, budget *int, remaining *int, err error) {
+	var tag ExpenseTag
+	if err := a.DB.First(&tag, tagID).Error; err != nil {
+		return 0, nil, nil, fmt.Errorf("failed to load tag: %w", err)
+	}
+
+	// Calculate total spent on approved and invoiced expenses with this tag
+	var expenses []Expense
+	if err := a.DB.
+		Joins("JOIN expense_tag_assignments ON expense_tag_assignments.expense_id = expenses.id").
+		Where("expense_tag_assignments.expense_tag_id = ?", tagID).
+		Where("expenses.state IN ?", []string{ExpenseStateApproved.String(), ExpenseStateInvoiced.String()}).
+		Find(&expenses).Error; err != nil {
+		return 0, nil, nil, fmt.Errorf("failed to load expenses: %w", err)
+	}
+
+	totalSpent = 0
+	for _, expense := range expenses {
+		totalSpent += expense.Amount
+	}
+
+	if tag.Budget != nil {
+		remainingBudget := *tag.Budget - totalSpent
+		return totalSpent, tag.Budget, &remainingBudget, nil
+	}
+
+	return totalSpent, nil, nil, nil
+}
+

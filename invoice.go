@@ -153,6 +153,168 @@ func (a *App) SaveBillPDFsForInvoice(invoice *Invoice) {
 	}
 }
 
+// ApproveEntries approves individual entries and books their payroll accruals
+// This allows approving entries weekly independent of invoice approval
+func (a *App) ApproveEntries(entryIDs []uint) error {
+	log.Printf("ApproveEntries called for %d entries", len(entryIDs))
+
+	if len(entryIDs) == 0 {
+		return fmt.Errorf("no entry IDs provided")
+	}
+
+	// Load the entries with employee and invoice data
+	var entries []Entry
+	if err := a.DB.Preload("Employee").Preload("Invoice").Preload("Invoice.Account").
+		Where("id IN ?", entryIDs).Find(&entries).Error; err != nil {
+		return fmt.Errorf("failed to load entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return fmt.Errorf("no entries found with provided IDs")
+	}
+
+	// Validate all entries are in draft or unaffiliated state
+	for _, entry := range entries {
+		log.Printf("Entry ID %d current state: %s", entry.ID, entry.State)
+		if entry.State != EntryStateDraft.String() && entry.State != EntryStateUnaffiliated.String() {
+			return fmt.Errorf("entry ID %d is not in draft or unaffiliated state (current: %s)", entry.ID, entry.State)
+		}
+	}
+
+	// Batch update entries to approved state
+	log.Printf("Attempting to update %d entries to APPROVED state", len(entryIDs))
+	result := a.DB.Model(&Entry{}).Where("id IN ?", entryIDs).Update("state", EntryStateApproved.String())
+	if result.Error != nil {
+		return fmt.Errorf("failed to update entry states: %w", result.Error)
+	}
+
+	log.Printf("Database update result: RowsAffected=%d, Error=%v", result.RowsAffected, result.Error)
+
+	if result.RowsAffected == 0 {
+		log.Printf("WARNING: No rows were updated! Entry IDs: %v", entryIDs)
+	}
+
+	log.Printf("Updated %d entries to approved state", len(entries))
+
+	// Reload entries from database to get the updated state
+	if err := a.DB.Preload("Employee").Preload("Invoice").Preload("Invoice.Account").
+		Where("id IN ?", entryIDs).Find(&entries).Error; err != nil {
+		return fmt.Errorf("failed to reload entries after approval: %w", err)
+	}
+	log.Printf("Reloaded %d entries from database with updated state", len(entries))
+
+	// Group entries by employee and invoice for bill generation
+	type billKey struct {
+		EmployeeID uint
+		InvoiceID  uint
+	}
+	entryMap := make(map[billKey][]Entry)
+
+	for _, entry := range entries {
+		// Skip entries without an invoice (unaffiliated entries)
+		if entry.InvoiceID == nil {
+			log.Printf("Skipping entry ID %d for bill generation: no associated invoice (unaffiliated)", entry.ID)
+			continue
+		}
+
+		key := billKey{
+			EmployeeID: entry.EmployeeID,
+			InvoiceID:  *entry.InvoiceID,
+		}
+		entryMap[key] = append(entryMap[key], entry)
+	}
+
+	log.Printf("Grouped entries into %d employee-invoice combinations", len(entryMap))
+
+	// For each employee-invoice combination, find or create a bill and book accruals
+	for key, entryGroup := range entryMap {
+		// Load employee to check pay eligibility state
+		var employee Employee
+		if err := a.DB.First(&employee, key.EmployeeID).Error; err != nil {
+			log.Printf("Warning: Could not load employee %d: %v", key.EmployeeID, err)
+			continue
+		}
+
+		// Only process if employee is eligible at APPROVED state
+		if employee.EntryPayEligibleState != EntryStateApproved.String() {
+			log.Printf("Skipping employee %d - not eligible at APPROVED state (eligible at: %s)",
+				employee.ID, employee.EntryPayEligibleState)
+			continue
+		}
+
+		// Find or create bill for this employee
+		var bill Bill
+		var err error
+		bill, err = a.GetLatestBillIfExists(key.EmployeeID)
+
+		// If there is no bill, create a new one
+		firstOfMonth := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
+		lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
+
+		if err != nil && errors.Is(err, NoEligibleBill) {
+			log.Printf("Creating new bill for employee ID: %d", key.EmployeeID)
+			bill = Bill{
+				Name:        "Payroll " + employee.FirstName + " " + employee.LastName + " " + firstOfMonth.Format("01/02/2006") + " - " + lastOfMonth.Format("01/02/2006"),
+				State:       BillStateDraft,
+				EmployeeID:  key.EmployeeID,
+				PeriodStart: firstOfMonth,
+				PeriodEnd:   lastOfMonth,
+				TotalHours:  0,
+				TotalFees:   0,
+				TotalAmount: 0,
+			}
+			if err := a.DB.Create(&bill).Error; err != nil {
+				log.Printf("Warning: Failed to create bill for employee %d: %v", key.EmployeeID, err)
+				continue
+			}
+			log.Printf("Created new bill ID: %d", bill.ID)
+		} else if err != nil {
+			log.Printf("Warning: Could not find/create bill for employee %d: %v", key.EmployeeID, err)
+			continue
+		} else {
+			log.Printf("Using existing bill ID: %d", bill.ID)
+		}
+
+		// Associate entries with the bill (only update bill_id, not the entire entry)
+		entryIDs := make([]uint, len(entryGroup))
+		for i, entry := range entryGroup {
+			entryIDs[i] = entry.ID
+		}
+		log.Printf("Attempting to associate entry IDs %v with bill ID %d", entryIDs, bill.ID)
+		result := a.DB.Model(&Entry{}).Where("id IN ?", entryIDs).Update("bill_id", bill.ID)
+		if result.Error != nil {
+			log.Printf("Warning: Could not associate entries with bill %d: %v", bill.ID, result.Error)
+			continue
+		}
+		log.Printf("Associated %d entries with bill %d (RowsAffected: %d)", len(entryIDs), bill.ID, result.RowsAffected)
+
+		// Verify the association worked
+		var verifyCount int64
+		a.DB.Model(&Entry{}).Where("bill_id = ?", bill.ID).Count(&verifyCount)
+		log.Printf("Verification: Bill %d now has %d entries associated", bill.ID, verifyCount)
+
+		// Recalculate bill totals
+		a.RecalculateBillTotals(&bill)
+
+		// Generate bill line items
+		if err := a.GenerateBillLineItems(&bill); err != nil {
+			log.Printf("Warning: Failed to generate line items for bill %d: %v", bill.ID, err)
+		}
+
+		// Book initial payroll accrual (DR: Payroll Expense, CR: Accrued Payroll)
+		// This recognizes the cost when work is approved
+		if err := a.BookPayrollAccrual(&bill, entryIDs); err != nil {
+			log.Printf("Warning: Failed to book payroll accrual for bill %d: %v", bill.ID, err)
+		}
+
+		log.Printf("Approved %d entries for employee %d, associated with bill %d",
+			len(entryGroup), key.EmployeeID, bill.ID)
+	}
+
+	log.Printf("Successfully approved %d entries", len(entries))
+	return nil
+}
+
 // ApproveInvoice approves the invoice and transitions it to the "approved" state
 func (a *App) ApproveInvoice(invoiceID uint) error {
 	log.Printf("ApproveInvoice called for invoice ID: %d", invoiceID)
@@ -163,25 +325,40 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 		return InvalidPriorState
 	}
 	invoice.State = InvoiceStateApproved.String()
+	invoice.AcceptedAt = time.Now()
 
-	log.Printf("Updating %d entries to approved state", len(invoice.Entries))
+	// Only approve entries that are still in draft state (others may have been approved individually)
+	draftEntryIDs := make([]uint, 0)
+	alreadyApprovedCount := 0
 	for _, entry := range invoice.Entries {
-		entry.State = EntryStateApproved.String()
-		a.DB.Save(&entry)
-	}
-
-	// Also approve all draft adjustments on this invoice
-	var adjustments []Adjustment
-	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
-		log.Printf("Found %d draft adjustments to approve", len(adjustments))
-		for _, adj := range adjustments {
-			adj.State = AdjustmentStateApproved.String()
-			a.DB.Save(&adj)
-			log.Printf("Approved adjustment ID %d (type: %s, amount: $%.2f)", adj.ID, adj.Type, adj.Amount)
+		if entry.State == EntryStateDraft.String() {
+			draftEntryIDs = append(draftEntryIDs, entry.ID)
+		} else if entry.State == EntryStateApproved.String() {
+			alreadyApprovedCount++
 		}
 	}
 
-	// Update invoice totals to include adjustments
+	log.Printf("Updating %d entries to approved state (%d already approved)", len(draftEntryIDs), alreadyApprovedCount)
+	if len(draftEntryIDs) > 0 {
+		if err := a.DB.Model(&Entry{}).Where("id IN ?", draftEntryIDs).Update("state", EntryStateApproved.String()).Error; err != nil {
+			log.Printf("Error batch updating entries: %v", err)
+			return err
+		}
+	}
+
+	// Batch approve all draft adjustments on this invoice
+	result := a.DB.Model(&Adjustment{}).Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Update("state", AdjustmentStateApproved.String())
+	if result.Error == nil && result.RowsAffected > 0 {
+		log.Printf("Batch approved %d draft adjustments", result.RowsAffected)
+	}
+
+	// Batch transition approved expenses to invoiced state
+	result = a.DB.Model(&Expense{}).Where("invoice_id = ? AND state = ?", invoiceID, ExpenseStateApproved.String()).Update("state", ExpenseStateInvoiced.String())
+	if result.Error == nil && result.RowsAffected > 0 {
+		log.Printf("Batch invoiced %d approved expenses", result.RowsAffected)
+	}
+
+	// Update invoice totals to include adjustments and expenses
 	a.UpdateInvoiceTotals(&invoice)
 
 	a.DB.Save(&invoice)
@@ -204,6 +381,7 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 
 	// Book adjustment accruals for all approved adjustments (only at approval - not at later states)
 	log.Printf("Booking accrual journal entries for adjustments on invoice ID: %d", invoiceID)
+	var adjustments []Adjustment
 	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateApproved.String()).Find(&adjustments).Error; err == nil {
 		for _, adj := range adjustments {
 			if err := a.BookAdjustmentAccrual(&adj); err != nil {
@@ -212,9 +390,44 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 		}
 	}
 
-	// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_APPROVED
-	log.Printf("Generating bills for employees eligible at ENTRY_STATE_APPROVED")
-	a.GenerateBills(&invoice)
+	// Book expense accruals for all invoiced expenses
+	log.Printf("Booking accrual journal entries for expenses on invoice ID: %d", invoiceID)
+	var expenses []Expense
+	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, ExpenseStateInvoiced.String()).Find(&expenses).Error; err == nil {
+		for _, exp := range expenses {
+			if err := a.BookExpenseAccrual(&exp, &invoice); err != nil {
+				log.Printf("Warning: Failed to book expense accrual for expense %d: %v", exp.ID, err)
+			}
+		}
+	}
+
+	// Only generate bills and book accruals for newly approved entries
+	// (entries that were approved individually already have bills and accruals)
+	if len(draftEntryIDs) > 0 {
+		// Reload invoice with newly approved entries
+		a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+
+		// Generate bills for employees whose EntryPayEligibleState is ENTRY_STATE_APPROVED
+		log.Printf("Generating bills for %d newly approved entries (employees eligible at ENTRY_STATE_APPROVED)", len(draftEntryIDs))
+		a.GenerateBills(&invoice)
+
+		// Book accrued payroll to AP for newly created bills
+		log.Printf("Booking accrued payroll to AP for newly created bills on invoice ID: %d", invoiceID)
+		var bills []Bill
+		if err := a.DB.Preload("Entries").Preload("Entries.Employee").Preload("Employee").
+			Joins("INNER JOIN entries ON entries.bill_id = bills.id").
+			Where("entries.invoice_id = ? AND entries.id IN ?", invoiceID, draftEntryIDs).
+			Group("bills.id").
+			Find(&bills).Error; err == nil {
+			for _, bill := range bills {
+				if err := a.BookBillAccrual(&bill); err != nil {
+					log.Printf("Warning: Failed to book accruals to AP for bill %d: %v", bill.ID, err)
+				}
+			}
+		}
+	} else {
+		log.Printf("All entries were already approved individually, skipping bill generation and accrual booking")
+	}
 
 	// Reload entries with bill associations and save PDFs
 	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
@@ -238,24 +451,23 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	// Set the due date based on invoice date (e.g., net 30)
 	invoice.DueAt = invoice.SentAt.AddDate(0, 0, 30) // Default to 30 days
 
-	// Update entry states to sent
+	// Batch update entry states to sent
 	log.Printf("Updating %d entries to sent state", len(invoice.Entries))
-	for _, entry := range invoice.Entries {
-		entry.State = EntryStateSent.String()
-		a.DB.Save(&entry)
+	if len(invoice.Entries) > 0 {
+		entryIDs := make([]uint, len(invoice.Entries))
+		for i, entry := range invoice.Entries {
+			entryIDs[i] = entry.ID
+		}
+		if err := a.DB.Model(&Entry{}).Where("id IN ?", entryIDs).Update("state", EntryStateSent.String()).Error; err != nil {
+			log.Printf("Error batch updating entries to sent: %v", err)
+			return err
+		}
 	}
 
-	// Also approve and process any draft adjustments added after initial approval
-	var adjustments []Adjustment
-	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
-		if len(adjustments) > 0 {
-			log.Printf("Found %d draft adjustments to approve and process", len(adjustments))
-			for _, adj := range adjustments {
-				adj.State = AdjustmentStateApproved.String()
-				a.DB.Save(&adj)
-				log.Printf("Approved adjustment ID %d (type: %s, amount: $%.2f)", adj.ID, adj.Type, adj.Amount)
-			}
-		}
+	// Batch approve any draft adjustments added after initial approval
+	result := a.DB.Model(&Adjustment{}).Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Update("state", AdjustmentStateApproved.String())
+	if result.Error == nil && result.RowsAffected > 0 {
+		log.Printf("Batch approved %d draft adjustments", result.RowsAffected)
 	}
 
 	// Update invoice totals to include all adjustments
@@ -276,15 +488,29 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_SENT")
 	a.GenerateBills(&invoice)
 
-	// Move accrued payroll to AP for all bills associated with this invoice
-	log.Printf("Moving accrued payroll to AP for invoice ID: %d", invoiceID)
+	// Book payroll accruals and move to AP for SENT employees
+	log.Printf("Booking payroll accruals and moving to AP for ENTRY_STATE_SENT employees on invoice ID: %d", invoiceID)
 	var bills []Bill
-	if err := a.DB.Preload("Entries").Preload("Entries.Employee").
+	if err := a.DB.Preload("Entries").Preload("Entries.Employee").Preload("Employee").
 		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
-		Where("entries.invoice_id = ?", invoiceID).
+		Where("entries.invoice_id = ? AND entries.state = ?", invoiceID, EntryStateSent.String()).
 		Group("bills.id").
 		Find(&bills).Error; err == nil {
 		for _, bill := range bills {
+			// First book the payroll accrual (DR: Payroll Expense, CR: Accrued Payroll)
+			var entryIDs []uint
+			for _, entry := range bill.Entries {
+				if entry.State == EntryStateSent.String() {
+					entryIDs = append(entryIDs, entry.ID)
+				}
+			}
+			if len(entryIDs) > 0 {
+				if err := a.BookPayrollAccrual(&bill, entryIDs); err != nil {
+					log.Printf("Warning: Failed to book payroll accrual for bill %d: %v", bill.ID, err)
+				}
+			}
+
+			// Then move to AP (DR: Accrued Payroll, CR: Accounts Payable)
 			if err := a.BookBillAccrual(&bill); err != nil {
 				log.Printf("Warning: Failed to move accruals to AP for bill %d: %v", bill.ID, err)
 			}
@@ -292,16 +518,25 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	}
 
 	// Reload entries with bill associations and save PDFs
-	a.DB.Preload("Entries").Where("ID = ?", invoiceID).First(&invoice)
+	a.DB.Preload("Entries").Preload("Account").Where("ID = ?", invoiceID).First(&invoice)
 	a.SaveBillPDFsForInvoice(&invoice)
+
+	// Generate and save invoice PDF to GCS
+	log.Printf("Generating and saving invoice PDF for invoice ID: %d", invoiceID)
+	if err := a.SaveInvoiceToGCS(&invoice); err != nil {
+		log.Printf("Warning: Failed to save invoice PDF for invoice %d: %v", invoiceID, err)
+	} else {
+		log.Printf("Successfully saved invoice PDF for invoice ID: %d", invoiceID)
+	}
 
 	log.Printf("Successfully sent invoice ID: %d", invoiceID)
 	return nil
 }
 
 // MarkInvoicePaid pays the invoice and transitions it to the "paid" state
-func (a *App) MarkInvoicePaid(invoiceID uint) error {
-	log.Printf("MarkInvoicePaid called for invoice ID: %d", invoiceID)
+// paymentDate is the actual date the payment was received (can be backdated)
+func (a *App) MarkInvoicePaid(invoiceID uint, paymentDate time.Time) error {
+	log.Printf("MarkInvoicePaid called for invoice ID: %d, payment date: %s", invoiceID, paymentDate.Format("2006-01-02"))
 
 	var invoice Invoice
 	a.DB.Preload("Entries").Preload("Project").Where("ID = ?", invoiceID).First(&invoice)
@@ -343,9 +578,9 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 		return InvalidPriorState
 	}
 
-	log.Printf("Marking invoice ID: %d as paid", invoice.ID)
+	log.Printf("Marking invoice ID: %d as paid on %s", invoice.ID, paymentDate.Format("2006-01-02"))
 	invoice.State = InvoiceStatePaid.String()
-	invoice.ClosedAt = time.Now()
+	invoice.ClosedAt = paymentDate
 
 	// First save the invoice state to ensure it's properly updated
 	// Use explicit db.Model().Update() to ensure only the state and closedAt are updated
@@ -359,18 +594,19 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	log.Printf("Successfully updated invoice state to PAID in the database")
 
 	log.Printf("Updating %d entries to paid state", len(invoice.Entries))
-	entriesUpdated := 0
-	for i := range invoice.Entries {
-		entry := &invoice.Entries[i]
-		entry.State = EntryStatePaid.String()
-		result := a.DB.Save(entry)
-		if result.Error != nil {
-			log.Printf("Error updating entry ID %d: %v", entry.ID, result.Error)
-		} else {
-			entriesUpdated++
+	// Batch update all entries at once
+	if len(invoice.Entries) > 0 {
+		entryIDs := make([]uint, len(invoice.Entries))
+		for i, entry := range invoice.Entries {
+			entryIDs[i] = entry.ID
 		}
+		result := a.DB.Model(&Entry{}).Where("id IN ?", entryIDs).Update("state", EntryStatePaid.String())
+		if result.Error != nil {
+			log.Printf("Error batch updating entries to paid: %v", result.Error)
+			return result.Error
+		}
+		log.Printf("Successfully batch updated %d entries to paid state", result.RowsAffected)
 	}
-	log.Printf("Successfully updated %d/%d entries to paid state", entriesUpdated, len(invoice.Entries))
 
 	// Save all invoice changes now
 	result := a.DB.Save(&invoice)
@@ -391,17 +627,10 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 		}
 	}
 
-	// Also approve and process any draft adjustments added after sending
-	var adjustments []Adjustment
-	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Find(&adjustments).Error; err == nil {
-		if len(adjustments) > 0 {
-			log.Printf("Found %d draft adjustments to approve and process", len(adjustments))
-			for _, adj := range adjustments {
-				adj.State = AdjustmentStateApproved.String()
-				a.DB.Save(&adj)
-				log.Printf("Approved adjustment ID %d (type: %s, amount: $%.2f)", adj.ID, adj.Type, adj.Amount)
-			}
-		}
+	// Batch approve any draft adjustments added after sending
+	result = a.DB.Model(&Adjustment{}).Where("invoice_id = ? AND state = ?", invoiceID, AdjustmentStateDraft.String()).Update("state", AdjustmentStateApproved.String())
+	if result.Error == nil && result.RowsAffected > 0 {
+		log.Printf("Batch approved %d draft adjustments", result.RowsAffected)
 	}
 
 	// Update invoice totals to include all adjustments
@@ -415,15 +644,29 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	log.Printf("Generating bills for employees eligible at ENTRY_STATE_PAID")
 	a.GenerateBills(&invoice)
 
-	// Move accrued payroll to AP for all bills associated with this invoice
-	log.Printf("Moving accrued payroll to AP for invoice ID: %d", invoiceID)
+	// Book payroll accruals and move to AP for PAID employees
+	log.Printf("Booking payroll accruals and moving to AP for ENTRY_STATE_PAID employees on invoice ID: %d", invoiceID)
 	var bills []Bill
-	if err := a.DB.Preload("Entries").Preload("Entries.Employee").
+	if err := a.DB.Preload("Entries").Preload("Entries.Employee").Preload("Employee").
 		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
-		Where("entries.invoice_id = ?", invoiceID).
+		Where("entries.invoice_id = ? AND entries.state = ?", invoiceID, EntryStatePaid.String()).
 		Group("bills.id").
 		Find(&bills).Error; err == nil {
 		for _, bill := range bills {
+			// First book the payroll accrual (DR: Payroll Expense, CR: Accrued Payroll)
+			var entryIDs []uint
+			for _, entry := range bill.Entries {
+				if entry.State == EntryStatePaid.String() {
+					entryIDs = append(entryIDs, entry.ID)
+				}
+			}
+			if len(entryIDs) > 0 {
+				if err := a.BookPayrollAccrual(&bill, entryIDs); err != nil {
+					log.Printf("Warning: Failed to book payroll accrual for bill %d: %v", bill.ID, err)
+				}
+			}
+
+			// Then move to AP (DR: Accrued Payroll, CR: Accounts Payable)
 			if err := a.BookBillAccrual(&bill); err != nil {
 				log.Printf("Warning: Failed to move accruals to AP for bill %d: %v", bill.ID, err)
 			}
@@ -440,9 +683,21 @@ func (a *App) MarkInvoicePaid(invoiceID uint) error {
 	a.SaveBillPDFsForInvoice(&invoice)
 
 	// Record cash receipt and clear accounts receivable (includes adjustments)
-	log.Printf("Recording cash payment for invoice ID: %d", invoiceID)
-	if err := a.RecordInvoiceCashPayment(&invoice); err != nil {
+	log.Printf("Recording cash payment for invoice ID: %d on date: %s", invoiceID, paymentDate.Format("2006-01-02"))
+	if err := a.RecordInvoiceCashPayment(&invoice, paymentDate); err != nil {
 		log.Printf("Warning: Failed to record cash payment for invoice %d: %v", invoiceID, err)
+	}
+
+	// Mark all expenses as paid
+	var expenses []Expense
+	if err := a.DB.Where("invoice_id = ? AND state = ?", invoiceID, ExpenseStateInvoiced.String()).Find(&expenses).Error; err == nil {
+		for i := range expenses {
+			expenses[i].State = ExpenseStatePaid.String()
+			if err := a.DB.Save(&expenses[i]).Error; err != nil {
+				log.Printf("Warning: Failed to mark expense %d as paid: %v", expenses[i].ID, err)
+			}
+		}
+		log.Printf("Marked %d expenses as paid for invoice ID: %d", len(expenses), invoiceID)
 	}
 
 	log.Printf("Successfully processed invoice ID: %d", invoice.ID)
@@ -1111,69 +1366,176 @@ func (a *App) BookBillAccrual(bill *Bill) error {
 	a.DB.Where("sub_account = ? AND account = ? AND credit > 0",
 		subAccount, AccountAccruedPayroll.String()).Find(&existingAccruals)
 
-	if len(existingAccruals) > 0 {
-		// Accruals exist, reverse them
-		log.Printf("Moving accrued payroll to AP for bill ID %d (accrued: $%.2f)", bill.ID, float64(totalAPAmount)/100)
+	if len(existingAccruals) == 0 {
+		log.Printf("No existing accruals found for bill ID %d - entries may not have been approved yet", bill.ID)
+		return nil
+	}
 
-		// Reverse the accrued payroll (debit to contra it)
-		reverseAccrual := Journal{
+	// Accruals exist, move them to AP
+	log.Printf("Moving accrued payroll to AP for bill ID %d (accrued: $%.2f)", bill.ID, float64(totalAPAmount)/100)
+
+	// Reverse the accrued payroll (debit to contra it)
+	reverseAccrual := Journal{
+		Account:    AccountAccruedPayroll.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Move accrued payroll to AP for bill #%d", bill.ID),
+		Debit:      totalAPAmount,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&reverseAccrual).Error; err != nil {
+		log.Printf("Warning: Failed to reverse accrued payroll: %v", err)
+	}
+
+	// Book formal Accounts Payable
+	apEntry := Journal{
+		Account:    AccountAccountsPayable.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Accounts payable for bill #%d", bill.ID),
+		Debit:      0,
+		Credit:     totalAPAmount,
+	}
+	if err := a.DB.Create(&apEntry).Error; err != nil {
+		return fmt.Errorf("failed to book accounts payable: %w", err)
+	}
+
+	log.Printf("Successfully moved accruals to AP for bill ID %d: $%.2f", bill.ID, float64(totalAPAmount)/100)
+
+	return nil
+}
+
+// ReverseEntryAccruals reverses payroll accruals for voided entries
+// DR: Accrued Payroll, CR: Payroll Expense
+func (a *App) ReverseEntryAccruals(entryIDs []uint) error {
+	log.Printf("ReverseEntryAccruals: Processing %d entries", len(entryIDs))
+
+	// Load entries
+	var entries []Entry
+	if err := a.DB.Preload("Employee").Where("id IN ?", entryIDs).Find(&entries).Error; err != nil {
+		return fmt.Errorf("failed to load entries: %w", err)
+	}
+
+	// Group by employee
+	entriesByEmployee := make(map[uint][]Entry)
+	for _, entry := range entries {
+		entriesByEmployee[entry.EmployeeID] = append(entriesByEmployee[entry.EmployeeID], entry)
+	}
+
+	// Reverse accruals for each employee
+	for employeeID, empEntries := range entriesByEmployee {
+		var employee Employee
+		if err := a.DB.First(&employee, employeeID).Error; err != nil {
+			log.Printf("Warning: Could not load employee %d: %v", employeeID, err)
+			continue
+		}
+
+		employeeName := fmt.Sprintf("%s %s", employee.FirstName, employee.LastName)
+		subAccount := fmt.Sprintf("%d:%s", employee.ID, employeeName)
+
+		var totalAmount int64
+		for _, entry := range empEntries {
+			hours := entry.Duration().Hours()
+			internalRate := a.GetEmployeeBillRate(&employee, entry.BillingCodeID)
+			totalAmount += int64(internalRate * hours * 100)
+		}
+
+		if totalAmount == 0 {
+			continue
+		}
+
+		// Reverse: DR Accrued Payroll, CR Payroll Expense
+		reversalDR := Journal{
 			Account:    AccountAccruedPayroll.String(),
 			SubAccount: subAccount,
-			BillID:     &bill.ID,
-			Memo:       fmt.Sprintf("Move accrued payroll to AP for bill #%d", bill.ID),
-			Debit:      totalAPAmount,
+			Memo:       fmt.Sprintf("VOID: Reverse payroll accrual for %d entries", len(empEntries)),
+			Debit:      totalAmount,
 			Credit:     0,
 		}
-		if err := a.DB.Create(&reverseAccrual).Error; err != nil {
-			log.Printf("Warning: Failed to reverse accrued payroll: %v", err)
+		if err := a.DB.Create(&reversalDR).Error; err != nil {
+			log.Printf("Warning: Failed to reverse accrued payroll DR: %v", err)
 		}
 
-		// Book formal Accounts Payable
-		apEntry := Journal{
-			Account:    AccountAccountsPayable.String(),
-			SubAccount: subAccount,
-			BillID:     &bill.ID,
-			Memo:       fmt.Sprintf("Accounts payable for bill #%d", bill.ID),
-			Debit:      0,
-			Credit:     totalAPAmount,
-		}
-		if err := a.DB.Create(&apEntry).Error; err != nil {
-			return fmt.Errorf("failed to book accounts payable: %w", err)
-		}
-
-		log.Printf("Successfully moved accruals to AP for bill ID %d: $%.2f", bill.ID, float64(totalAPAmount)/100)
-	} else {
-		// No existing accruals (shouldn't happen if invoice was approved, but handle it)
-		log.Printf("No existing accruals found for bill ID %d, booking new expense", bill.ID)
-
-		// Book all as new payroll expense
-		expenseDR := Journal{
+		reversalCR := Journal{
 			Account:    AccountPayrollExpense.String(),
 			SubAccount: subAccount,
-			BillID:     &bill.ID,
-			Memo:       fmt.Sprintf("Payroll expense for bill #%d", bill.ID),
-			Debit:      totalAPAmount,
-			Credit:     0,
-		}
-		if err := a.DB.Create(&expenseDR).Error; err != nil {
-			return fmt.Errorf("failed to book payroll expense DR: %w", err)
-		}
-
-		// Book CR ACCOUNTS_PAYABLE
-		apEntry := Journal{
-			Account:    AccountAccountsPayable.String(),
-			SubAccount: subAccount,
-			BillID:     &bill.ID,
-			Memo:       fmt.Sprintf("Accounts payable for bill #%d", bill.ID),
+			Memo:       fmt.Sprintf("VOID: Reverse payroll expense for %d entries", len(empEntries)),
 			Debit:      0,
-			Credit:     totalAPAmount,
+			Credit:     totalAmount,
 		}
-		if err := a.DB.Create(&apEntry).Error; err != nil {
-			return fmt.Errorf("failed to book accounts payable CR: %w", err)
+		if err := a.DB.Create(&reversalCR).Error; err != nil {
+			log.Printf("Warning: Failed to reverse payroll expense CR: %v", err)
 		}
 
-		log.Printf("Successfully booked expense and AP for bill ID %d: $%.2f", bill.ID, float64(totalAPAmount)/100)
+		log.Printf("Successfully reversed payroll accrual for employee %d: $%.2f", employeeID, float64(totalAmount)/100)
 	}
+
+	return nil
+}
+
+// BookPayrollAccrual books the initial payroll accrual when entries are approved
+// DR: Payroll Expense, CR: Accrued Payroll
+// This recognizes the cost at the time work is approved
+func (a *App) BookPayrollAccrual(bill *Bill, entryIDs []uint) error {
+	log.Printf("BookPayrollAccrual: Processing bill ID %d with %d entries", bill.ID, len(entryIDs))
+
+	// Load employee for subaccount
+	var employee Employee
+	if err := a.DB.Where("id = ?", bill.EmployeeID).First(&employee).Error; err != nil {
+		return fmt.Errorf("failed to load employee: %w", err)
+	}
+
+	employeeName := fmt.Sprintf("%s %s", employee.FirstName, employee.LastName)
+	subAccount := fmt.Sprintf("%d:%s", employee.ID, employeeName)
+
+	// Calculate total amount for these specific entries
+	// Note: We always book accruals for the entries being approved, even if other
+	// accruals exist for this bill (multiple approvals can happen incrementally)
+	var entries []Entry
+	if err := a.DB.Where("id IN ?", entryIDs).Find(&entries).Error; err != nil {
+		return fmt.Errorf("failed to load entries: %w", err)
+	}
+
+	var totalAmount int64
+	for _, entry := range entries {
+		hours := entry.Duration().Hours()
+		internalRate := a.GetEmployeeBillRate(&employee, entry.BillingCodeID)
+		totalAmount += int64(internalRate * hours * 100)
+	}
+
+	if totalAmount == 0 {
+		log.Printf("No payroll to accrue for bill ID %d", bill.ID)
+		return nil
+	}
+
+	// Book DR: Payroll Expense
+	expenseDR := Journal{
+		Account:    AccountPayrollExpense.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Payroll accrual for approved entries (bill #%d)", bill.ID),
+		Debit:      totalAmount,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&expenseDR).Error; err != nil {
+		return fmt.Errorf("failed to book payroll expense DR: %w", err)
+	}
+
+	// Book CR: Accrued Payroll
+	accrualCR := Journal{
+		Account:    AccountAccruedPayroll.String(),
+		SubAccount: subAccount,
+		BillID:     &bill.ID,
+		Memo:       fmt.Sprintf("Payroll accrual for approved entries (bill #%d)", bill.ID),
+		Debit:      0,
+		Credit:     totalAmount,
+	}
+	if err := a.DB.Create(&accrualCR).Error; err != nil {
+		return fmt.Errorf("failed to book accrued payroll CR: %w", err)
+	}
+
+	log.Printf("Successfully booked payroll accrual for bill ID %d: $%.2f (DR: Payroll Expense, CR: Accrued Payroll)",
+		bill.ID, float64(totalAmount)/100)
 
 	return nil
 }
@@ -1242,10 +1604,11 @@ func (a *App) MoveInvoiceToAccountsReceivable(invoice *Invoice) error {
 }
 
 // RecordInvoiceCashPayment records cash receipt and clears AR when invoice is paid
+// paymentDate is used to timestamp the journal entries
 // Reverses: DR ACCOUNTS_RECEIVABLE, CR: (contra)
 // Books: DR CASH
-func (a *App) RecordInvoiceCashPayment(invoice *Invoice) error {
-	log.Printf("RecordInvoiceCashPayment: Processing invoice ID %d", invoice.ID)
+func (a *App) RecordInvoiceCashPayment(invoice *Invoice, paymentDate time.Time) error {
+	log.Printf("RecordInvoiceCashPayment: Processing invoice ID %d on date %s", invoice.ID, paymentDate.Format("2006-01-02"))
 
 	// Find existing AR entries for this invoice
 	var arEntries []Journal
@@ -1280,19 +1643,21 @@ func (a *App) RecordInvoiceCashPayment(invoice *Invoice) error {
 		Debit:      0,
 		Credit:     totalAmount,
 	}
+	clearAR.CreatedAt = paymentDate
 	if err := a.DB.Create(&clearAR).Error; err != nil {
 		return fmt.Errorf("failed to clear accounts receivable: %w", err)
 	}
 
-	// Record cash receipt
+	// Record cash receipt - always use ChaseBusiness subaccount
 	cashEntry := Journal{
 		Account:    AccountCash.String(),
-		SubAccount: subAccount,
+		SubAccount: "ChaseBusiness",
 		InvoiceID:  &invoice.ID,
 		Memo:       fmt.Sprintf("Cash received for invoice #%d", invoice.ID),
 		Debit:      totalAmount,
 		Credit:     0,
 	}
+	cashEntry.CreatedAt = paymentDate
 	if err := a.DB.Create(&cashEntry).Error; err != nil {
 		return fmt.Errorf("failed to record cash receipt: %w", err)
 	}
@@ -1361,10 +1726,11 @@ func (a *App) MoveBillToAccountsPayable(bill *Bill) error {
 }
 
 // RecordBillCashPayment records cash payment and clears AP when bill is paid
+// paymentDate is used to timestamp the journal entries
 // Reverses: CR ACCOUNTS_PAYABLE, DR: (contra)
 // Books: CR CASH
-func (a *App) RecordBillCashPayment(bill *Bill) error {
-	log.Printf("RecordBillCashPayment: Processing bill ID %d", bill.ID)
+func (a *App) RecordBillCashPayment(bill *Bill, paymentDate time.Time) error {
+	log.Printf("RecordBillCashPayment: Processing bill ID %d on date %s", bill.ID, paymentDate.Format("2006-01-02"))
 
 	// Find existing AP entries for this bill
 	var apEntries []Journal
@@ -1399,19 +1765,21 @@ func (a *App) RecordBillCashPayment(bill *Bill) error {
 		Debit:      totalAmount,
 		Credit:     0,
 	}
+	clearAP.CreatedAt = paymentDate
 	if err := a.DB.Create(&clearAP).Error; err != nil {
 		return fmt.Errorf("failed to clear accounts payable: %w", err)
 	}
 
-	// Record cash payment
+	// Record cash payment - always use ChaseBusiness subaccount
 	cashEntry := Journal{
 		Account:    AccountCash.String(),
-		SubAccount: subAccount,
+		SubAccount: "ChaseBusiness",
 		BillID:     &bill.ID,
 		Memo:       fmt.Sprintf("Cash paid for bill #%d", bill.ID),
 		Debit:      0,
 		Credit:     totalAmount,
 	}
+	cashEntry.CreatedAt = paymentDate
 	if err := a.DB.Create(&cashEntry).Error; err != nil {
 		return fmt.Errorf("failed to record cash payment: %w", err)
 	}
@@ -1736,7 +2104,7 @@ func (a *App) RecordAdjustmentJournal(adjustment *Adjustment) error {
 				})
 				a.DB.Create(&Journal{
 					Account:    string(AccountCash),
-					SubAccount: subAccount,
+					SubAccount: "ChaseBusiness",
 					InvoiceID:  adjustment.InvoiceID,
 					Memo:       fmt.Sprintf("Adjustment: Refund for credit - %s", adjustment.Notes),
 					Debit:      0,
@@ -1747,7 +2115,7 @@ func (a *App) RecordAdjustmentJournal(adjustment *Adjustment) error {
 				// DR: CASH, CR: ADJUSTMENT_REVENUE
 				a.DB.Create(&Journal{
 					Account:    string(AccountCash),
-					SubAccount: subAccount,
+					SubAccount: "ChaseBusiness",
 					InvoiceID:  adjustment.InvoiceID,
 					Memo:       fmt.Sprintf("Adjustment: Additional payment for fee - %s", adjustment.Notes),
 					Debit:      amountCents,
@@ -1799,7 +2167,7 @@ func (a *App) RecordAdjustmentJournal(adjustment *Adjustment) error {
 			})
 			a.DB.Create(&Journal{
 				Account:    string(AccountCash),
-				SubAccount: subAccount,
+				SubAccount: "ChaseBusiness",
 				BillID:     adjustment.BillID,
 				Memo:       fmt.Sprintf("Adjustment: Additional payment - %s", adjustment.Notes),
 				Debit:      0,
@@ -1831,4 +2199,106 @@ func (a *App) RecordAdjustmentJournal(adjustment *Adjustment) error {
 	}
 
 	return fmt.Errorf("adjustment must have either invoice_id or bill_id")
+}
+
+// BookExpenseAccrual books the accrual for a pass-through expense when invoice is approved
+// For pass-through expenses, we book revenue (since client will reimburse) and track the expense separately
+func (a *App) BookExpenseAccrual(expense *Expense, invoice *Invoice) error {
+	log.Printf("BookExpenseAccrual: Processing expense ID %d for invoice ID %d", expense.ID, invoice.ID)
+
+	if expense.Amount == 0 {
+		log.Printf("Expense amount is zero, skipping journal entry")
+		return nil
+	}
+
+	amountCents := int64(expense.Amount)
+	clientSubAccount := fmt.Sprintf("%d:%s", invoice.AccountID, invoice.Account.Name)
+
+	// Determine which expense account to use
+	expenseAccount := string(AccountExpensePassThrough)
+	if expense.ExpenseAccountCode != "" {
+		expenseAccount = expense.ExpenseAccountCode
+	}
+
+	// Determine which subaccount to use for the expense
+	expenseSubAccount := clientSubAccount
+	if expense.SubaccountCode != "" {
+		// Look up the subaccount to get its name
+		var subaccount Subaccount
+		if err := a.DB.Where("code = ? AND account_code = ?", expense.SubaccountCode, expense.ExpenseAccountCode).First(&subaccount).Error; err == nil {
+			expenseSubAccount = fmt.Sprintf("%s:%s", subaccount.Code, subaccount.Name)
+		} else {
+			// If lookup fails, just use the code
+			log.Printf("Warning: Could not find subaccount %s for account %s, using code only", expense.SubaccountCode, expense.ExpenseAccountCode)
+			expenseSubAccount = expense.SubaccountCode
+		}
+	}
+
+	// Store the subaccount code for later reconciliation
+	expense.SubaccountCode = expenseSubAccount
+	if err := a.DB.Save(expense).Error; err != nil {
+		return fmt.Errorf("failed to save expense subaccount: %w", err)
+	}
+
+	// Book revenue side (client will reimburse us for this expense)
+	// DR: ACCRUED_RECEIVABLES
+	revenueAR := Journal{
+		Account:    string(AccountAccruedReceivables),
+		SubAccount: clientSubAccount,
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Pass-through expense revenue: %s", expense.Description),
+		Debit:      amountCents,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&revenueAR).Error; err != nil {
+		return fmt.Errorf("failed to book expense AR debit: %w", err)
+	}
+
+	// CR: REVENUE (revenue from expense reimbursement)
+	revenueCR := Journal{
+		Account:    string(AccountRevenue),
+		SubAccount: clientSubAccount,
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Pass-through expense revenue: %s", expense.Description),
+		Debit:      0,
+		Credit:     amountCents,
+	}
+	if err := a.DB.Create(&revenueCR).Error; err != nil {
+		return fmt.Errorf("failed to book expense revenue credit: %w", err)
+	}
+
+	// Also book the expense side (we paid for this)
+	// DR: [Expense Account - configurable]
+	expenseDR := Journal{
+		Account:    expenseAccount,
+		SubAccount: expenseSubAccount,
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Pass-through expense paid: %s", expense.Description),
+		Debit:      amountCents,
+		Credit:     0,
+	}
+	if err := a.DB.Create(&expenseDR).Error; err != nil {
+		return fmt.Errorf("failed to book pass-through expense debit: %w", err)
+	}
+
+	// CR: ACCRUED_EXPENSES_PAYABLE (contra account - will be cleared when reconciled with bank statement)
+	// We DON'T book to the actual payment account (Cash/Credit Card) until we reconcile
+	// with the actual bank transaction from the offline journal
+	paymentAccount := "ACCRUED_EXPENSES_PAYABLE"
+
+	paymentCR := Journal{
+		Account:    paymentAccount,
+		SubAccount: expenseSubAccount, // Use same subaccount for consistency
+		InvoiceID:  &invoice.ID,
+		Memo:       fmt.Sprintf("Pass-through expense payment: %s", expense.Description),
+		Debit:      0,
+		Credit:     amountCents,
+	}
+	if err := a.DB.Create(&paymentCR).Error; err != nil {
+		return fmt.Errorf("failed to book expense payment credit: %w", err)
+	}
+
+	log.Printf("Booked expense accrual for expense ID %d: account=%s, subaccount=%s, amount=$%.2f",
+		expense.ID, expenseAccount, expenseSubAccount, float64(amountCents)/100)
+	return nil
 }
