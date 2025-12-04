@@ -2,7 +2,11 @@ package cronos
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +36,10 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	lineItems := a.GetInvoiceLineItems(invoice)
 	entryItems := a.GetInvoiceEntries(invoice)
 	adjustments := a.GetInvoiceAdjustments(invoice)
+	
+	// Load expenses with receipts for this invoice
+	var expenses []Expense
+	a.DB.Where("invoice_id = ?", invoice.ID).Preload("Receipt").Preload("Submitter").Find(&expenses)
 
 	var project Project
 	var account Account
@@ -207,6 +215,15 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	pdf.CellFormat(colWidth[3], lineHt, "Adjustments", "1", 0, "LM", true, 0, "")
 	pdf.CellFormat(colWidth[4], lineHt, "$ "+totalAdjustments, "1", 0, "RM", true, 0, "")
 	pdf.Ln(lineHt)
+	
+	// Add expenses total if there are any
+	if len(expenses) > 0 {
+		totalExpenses := fmt.Sprintf("%.2f", invoice.TotalExpenses)
+		pdf.SetX(marginX + leftIndent)
+		pdf.CellFormat(colWidth[3], lineHt, "Expenses", "1", 0, "LM", true, 0, "")
+		pdf.CellFormat(colWidth[4], lineHt, "$ "+totalExpenses, "1", 0, "RM", true, 0, "")
+		pdf.Ln(lineHt)
+	}
 
 	grandTotal := fmt.Sprintf("%.2f", invoice.TotalAmount)
 	pdf.SetX(marginX + leftIndent)
@@ -217,7 +234,12 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	pdf.SetFontStyle("")
 	pdf.Ln(lineBreak)
 
-	pdf.Cell(safeAreaW, lineHeight, "See second page for detailed timesheet entry breakdown.")
+	// Update footer message based on whether there are expenses
+	if len(expenses) > 0 {
+		pdf.Cell(safeAreaW, lineHeight, "See following pages for detailed timesheet entry breakdown and expense receipts.")
+	} else {
+		pdf.Cell(safeAreaW, lineHeight, "See second page for detailed timesheet entry breakdown.")
+	}
 
 	// Add a second page for individual entries
 	pdf.AddPage()
@@ -269,6 +291,177 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 		pdf.CellFormat(entryColWidth[4], maxHeight, hours, "1", 0, "CM", true, 0, "")
 		pdf.Ln(-1)
 	}
+	
+	// Add expense details page if there are expenses
+	if len(expenses) > 0 {
+		pdf.AddPage()
+		pdf.SetFontStyle("B")
+		pdf.SetFontSize(14.0)
+		pdf.SetXY(marginX, marginY)
+		pdf.Cell(safeAreaW, lineHeight, "Expense Details")
+		pdf.Ln(lineHeight + gapY)
+		
+		pdf.SetFontSize(10.0)
+		pdf.SetFontStyle("")
+		
+		for i, expense := range expenses {
+			// Wrap each expense in error recovery to prevent crashes
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// Log the error but continue processing
+						fmt.Printf("Error processing expense %d: %v\n", expense.ID, r)
+					}
+				}()
+				
+				// Add some spacing between expenses
+				if pdf.GetY() > 230 {
+					pdf.AddPage()
+					pdf.SetXY(marginX, marginY)
+				}
+				
+				startY := pdf.GetY()
+				
+				// Expense details section (left side)
+				pdf.SetFontStyle("B")
+				pdf.SetX(marginX)
+				pdf.Cell(80, 6, fmt.Sprintf("Expense: %s", expense.Description))
+				pdf.Ln(6)
+				
+				pdf.SetFontStyle("")
+				pdf.SetX(marginX)
+				pdf.Cell(40, 5, "Date:")
+				pdf.Cell(40, 5, expense.Date.Format("01/02/2006"))
+				pdf.Ln(5)
+				
+				pdf.SetX(marginX)
+				pdf.Cell(40, 5, "Amount:")
+				pdf.Cell(40, 5, fmt.Sprintf("$%.2f", float64(expense.Amount)/100.0))
+				pdf.Ln(5)
+				
+				pdf.SetX(marginX)
+				pdf.Cell(40, 5, "Submitted by:")
+				pdf.Cell(40, 5, fmt.Sprintf("%s %s", expense.Submitter.FirstName, expense.Submitter.LastName))
+				pdf.Ln(5)
+			
+			// Add receipt image if available
+			if expense.Receipt != nil && expense.Receipt.Url != "" {
+				pdf.SetX(marginX)
+				pdf.SetFontStyle("I")
+				pdf.Cell(80, 5, "Receipt:")
+				pdf.Ln(8)
+				
+				receiptURL := expense.Receipt.Url
+				
+				// Determine image type from content type or URL
+				imageType := "PNG"
+				fileExt := ".png"
+				isPDF := false
+				
+				if expense.Receipt.ContentType != nil {
+					contentType := *expense.Receipt.ContentType
+					if strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg") {
+						imageType = "JPG"
+						fileExt = ".jpg"
+					} else if strings.Contains(contentType, "png") {
+						imageType = "PNG"
+						fileExt = ".png"
+					} else if strings.Contains(contentType, "pdf") {
+						isPDF = true
+					}
+				} else if strings.Contains(strings.ToLower(receiptURL), ".jpg") || strings.Contains(strings.ToLower(receiptURL), ".jpeg") {
+					imageType = "JPG"
+					fileExt = ".jpg"
+				} else if strings.Contains(strings.ToLower(receiptURL), ".pdf") {
+					isPDF = true
+				}
+				
+				if isPDF {
+					// Skip PDFs for now, just show link
+					pdf.SetX(marginX)
+					pdf.SetFontStyle("")
+					pdf.Cell(80, 5, fmt.Sprintf("Receipt (PDF): %s", receiptURL))
+					pdf.Ln(5)
+				} else if expense.Receipt.BucketName != nil && expense.Receipt.GCSObjectPath != nil {
+					// Download from GCS bucket using the app's storage client
+					tempDir := os.TempDir()
+					tempFile := filepath.Join(tempDir, fmt.Sprintf("receipt_%d%s", expense.ID, fileExt))
+					
+					// Download the image from GCS
+					ctx := context.Background()
+					client := a.InitializeStorageClient(a.Project, *expense.Receipt.BucketName)
+					bucket := client.Bucket(*expense.Receipt.BucketName)
+					obj := bucket.Object(*expense.Receipt.GCSObjectPath)
+					
+					reader, err := obj.NewReader(ctx)
+					if err == nil {
+						defer reader.Close()
+						
+						// Create the temporary file
+						out, err := os.Create(tempFile)
+						if err == nil {
+							// Copy the image data
+							_, err = io.Copy(out, reader)
+							out.Close()
+							
+							if err == nil {
+								// Add the image to the PDF
+								imageX := marginX
+								imageY := pdf.GetY()
+								maxImageWidth := 90.0
+								
+								imageOpts := gofpdf.ImageOptions{
+									ImageType: imageType,
+									ReadDpi:   true,
+								}
+								
+								// Check if we need a new page
+								if imageY > 200 {
+									pdf.AddPage()
+									imageY = marginY
+									pdf.SetXY(marginX, imageY)
+								}
+								
+								// Add the image
+								pdf.ImageOptions(tempFile, imageX, imageY, maxImageWidth, 0, false, imageOpts, 0, "")
+								
+								// Move Y position past the image
+								pdf.SetY(imageY + 80) // Approximate image height
+							}
+							
+							// Clean up temp file
+							os.Remove(tempFile)
+						}
+					}
+					
+					// If any step failed, show a note
+					if err != nil {
+						pdf.SetX(marginX)
+						pdf.SetFontStyle("")
+						pdf.Cell(80, 5, "Receipt image unavailable")
+						pdf.Ln(5)
+					}
+				} else {
+					// No GCS path available, just note that receipt exists
+					pdf.SetX(marginX)
+					pdf.SetFontStyle("")
+					pdf.Cell(80, 5, "Receipt on file")
+					pdf.Ln(5)
+				}
+			}
+				
+				pdf.Ln(10) // Space before next expense
+				
+				// Draw a separator line
+				pdf.Line(marginX, pdf.GetY(), marginX+safeAreaW, pdf.GetY())
+				pdf.Ln(5)
+				
+				_ = startY // Suppress unused variable warning if not needed
+				_ = i // Suppress unused variable warning
+			}() // Close the defer func
+		}
+	}
+	
 	var buffer bytes.Buffer
 	err := pdf.Output(&buffer)
 	if err != nil {

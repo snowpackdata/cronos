@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"strings"
 	"time"
 
@@ -589,24 +588,25 @@ type Commission struct {
 // linked to the employees.
 type Bill struct {
 	gorm.Model
-	Name             string         `json:"name"`
-	State            BillState      `json:"state"`
-	EmployeeID       uint           `json:"user_id"`
-	Employee         Employee       `json:"user"`
-	PeriodStart      time.Time      `json:"period_start"`
-	PeriodEnd        time.Time      `json:"period_end"`
-	Entries          []Entry        `json:"entries"`
-	Adjustments      []Adjustment   `json:"adjustments"`
-	Commissions      []Commission   `json:"commissions" gorm:"foreignKey:BillID"`
-	LineItems        []BillLineItem `json:"line_items"`
-	AcceptedAt       *time.Time     `json:"accepted_at"`
-	ClosedAt         *time.Time     `json:"closed_at"`
-	TotalHours       float64        `json:"total_hours"`
-	TotalFees        int            `json:"total_fees"`
-	TotalAdjustments float64        `json:"total_adjustments"`
-	TotalCommissions int            `json:"total_commissions"`
-	TotalAmount      int            `json:"total_amount"`
-	GCSFile          string         `json:"file"`
+	Name                   string                  `json:"name"`
+	State                  BillState               `json:"state"`
+	EmployeeID             uint                    `json:"user_id"`
+	Employee               Employee                `json:"user"`
+	PeriodStart            time.Time               `json:"period_start"`
+	PeriodEnd              time.Time               `json:"period_end"`
+	Entries                []Entry                 `json:"entries"`
+	Adjustments            []Adjustment            `json:"adjustments"`
+	Commissions            []Commission            `json:"commissions" gorm:"foreignKey:BillID"`
+	LineItems              []BillLineItem          `json:"line_items"`
+	RecurringBillLineItems []RecurringBillLineItem `json:"recurring_bill_line_items" gorm:"foreignKey:BillID"`
+	AcceptedAt             *time.Time              `json:"accepted_at"`
+	ClosedAt               *time.Time              `json:"closed_at"`
+	TotalHours             float64                 `json:"total_hours"`
+	TotalFees              int                     `json:"total_fees"`
+	TotalAdjustments       float64                 `json:"total_adjustments"`
+	TotalCommissions       int                     `json:"total_commissions"`
+	TotalAmount            int                     `json:"total_amount"`
+	GCSFile                string                  `json:"file"`
 }
 
 // BillLineItem represents a single line item on a payroll bill
@@ -2109,6 +2109,23 @@ func (a *App) GetBillLineItems(b *Bill) []BillLineItemDisplay {
 		})
 	}
 
+	// Load recurring bill line items (e.g., base salary)
+	var recurringLineItems []RecurringBillLineItem
+	a.DB.Where("bill_id = ? AND state != ?", b.ID, "void").Find(&recurringLineItems)
+
+	// Add recurring line items to display
+	for _, recurringItem := range recurringLineItems {
+		displayLineItems = append(displayLineItems, BillLineItemDisplay{
+			BillingCode:     recurringItem.Description, // Use description for the "Description" column
+			BillingCodeCode: "SALARY",                  // Code column
+			Hours:           0,
+			HoursFormatted:  "-",
+			Rate:            0,
+			RateFormatted:   "-",
+			Total:           float64(recurringItem.Amount) / 100.0, // Convert from cents
+		})
+	}
+
 	return displayLineItems
 }
 
@@ -2331,20 +2348,13 @@ func (a *App) ObjectExists(ctx context.Context, bucketName, objectName string) (
 
 // GenerateSignedURL generates a signed URL for accessing a private object.
 // It now returns the generated URL, the expiration time of the URL, and any error.
-// Uses IAM-based signing in production, falls back gracefully in development.
+// Uses IAM-based signing with service account credentials.
+// Requires GOOGLE_APPLICATION_CREDENTIALS pointing to a service account key file.
+// Falls back to public URLs if service account credentials are not available.
 func (a *App) GenerateSignedURL(bucketName, objectName string) (string, time.Time, error) {
 	ctx := context.Background()
 	expiresTime := time.Now().Add(signedURLExpiration)
 
-	// In development without credentials, return public URL
-	if os.Getenv("ENVIRONMENT") != "production" && os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") == "" {
-		log.Printf("Development mode: using public URL for %s/%s", bucketName, objectName)
-		publicURL := a.GetObjectURL(bucketName, objectName)
-		return publicURL, expiresTime, nil
-	}
-
-	// In production, use IAM-based signing
-	// This works automatically on App Engine/Cloud Run with the default service account
 	client, err := storage.NewClient(ctx)
 	if err != nil {
 		log.Printf("Failed to create storage client for signed URL: %v", err)
@@ -2352,7 +2362,7 @@ func (a *App) GenerateSignedURL(bucketName, objectName string) (string, time.Tim
 	}
 	defer client.Close()
 
-	// Generate signed URL using IAM SignBytes (works with default service account)
+	// Generate signed URL using IAM SignBytes
 	opts := &storage.SignedURLOptions{
 		Scheme:  storage.SigningSchemeV4,
 		Method:  "GET",
@@ -2361,13 +2371,118 @@ func (a *App) GenerateSignedURL(bucketName, objectName string) (string, time.Tim
 
 	url, err := client.Bucket(bucketName).SignedURL(objectName, opts)
 	if err != nil {
-		log.Printf("Failed to generate signed URL for %s/%s: %v", bucketName, objectName, err)
-		// Fallback to public URL
-		return a.GetObjectURL(bucketName, objectName), expiresTime, err
+		// If signing fails (e.g., using gcloud user credentials instead of service account),
+		// fall back to public URL without logging as error
+		log.Printf("Warning: Cannot generate signed URL for %s/%s: %v - falling back to public URL", bucketName, objectName, err)
+		return a.GetObjectURL(bucketName, objectName), expiresTime, nil
 	}
 
-	log.Printf("Generated signed URL for %s/%s (expires: %v)", bucketName, objectName, expiresTime)
+	log.Printf("Successfully generated signed URL for %s/%s (expires: %v)", bucketName, objectName, expiresTime)
 	return url, expiresTime, nil
+}
+
+// RefreshAssetURLIfExpired checks if an asset's signed URL is expired and regenerates it if needed.
+// Updates the database with the new URL and expiration time.
+// Gracefully handles cases where signed URLs cannot be generated (e.g., missing service account credentials).
+func (a *App) RefreshAssetURLIfExpired(asset *Asset) error {
+	// Skip if asset doesn't have GCS storage info
+	if asset.GCSObjectPath == nil || *asset.GCSObjectPath == "" || asset.BucketName == nil || *asset.BucketName == "" {
+		return nil
+	}
+
+	// Check if URL is expired, missing, or is a public URL (needs to be converted to signed)
+	now := time.Now()
+	needsRefresh := false
+
+	// Log current state for debugging
+	urlPrefix := "unknown"
+	if len(asset.Url) > 30 {
+		urlPrefix = asset.Url[:30]
+	} else if asset.Url != "" {
+		urlPrefix = asset.Url
+	}
+	
+	// Check if URL is a public URL (no query parameters) vs signed URL (has query params)
+	isPublicURL := asset.Url != "" && !strings.Contains(asset.Url, "?")
+	
+	if asset.ExpiresAt == nil {
+		needsRefresh = true
+		log.Printf("Asset %d: no expiration (URL: %s...), needs refresh", asset.ID, urlPrefix)
+	} else if asset.ExpiresAt.Before(now) {
+		needsRefresh = true
+		log.Printf("Asset %d: expired at %v (URL: %s...), needs refresh", asset.ID, asset.ExpiresAt, urlPrefix)
+	} else if isPublicURL {
+		needsRefresh = true
+		log.Printf("Asset %d: converting public URL to signed URL (URL: %s...)", asset.ID, urlPrefix)
+	} else {
+		// Log that it doesn't need refresh
+		log.Printf("Asset %d: still valid until %v (URL: %s...)", asset.ID, asset.ExpiresAt, urlPrefix)
+	}
+
+	if !needsRefresh {
+		return nil
+	}
+
+	// Regenerate signed URL (or fall back to public URL if service account not available)
+	log.Printf("Asset %d: generating signed URL for %s/%s", asset.ID, *asset.BucketName, *asset.GCSObjectPath)
+	newURL, newExpiresAt, err := a.GenerateSignedURL(*asset.BucketName, *asset.GCSObjectPath)
+	// GenerateSignedURL now returns nil error even if it falls back to public URL,
+	// so we only check for actual errors (client creation failures, etc.)
+	if err != nil {
+		// Only log as warning, don't fail the entire request
+		log.Printf("Warning: failed to refresh URL for asset %d: %v", asset.ID, err)
+		return nil
+	}
+
+	log.Printf("Asset %d: new URL starts with: %s (length: %d)", asset.ID, newURL[:min(50, len(newURL))], len(newURL))
+
+	// Update asset in memory
+	asset.Url = newURL
+	asset.ExpiresAt = &newExpiresAt
+
+	// Save to database
+	if err := a.DB.Model(asset).Updates(map[string]interface{}{
+		"url":        newURL,
+		"expires_at": newExpiresAt,
+	}).Error; err != nil {
+		log.Printf("Warning: failed to save refreshed URL for asset %d: %v", asset.ID, err)
+		return nil
+	}
+
+	log.Printf("Asset %d: successfully saved new URL to database", asset.ID)
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// RefreshAssetsURLsIfExpired refreshes signed URLs for a slice of assets if expired.
+func (a *App) RefreshAssetsURLsIfExpired(assets []Asset) error {
+	if len(assets) == 0 {
+		return nil
+	}
+	
+	log.Printf("Checking %d assets for expired URLs...", len(assets))
+	refreshed := 0
+	
+	for i := range assets {
+		if err := a.RefreshAssetURLIfExpired(&assets[i]); err != nil {
+			log.Printf("Warning: failed to refresh asset %d: %v", assets[i].ID, err)
+			// Continue processing other assets instead of failing completely
+		} else if assets[i].ExpiresAt != nil {
+			refreshed++
+		}
+	}
+	
+	if refreshed > 0 {
+		log.Printf("Refreshed %d/%d asset URLs", refreshed, len(assets))
+	}
+	
+	return nil
 }
 
 // ApproveExpense approves an expense (either client or internal)
@@ -2616,3 +2731,4 @@ func (a *App) GetTagSpendSummary(tagID uint) (totalSpent int, budget *int, remai
 
 	return totalSpent, nil, nil, nil
 }
+

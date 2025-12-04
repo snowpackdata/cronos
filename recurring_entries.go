@@ -60,16 +60,33 @@ func (a *App) GenerateRecurringEntriesForPeriod(periodStart, periodEnd time.Time
 		}
 
 		// Check if this recurring entry is already on the bill
-		var existingLineItem RecurringBillLineItem
-		err := a.DB.Where("bill_id = ? AND recurring_entry_id = ?", bill.ID, entry.ID).First(&existingLineItem).Error
+		var lineItem RecurringBillLineItem
+		err := a.DB.Where("bill_id = ? AND recurring_entry_id = ?", bill.ID, entry.ID).First(&lineItem).Error
 		if err == nil {
-			log.Printf("Recurring line item already exists for bill %d, entry %d - skipping", bill.ID, entry.ID)
+			log.Printf("Recurring line item already exists for bill %d, entry %d - checking if GL entries exist", bill.ID, entry.ID)
+			
+			// Check if GL entries have been booked for this line item
+			var glEntries []Journal
+			a.DB.Where("recurring_bill_line_item_id = ?", lineItem.ID).Find(&glEntries)
+			
+			if len(glEntries) == 0 {
+				log.Printf("No GL entries found for recurring line item %d - booking now", lineItem.ID)
+				// Book payroll accrual for this recurring entry
+				if err := a.BookRecurringEntryAccrual(&lineItem, &entry.Employee); err != nil {
+					log.Printf("Failed to book accrual for recurring entry: %v", err)
+				} else {
+					log.Printf("Successfully booked GL entries for existing recurring line item %d", lineItem.ID)
+				}
+			} else {
+				log.Printf("GL entries already exist for recurring line item %d - skipping", lineItem.ID)
+			}
+			
 			skipped++
 			continue
 		}
 
 		// Create the recurring bill line item
-		lineItem := RecurringBillLineItem{
+		lineItem = RecurringBillLineItem{
 			BillID:           bill.ID,
 			RecurringEntryID: entry.ID,
 			Description:      entry.Description,
@@ -83,6 +100,8 @@ func (a *App) GenerateRecurringEntriesForPeriod(periodStart, periodEnd time.Time
 			log.Printf("Failed to create recurring line item: %v", err)
 			continue
 		}
+
+		log.Printf("Created new recurring line item %d for employee %d", lineItem.ID, entry.EmployeeID)
 
 		// Update last generated tracking
 		now := time.Now()
@@ -98,6 +117,8 @@ func (a *App) GenerateRecurringEntriesForPeriod(periodStart, periodEnd time.Time
 		// Book payroll accrual for this recurring entry
 		if err := a.BookRecurringEntryAccrual(&lineItem, &entry.Employee); err != nil {
 			log.Printf("Failed to book accrual for recurring entry: %v", err)
+		} else {
+			log.Printf("Successfully booked GL entries for new recurring line item %d", lineItem.ID)
 		}
 
 		log.Printf("Created recurring line item for employee %d: %s ($%.2f)", 
