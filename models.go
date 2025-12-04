@@ -811,23 +811,23 @@ type Asset struct {
 // This allows dynamic creation of accounts beyond the predefined constants
 type ChartOfAccount struct {
 	gorm.Model
-	AccountCode     string `json:"account_code" gorm:"unique;not null"` // e.g., "OPERATING_EXPENSES_SAAS"
-	AccountName     string `json:"account_name"`                        // e.g., "Operating Expenses - SaaS"
-	AccountType     string `json:"account_type"`                        // "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
-	ParentID        *uint  `json:"parent_id"`                           // For hierarchical accounts
-	IsActive        bool   `json:"is_active" gorm:"default:true"`
+	AccountCode     string `json:"account_code" gorm:"unique;not null"`                                            // e.g., "OPERATING_EXPENSES_SAAS"
+	AccountName     string `json:"account_name"`                                                                   // e.g., "Operating Expenses - SaaS"
+	AccountType     string `json:"account_type" gorm:"index:idx_account_type_active,priority:1"`                   // "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
+	ParentID        *uint  `json:"parent_id"`                                                                      // For hierarchical accounts
+	IsActive        bool   `json:"is_active" gorm:"default:true;index:idx_account_type_active,priority:2;index"`  // Composite index with account_type + individual index
 	Description     string `json:"description"`
-	IsSystemDefined bool   `json:"is_system_defined" gorm:"default:false"` // True for predefined constants
+	IsSystemDefined bool   `json:"is_system_defined" gorm:"default:false"`                                         // True for predefined constants
 }
 
 // Subaccount represents a sub-ledger account (e.g., specific vendors, clients, employees)
 type Subaccount struct {
 	gorm.Model
-	Code        string `json:"code" gorm:"not null;uniqueIndex:idx_subaccount_code_account"` // e.g., "AWS", "VANTA_INC", "EMPLOYEE_123"
-	Name        string `json:"name"`                                                         // e.g., "Amazon Web Services", "Vanta Inc"
-	AccountCode string `json:"account_code" gorm:"uniqueIndex:idx_subaccount_code_account"`  // Link to ChartOfAccount code
-	Type        string `json:"type"`                                                         // "VENDOR", "CLIENT", "EMPLOYEE", "CUSTOM"
-	IsActive    bool   `json:"is_active" gorm:"default:true"`
+	Code        string `json:"code" gorm:"not null;uniqueIndex:idx_subaccount_code_account"`                                                                               // e.g., "AWS", "VANTA_INC", "EMPLOYEE_123"
+	Name        string `json:"name"`                                                                                                                                       // e.g., "Amazon Web Services", "Vanta Inc"
+	AccountCode string `json:"account_code" gorm:"uniqueIndex:idx_subaccount_code_account;index:idx_subaccount_filters,priority:1"`                                        // Link to ChartOfAccount code, indexed for queries
+	Type        string `json:"type" gorm:"index:idx_subaccount_filters,priority:2"`                                                                                        // "VENDOR", "CLIENT", "EMPLOYEE", "CUSTOM"
+	IsActive    bool   `json:"is_active" gorm:"default:true;index:idx_subaccount_filters,priority:3;index"`                                                                // Composite index for account_code+type+is_active queries
 }
 
 // Expense represents a pass-through expense that will be billed to a client
