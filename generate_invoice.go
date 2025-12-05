@@ -18,7 +18,7 @@ import (
 const defaultFont = "Helvetica"
 const defaultFromName = "Snowpack Data LLC"
 const defaultFromAddress = "2261 Market Street STE 22279, San Francisco CA 94114"
-const defaultContact = "billing@snowpack-data.io"
+const defaultContact = "billing@snowpack-data.com"
 const headerWidth = 40.0
 const headerHeight = 10.0
 const marginX = 10.0
