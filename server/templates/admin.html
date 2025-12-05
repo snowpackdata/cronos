@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Snowpack Data</title>
+    <script>
+        Date.prototype.addDays = function(days) {
+            var date = new Date(this.valueOf());
+            date.setDate(date.getDate() + days);
+            return date;
+        };
+    </script>
+    <script src="../assets/js/moment.min.js"></script>
+    <script src="../assets/js/moment-timezone.js"></script>
+<!--    Bootstrap from CDN-->
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <meta name="description" content="Snowpack Data is an analytics consulting company based in California" />
+    <meta name="author" content="Snowpack Data LLC" />
+    <title>Snowpack Data</title>
+    <!-- Favicon-->
+    <link rel="shortcut icon" type="icon" href="branding/favicon/favicon.ico">
+    <!-- Font Awesome icons (free version)-->
+    <script src="https://use.fontawesome.com/releases/v6.1.0/js/all.js" crossorigin="anonymous"></script>
+    <!-- Google fonts-->
+    <link href="https://fonts.googleapis.com/css?family=Montserrat:400,700" rel="stylesheet" type="text/css" />
+    <link href="https://fonts.googleapis.com/css?family=Roboto+Slab:400,100,300,700" rel="stylesheet" type="text/css" />
+    <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@200;300;400;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@200;300;400;800;900&family=Raleway:wght@200;300;400;700;800;900&display=swap" rel="stylesheet">
+    <!-- Core theme CSS (includes Bootstrap)-->
+    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.6/dist/umd/popper.min.js" integrity="sha384-oBqDVmMz9ATKxIep9tiCxS/Z9fNfEXiDAYTujMAeBAsjFuCZSmKbSSUnQlmh/jp3" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.min.js" integrity="sha384-cuYeSxntonz0PPNlHhBs68uyIAVpIIOZZ5JqeqvYYIcEL727kskC66kF92t6Xl2V" crossorigin="anonymous"></script>
+    <!-- Latest compiled and minified CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css" integrity="sha384-HSMxcRTRxnN+Bdg0JdbxYKrThecOKuH5zCYotlSAcp1+c8xmyTe9GYg1l9a69psu" crossorigin="anonymous">
+
+    <!-- Optional theme -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap-theme.min.css" integrity="sha384-6pzBo3FDv/PJ8r2KRkGHifhEocL+1X2rVCTTkUfGk7/0pbek5mMa1upzvWbrUbOZ" crossorigin="anonymous">
+
+    <!-- Latest compiled and minified JavaScript -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/js/bootstrap.min.js" integrity="sha384-aJ21OjlMXNL5UyIl/XNwTMqvzeRMZH2w8c5cRVpzpU8Y5bApTppSuUkhZXN0VxHd" crossorigin="anonymous"></script>
+
+    <!-- VUE JS -->
+    <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@0.12.0/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue-js-modal@2.0.1/dist/index.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/vue-js-modal@2.0.1/dist/styles.min.css" rel="stylesheet">
+
+    <link type="text/css" rel="stylesheet" href="../assets/css/style.css?v=2">
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-TRLQYPPXKE"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-TRLQYPPXKE');
+    </script>
+    <style>
+        .highlight {
+          background-color: rgba(255, 255, 0, 0.56); /* or any other highlight color */
+        }
+    </style>
+    <script>
+        // Parse JWT for persisted logins and check if we can route to the correct page
+        function parseJwt (token) {
+            var base64Url = token.split('.')[1];
+            var base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            var jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join(''));
+
+            return JSON.parse(jsonPayload);
+        }
+        if (!localStorage.snowpack_token) {
+            location.href = "/login";
+        }
+        if (parseJwt(localStorage.snowpack_token).IsStaff !== true) {
+            location.href = "/login";
+        }
+    </script>
+</head>
+<body>
+<!-- Navigation-->
+<header>
+    <div id="navbar">
+        <div class="nav-title"><a href="/"><span style="font-weight:900;">SNOWPACK</span> Data</a></div>
+        <ul>
+            <li><a href="/services">Services</a></li>
+            <li><a href="/blog">Blog</a></li>
+            <li><a href="https://mail.google.com/mail/?view=cm&fs=1&tf=1&to=info@snowpack-data.io" target="_blank">Contact</a></li>
+        </ul>
+    </div>
+</header>
+<!-- Page Content-->
+<div class="admin-body" id="app">
+    <div class="sidebar">
+        <div @click="updateWorkingScreen('home')" class="tile"><i class="fa-solid fa-clock nav-icon"></i>Time Sheet</div>
+        <div @click="updateWorkingScreen('admin')" class="tile"><i class="fa-solid fa-toolbox nav-icon"></i>Timesheet Admin</div>
+        <div @click="updateWorkingScreen('invoices')" class="tile"><i class="fa-solid fa-file-invoice-dollar nav-icon"></i>Invoices</div>
+        <div @click="updateWorkingScreen('bills')" class="tile"><i class="fa-solid fa-file-invoice-dollar nav-icon"></i>Bills</div>
+        <hr>
+        <div @click="updateWorkingScreen('projects')" class="tile"><i class="fa-solid fa-bars-progress nav-icon"></i>Projects</div>
+        <div @click="updateWorkingScreen('billing_codes')" class="tile"><i class="fa-solid fa-barcode nav-icon"></i>Billing Codes</div>
+        <div @click="updateWorkingScreen('rates')" class="tile"><i class="fa-solid fa-percent nav-icon"></i>Rates</div>
+        <div @click="updateWorkingScreen('accounts')" class="tile"><i class="fa-solid fa-building nav-icon"></i>Accounts</div>
+<!--        <div @click="updateWorkingScreen('staff')" class="tile"><i class="fa-solid fa-people-group nav-icon"></i>Staff</div>-->
+<!--        <div @click="updateWorkingScreen('clients')" class="tile"><i class="fa-solid fa-user nav-icon"></i>Clients</div>-->
+    </div>
+    <div class="main-body">
+        <!--        HOME UI SECTION-->
+        <div id="home" v-if="workingScreen.home" class="admin-content">
+            <div class="col-12" v-if="workingScreen.home" style="margin:15px;">
+                <div style="display:flex;justify-content:space-around;align-items:center;margin-bottom:15px">
+                    <button @click="showNewEntryModal()" class="">Add Entry</button>
+                    <div style="display:flex;align-items:center;">
+                        <button @click="decrementWeek()" class="" style="margin:4px;"><i class="fa-solid fa-circle-chevron-left"></i></button>
+                        {{ currentWeekDaysFormatted[0] }} to {{ currentWeekDaysFormatted[6] }} 
+                        <button @click="incrementWeek()" class="" style="margin:4px;"><i class="fa-solid fa-circle-chevron-right"></i></button>
+                    </div>
+                    <!-- Impersonation filter controls -->
+                    <div class="impersonation-filters">
+                        <button @click="toggleImpersonatingMeFilter()" class="filter-button" :class="{ 'active': impersonationFilters.showImpersonatingMe }">
+                            <i class="fa-solid fa-user-friends"></i> 
+                            <span v-if="impersonationFilters.showImpersonatingMe">Hide</span>
+                            <span v-else>Show</span> 
+                            Impersonating Me
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12">
+                <div id="entry-modal" class="modal" role="dialog" @keydown.esc="hideModal()" tabindex="0" style="margin-top:5%">
+                    <div class="modal-dialog" role="document">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h3 id="entry-modal-title" class="blog-title" style="">Edit Journal Entry</h3>
+                                <span @click="hideModal()" style="margin-left:40%"><i class="fa-solid fa-circle-xmark fa-lg"></i></span>
+                                </button>
+                            </div>
+                            <div class="modal-body" style="">
+                                <label>Select Billing Code</label>
+                                <select v-model="selectedEntry.billing_code_id">
+                                    <option v-for="billing_code in active_billing_codes" :value="billing_code.ID">
+                                       {{billing_code.code}} : {{billing_code.name}}
+                                    </option>
+                                </select>
+                                <hr>
+                                <label>Entry State: {{ displayEntryState(selectedEntry.state) }}</label>
+                                <br>
+                                <label>Start Time</label>
+                                <input type="datetime-local" v-model="selectedEntry.start_vis">
+                                <label>End Time</label>
+                                <input type="datetime-local" v-model="selectedEntry.end_vis">
+                                <div>
+                                    Length : {{ selectedEntry.duration_hours }} hours
+                                    <br>
+                                    Fee : ${{ selectedEntry.fee }}
+                                </div>
+                                <hr>
+                                <!-- Add impersonation dropdown -->
+                                <label>Impersonate as User</label>
+                                <select v-model="selectedEntry.impersonate_as_user_id">
+                                    <option :value="null">No impersonation</option>
+                                    <option v-for="staff_member in staff" :value="staff_member.ID">
+                                        {{staff_member.first_name}} {{staff_member.last_name}}
+                                    </option>
+                                </select>
+                                <hr>
+                                <label>Notes</label>
+                                <textarea style="width:100%;height:80px;" v-model="selectedEntry.notes"></textarea>
+                            </div>
+                            <div class="modal-footer" style="display:flex;justify-content: space-between">
+                                <button @click="submitPostPut('entry')" class="save-button" style="margin-left:5%;margin-right:auto;">Save</button>
+                                <button @click="deleteObject(selectedEntry, 'entry')" class="delete-button" style="margin-left:auto;margin-right:5%">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="calendar-container">
+                    <table id="calendar">
+                        <thead>
+                            <tr>
+                                <th style="width: 12.5%;">
+                                    <div>Weekly Hours: {{ sumEntryHours() }}</div>
+                                    <div>Weekly Fee: ${{ sumEntryFee() }}</div>
+                                </th>
+                                <!-- New row for sum of hours -->
+                                <th v-for="(day, index) in days" style="width: 12.5%;">
+                                    <div>{{ day }} <br>
+                                    {{ currentWeekDaysFormatted[index] }}
+                                    </div>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                <tr class="time-summary">
+                    <td style="width: 12.5%;">
+                        Summary
+                    </td>
+                    <td v-for="(day, dayIndex) in days" :key="dayIndex">
+                        <div>{{ sumEntryHours(dayIndex) }} Hours </div>
+                    </td>
+                </tr>
+                        <tr v-for="(hour, hourIndex) in hours" :key="hourIndex">
+                            <td style="user-select: none">{{ hour.display }}</td>
+                            <td v-for="(day, dayIndex) in days" :key="dayIndex" :class="['hour-block']" @mousedown="startDrag(currentWeekDaysFormatted[dayIndex], hour.hour, $event)" @mouseover="onDragOver(currentWeekDaysFormatted[dayIndex], hour.hour, $event)" @mouseup="endDrag(currentWeekDaysFormatted[dayIndex], hour.hour, $event)" :data-day="currentWeekDays[dayIndex]" :data-hour="hour.hour" >
+                                <!-- You can use Vue.js data and methods to dynamically generate entries here -->
+                                <div v-for="entry in getEntries(day, hour.hour)" :key="entry.entry_id" :id="entry.entry_id"
+                                     @click="showEntryModal(entry)"
+                                     :style="{ 
+                                        height: calculateEntryHeight(entry) + 'px', 
+                                        top: calculateEntryTop(entry) + 'px', 
+                                        left: calculateEntryLeft(entry, day, hour.hour) + 'px',
+                                        width: calculateEntryWidth(day, hour.hour) + 'px'
+                                        }"
+                                      :class="['entry', entry.state, 
+                                        { 'impersonated': entry.impersonate_as_user_id && !entry.is_being_impersonated },
+                                        { 'being-impersonated': entry.is_being_impersonated }
+                                      ]"> 
+                                        <div>
+                                          <div v-if="entry.impersonate_as_user_id && !entry.is_being_impersonated" class="impersonation-info">
+                                            <i class="fa-solid fa-user-tag" title="You are impersonating another user"></i><u><strong>{{ displayEntryState(entry.state) }}</strong></u>
+                                          </div>
+                                          <div v-if="entry.is_being_impersonated" class="impersonation-info">
+                                            <i class="fa-solid fa-user-friends" title="Entry created by someone else impersonating you"></i>
+                                            <u><strong>{{ displayEntryState(entry.state) }}</strong></u>
+                                          </div>
+                                        </div>
+                                        <div>{{ entry.billing_code_name }}</div>
+                                        <div>{{ entry.duration_hours }} hours</div>
+                                        <div v-if="entry.is_being_impersonated" class="impersonation-info">
+                                            <i class="fa-solid fa-user-friends" title="Entry created by someone else impersonating you"></i>
+                                            <span><strong>{{ entry.employee_name }}</strong> created this entry impersonating you</span>
+                                        </div>
+                                </div>
+                            </td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <!--        Admin Working Section -->
+        <div id="invoicing" v-if="workingScreen.admin" class="admin-content">
+            <h2 class="blog-title">Review & Approve Drafts</h2>
+            <hr>
+            <div style="display:flex;">
+                <div class="col-12 admin-scroll-overlay" style="display:block;" tabindex="0">
+                    <div v-for="invoice in draftInvoices" class="draft-invoice admin-record-card" style="display:block">
+                        <h2><span style="color:#8B0000">DRAFT</span> {{ invoice.invoice_name }}</h2>
+                        <h3>
+                          <span v-if="invoice.account_name">{{ invoice.account_name }}</span>
+                          <span v-else>No Client</span>
+                          <span v-if="invoice.project_name"> - {{ invoice.project_name }}</span>
+                          <span v-else> - All Projects</span>
+                        </h3>
+                        <hr>
+                        <table class="draftinvoices">
+                            <tr>
+                                <th></th>
+                                <th>Date</th>
+                                <th>Billing Code</th>
+                                <th>Staff</th>
+                                <th>Description</th>
+                                <th>Hours</th>
+                                <th>Amount</th>
+                            </tr>
+                            <tr v-for="(entry, index) in invoice.line_items" :key="entry.id">
+                                <td>
+                                    <button v-show="entry.editable != true" @click="editEntry(invoice, entry)" style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-pen-to-square"></i>
+                                    </button>
+                                    <button v-show="entry.editable == true" @click="saveEntry(invoice, entry)" style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-circle-check" style="color:darkgreen"></i>
+                                    </button>
+                                    <button v-show="(entry.editable == true && entry.state != 'ENTRY_STATE_VOID')" @click="toggleVoidEntry(invoice, entry)" style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-circle-xmark" style="color:darkred"></i>
+                                    </button>
+                                    <button v-show="(entry.editable == true && entry.state == 'ENTRY_STATE_VOID')" @click="toggleVoidEntry(invoice, entry)" style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-circle-plus" style="color:darkgreen"></i>
+                                    </button>
+
+                                </td>
+                                <td :class="{'strikeout' : entry.state == 'ENTRY_STATE_VOID'}">{{ entry.start_date }} </td>
+                                <td :class="{'strikeout' : entry.state == 'ENTRY_STATE_VOID'}">{{ entry.billing_code }}</td>
+                                <td :class="{'strikeout' : entry.state == 'ENTRY_STATE_VOID'}">
+                                    <span>{{ entry.user_name }}</span>
+                                    <span v-if="entry.is_impersonated" style="font-style: italic; color: #684caf; display: block; background-color: rgba(104, 76, 175, 0.1); padding: 3px; border-radius: 3px; margin-top: 2px; border-left: 3px solid #684caf;">
+                                        <i class="fa-solid fa-user-tag" title="Impersonated Entry"></i>
+                                        Entry created by {{ entry.created_by_name }} impersonating {{ entry.impersonate_as_user_name }}
+                                    </span>
+                                </td>
+                                <td :class="{'editable' : entry.editable, 'strikeout' : entry.state == 'ENTRY_STATE_VOID'}" :contenteditable="entry.editable" @blur="updateEditedValue(entry, $event)">{{ entry.notes }}</td>
+                                <td :class="{'strikeout' : entry.state == 'ENTRY_STATE_VOID'}">{{ entry.duration_hours }}</td>
+                                <td :class="{'strikeout' : entry.state == 'ENTRY_STATE_VOID'}">${{ entry.fee }}</td>
+                            </tr>
+                            <tr v-for="a in invoice.adjustments">
+                                <td>
+                                    <button v-show="a.editable != true" @click="editAdjustment(invoice, a)" style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-pen-to-square"></i>
+                                    </button>
+                                    <button v-show="a.editable == true" @click="saveAdjustment(invoice, a)" style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-circle-check" style="color:darkgreen"></i>
+                                    </button>
+                                    <button v-show="(a.editable == true && a.state != 'ADJUSTMENT_STATE_VOID')" @click="toggleVoidAdjustment(invoice, a)"  style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-circle-xmark" style="color:darkred"></i>
+                                    </button>
+                                    <button v-show="(a.editable == true && a.state == 'ADJUSTMENT_STATE_VOID')" @click="toggleVoidAdjustment(invoice, a)" style="color:none;border:none;background-color:white">
+                                        <i class="fa-solid fa-circle-plus" style="color:darkgreen"></i>
+                                    </button>
+
+                                </td>
+                                <td :class="{'strikeout' : a.state == 'ADJUSTMENT_STATE_VOID'}">{{ formatDate(a.CreatedAt, 'MMMM DD') }}</td>
+                                <td :class="{'strikeout' : a.state == 'ADJUSTMENT_STATE_VOID'}">{{ getAdjustmentType(a.type).name }}</td>
+                                <td :class="{'strikeout' : a.state == 'ADJUSTMENT_STATE_VOID'}"></td>
+                                <td :class="{'strikeout' : a.state == 'ADJUSTMENT_STATE_VOID', 'editable' : a.editable}" :contenteditable="a.editable" @blur="updateAdjustmentValue(a, 'notes', $event)">{{ a.notes }}</td>
+                                <td></td>
+                                <td :class="{'strikeout' : a.state == 'ADJUSTMENT_STATE_VOID', 'editable' : a.editable}" :contenteditable="a.editable" @blur="updateAdjustmentValue(a, 'amount', $event)">${{ a.amount }}</td>
+                            </tr>
+                            <tr style="font-style:italic;font-weight:bold;border-top:1px dotted black">
+                                <td colspan="5"></td>
+                                <td>Total Fees</td>
+                                <td>${{invoice.total_fees}}</td>
+                            </tr>
+                            <tr style="font-style:italic;font-weight:bold;">
+                                <td colspan="5"></td>
+                                <td>Total Adjustments</td>
+                                <td>{{ invoice.total_adjustments }}</td>
+                            </tr>
+                            <tr style="font-style:italic;font-weight:bold;">
+                                <td colspan="5"></td>
+                                <td>Total</td>
+                                <td>{{ invoice.total_amount }}</td>
+                            </tr>
+                        </table>
+                        <div id="adjustment-modal" class="modal" role="dialog" @keydown.esc="hideAdjustmentModal()" tabindex="0" style="margin-top:5%">
+                            <div class="modal-dialog" role="document">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h3 class="blog-title" style="">Add Adjustment</h3>
+                                        <span @click="hideAdjustmentModal()" style="margin-left:40%"><i class="fa-solid fa-circle-xmark fa-lg"></i></span>
+                                        </button>
+                                    </div>
+                                    <div class="modal-body" style="">
+                                        <label>Select Adjustment Type</label>
+                                        <select v-model="newAdjustment.type">
+                                            <option v-for="a in adjustmentTypes" :value="a.value">
+                                                {{a.name}}
+                                            </option>
+                                        </select>
+                                        <hr>
+                                        <label>Amount</label>
+                                        <input type="number" v-model="newAdjustment.amount">
+                                        <hr>
+                                        <label>Notes</label>
+                                        <textarea style="width:100%;height:80px;" v-model="newAdjustment.notes"></textarea>
+                                    </div>
+                                    <div class="modal-footer" style="display:flex;justify-content: space-between">
+                                        <button @click="addInvoiceAdjustment(invoice)" class="save-button" style="margin-left:5%;margin-right:auto;">Add</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    <div>
+                        <button @click="markInvoiceApproved(invoice)" :class="{ 'button-ready': invoice.period_closed, 'button-locked' : !invoice.period_closed}">Lock & Approve</button>
+                        <button @click="showAdjustmentModal(invoice)" class="button-info">+ Adjustment</button>
+                        <button @click="markInvoiceVoid(invoice)" class="button-void">Void</button>
+                    </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!--        Invoicing UI SECTION-->
+        <div id="billing" v-if="workingScreen.invoices" class="admin-content">
+            <h2 class="blog-title">Invoicing</h2>
+            <hr>
+            <div id="invoicing-container">
+<!--                a table to hold all the invoices organized by state-->
+                <table id="invoice-table">
+                    <thead>
+                        <tr>
+                            <th style="width:10%">Status</th>
+                            <th style="width:15%">Client</th>
+                            <th style="width:20%">Name</th>
+                            <th style="width:10%">Date</th>
+                            <th style="width:10%">Fees</th>
+                            <th style="width:10%">Adjustments</th>
+                            <th style="width:10%">Total</th>
+                            <th style="width:15%">Invoice</th>
+                        </tr>
+                    </thead>
+                    <tr v-for="invoice in filterInvoices('INVOICE_STATE_APPROVED')">
+                        <td><span style="color:#d97132;font-weight:bolder">UNSENT #{{ invoice.ID | generateInvoiceNumber }}</span></td>
+                        <td>
+                            <span v-if="invoice.account && invoice.account.name">{{ invoice.account.name }}</span>
+                            <span v-else-if="invoice.AccountName">{{ invoice.AccountName }}</span>
+                            <span v-else>No Client</span>
+                        </td>
+                        <td>{{ invoice.name || invoice.InvoiceName }} 
+                          <span v-if="invoice.project && invoice.project.name">({{ invoice.project.name }})</span>
+                          <span v-else-if="invoice.ProjectName">({{ invoice.ProjectName }})</span>
+                          <span v-else>(All Projects)</span>
+                        </td>
+                        <td>Accepted {{ parseDate(invoice.sent_at, 'll') }}</td>
+                        <td>{{ invoice.total_fees | currency }}</td>
+                        <td>{{ invoice.total_adjustments | currency}}</td>
+                        <td>{{ invoice.total_amount | currency }}</td>
+                        <td>
+                            <button @click="markInvoiceSent(invoice)" class="button-ready">Mark Sent</button>
+                            <button @click="markInvoiceVoid(invoice)" class="button-void">Void</button>
+                        </td>
+                    </tr>
+                    <tr v-for="invoice in filterInvoices('INVOICE_STATE_SENT')">
+                        <td><span style="color:rgba(246,211,34,0.94);font-weight:bolder">SENT #{{ invoice.ID | generateInvoiceNumber }}</span></td>
+                        <td>
+                            <span v-if="invoice.account && invoice.account.name">{{ invoice.account.name }}</span>
+                            <span v-else-if="invoice.AccountName">{{ invoice.AccountName }}</span>
+                            <span v-else>No Client</span>
+                        </td>
+                        <td>
+                            <a :href="invoice.file" download class="link-dark"><i class="fa-solid fa-download"></i></a>
+                            {{ invoice.name || invoice.InvoiceName }} 
+                            <span v-if="invoice.project && invoice.project.name">({{ invoice.project.name }})</span>
+                            <span v-else-if="invoice.ProjectName">({{ invoice.ProjectName }})</span>
+                            <span v-else>(All Projects)</span>
+                        </td>
+                        <td>Due {{ parseDate(invoice.due_at, 'll') }}</td>
+                        <td>{{ invoice.total_fees | currency }}</td>
+                        <td>{{ invoice.total_adjustments | currency}}</td>
+                        <td>{{ invoice.total_amount | currency }}</td>
+                        <td>
+                            <button @click="markInvoicePaid(invoice)" class="button-ready">Mark Paid</button>
+                            <button @click="markInvoiceVoid(invoice)" class="button-void">Void</button>
+                        </td>
+                    </tr>
+                    <tr v-for="invoice in filterInvoices('INVOICE_STATE_PAID')">
+                        <td><span style="color:rgba(39,152,13,0.94);font-weight:bolder">PAID #{{ invoice.ID | generateInvoiceNumber }}</span></td>
+                        <td>
+                            <span v-if="invoice.account && invoice.account.name">{{ invoice.account.name }}</span>
+                            <span v-else-if="invoice.AccountName">{{ invoice.AccountName }}</span>
+                            <span v-else>No Client</span>
+                        </td>
+                        <td>
+                            <a :href="invoice.file" download class="link-dark"><i class="fa-solid fa-download"></i></a>
+                            {{ invoice.name || invoice.InvoiceName }} 
+                            <span v-if="invoice.project && invoice.project.name">({{ invoice.project.name }})</span>
+                            <span v-else-if="invoice.ProjectName">({{ invoice.ProjectName }})</span>
+                            <span v-else>(All Projects)</span>
+                        </td>
+                        <td>Paid {{ parseDate(invoice.closed_at, 'll') }}</td>
+                        <td>{{ invoice.total_fees | currency }}</td>
+                        <td>{{ invoice.total_adjustments | currency }}</td>
+                        <td>{{ invoice.total_amount | currency }}</td>
+                        <td></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        <!--   Staff Billing UI SECTION-->
+        <div id="payroll" v-if="workingScreen.bills" class="admin-content">
+            <h2 class="blog-title">Payroll</h2>
+            <hr>
+            <div id="billing-container">
+                <!--                a table to hold all the invoices organized by state-->
+                <table id="bill-table">
+                    <thead>
+                    <tr>
+                        <th style="width:10%">Status</th>
+                        <th style="width:15%">Staff</th>
+                        <th style="width:20%">Name</th>
+                        <th style="width:10%">Hours</th>
+                        <th style="width:10%">Fee</th>
+                        <th style="width:10%">Action</th>
+                    </tr>
+                    </thead>
+                    <tr v-for="bill in filterBills()">
+                        <td><span style="color:#d97132;font-weight:bolder">Unpaid #{{ bill.ID | generateInvoiceNumber }}</span> <button @click="refreshBill(bill)"><i class="fa-solid fa-arrows-rotate" ></i></button></td>
+                        <td>{{ bill.user.first_name + " " + bill.user.last_name }}</td>
+                       <td>
+                            <a :href="bill.file" download class="link-dark"><i class="fa-solid fa-download"></i></a>
+                            {{ bill.name }}
+                        </td>
+                        <td>{{ bill.total_hours | round }}</td>
+                        <td>{{ bill.total_fees/100 | currency }}</td>
+                        <td>
+                            <button @click="markBillPaid(bill)" class="button-ready">Mark Paid</button>
+                            <button @click="markBillVoid(bill)" class="button-void">Void</button>
+                        </td>
+                    </tr>
+                    <tr v-for="bill in filterBills(false)">
+                        <td><span style="color:forestgreen;font-weight:bolder">Paid #{{ bill.ID | generateInvoiceNumber }}</span></td>
+                        <td>{{ bill.user.first_name + " " + bill.user.last_name }}</td>
+                        <td>
+                            <a :href="bill.file" download class="link-dark"><i class="fa-solid fa-download"></i></a>
+                            {{ bill.name }}
+                        </td>
+                        <td>{{ bill.total_hours | round }}</td>
+                        <td>{{ bill.total_fees/100 | currency }}</td>
+                        <td></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+<!--        PROJECT UI SECTION-->
+        <div id="projects" v-if="workingScreen.projects" class="admin-content">
+            <h2 class="blog-title">Projects</h2>
+            <hr>
+            <div style="display:flex;">
+                <div class="col-6">
+                    <div class="admin-scroll-overlay">
+                       <div v-for="project in projects" class="admin-record-card">
+                           <div class="col-6">
+                               <div class=""><h3>{{ project.name }}</h3></div>
+                               <div class="client-widget" :class="{ 'client-internal' : project.internal}">{{ project.account.name}}
+<!--                                   <button @click="backfillProjectEntries(project)" class="button-icon"><i class="fa-solid fa-tags"></i>  Invoice</button>-->
+                               </div>
+                           </div>
+                           <div class="col-6">
+                               <div class="">{{ parseDate(project.active_start, 'll') }} to {{ parseDate(project.active_end, 'll') }}</div>
+                               <div class="">Time Budget: {{ project.budget_hours }} hours</div>
+                               <div class="">Financial Budget: ${{ project.budget_dollars }} </div>
+                               <div class="">Billing Type: {{ project.billing_frequency }}</div>
+                               <button @click="editDetail(project, 'project')" style="float:right;margin-right:15px"><i class="fa-solid fa-pen-to-square"></i></button>
+                           </div>
+
+                       </div>
+                    </div>
+                </div>
+                <div class="col-6" style="display:block;" @keydown.esc="exitDetail()" tabindex="0">
+                    <div class="col-12" style="margin-bottom:15px;">
+                        <button @click="createNew('project')" class="" style="float:right;margin-right:15%">Create New</button>
+                    </div>
+                    <div id="dynamic-highlight" v-if="showDetail" class="admin-record-card update-card">
+                        <span @click="exitDetail()" style="margin-left:95%"><i class="fa-solid fa-circle-xmark"></i></span>
+                        <h2>
+                            <label>Project Name</label>
+                                <input type="text" v-model="detailProject.name" placeholder="Name">
+                        </h2>
+                        <hr>
+                        <label>Account</label>
+                        <select v-model="detailProject.account.name">
+                            <option v-for="account in accounts" :value="account.name">
+                                {{ account.name }}
+                            </option>
+                        </select>
+                        <div>
+                            <label>Start</label>
+                            <input type="date" v-model="detailProject.active_start_vis">
+                            <label>End</label>
+                            <input type="date" v-model="detailProject.active_end_vis">
+                        </div>
+                        <div>
+                            <label>Budget Hours</label>
+                            <input type="number" v-model="detailProject.budget_hours">
+                            <label>Budget Dollars</label>
+                            <input type="number" v-model="detailProject.budget_dollars">
+                        </div>
+                        <div>
+                            <label>Internal Project</label>
+                            <input type="checkbox" v-model="detailProject.internal">
+                        </div>
+                        <div>
+                            <label>Project Type</label>
+                            <select v-model="detailProject.project_type">
+                                <option v-for="type in projectTypes" :value="type.value">
+                                    {{ type.name }}
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Account Executive</label>
+                            <select v-model="detailProject.ae_id" @change="autoSelectSDR">
+                                <option :value="null">None</option>
+                                <option v-for="employee in staff" :value="employee.ID">
+                                    {{ employee.first_name }} {{ employee.last_name }}
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Sales Development Rep</label>
+                            <select v-model="detailProject.sdr_id">
+                                <option :value="null">None</option>
+                                <option v-for="employee in staff" :value="employee.ID">
+                                    {{ employee.first_name }} {{ employee.last_name }}
+                                </option>
+                            </select>
+                        </div>
+                        <hr>
+                        <div>
+                            <h3>Associated Billing Codes</h3>
+                            <ul>
+                                <li v-for="billingCode in detailProject.billing_codes">{{ billingCode.name }} : {{billingCode.code}}</li>
+                            </ul>
+                        </div>
+                        <hr>
+                        <div>
+                            <button @click="submitPostPut('project')" class="save-button">Save</button>
+                            <button @click="deleteObject(detailProject, 'project')" class="delete-button">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+<!--        BILLING CODE UI SECTION-->
+        <div id="billingcodes" v-if="workingScreen.billing_codes" class="admin-content">
+            <h2 class="blog-title">Billing Codes</h2>
+            <hr>
+            <div style="display:flex;">
+                <div class="col-6">
+                    <div class="admin-scroll-overlay">
+                        <div v-for="b in billing_codes" class="admin-record-card">
+                            <div class="col-6">
+                                <div class=""><h3>{{ b.name }}</h3></div>
+                                <div class="client-widget" :class="{ 'client-internal' : b.project.internal}">
+                                    {{ b.rate.name}} : ${{ b.rate.amount }}/hr
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div><strong>Code: </strong>{{ b.code }}</div>
+                                <div><strong>Category: </strong>{{ b.type }}</div>
+                                <div class="">{{ parseDate(b.active_start, 'll') }} to {{ parseDate(b.active_end, 'll') }}</div>
+                                <div class="">Round To: {{ b.rounded_to }} Minutes</div>
+                                <button @click="editDetail(b, 'billing_code')" style="float:right;margin-right:15px"><i class="fa-solid fa-pen-to-square"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6" style="display:block;" @keydown.esc="closeModalLogin" tabindex="0">
+                    <div class="col-12" style="margin-bottom:15px;">
+                        <button @click="createNew('billing_code')" class="" style="float:right;margin-right:15%">Create New</button>
+                    </div>
+                    <div v-if="showDetail" class="admin-record-card update-card">
+                        <span @click="exitDetail()" style="margin-left:95%"><i class="fa-solid fa-circle-xmark"></i></span>
+                        <h2>
+                            <label>BillingCode Name</label>
+                            <input type="text" v-model="detailBillingCode.name" placeholder="Name">
+                        </h2>
+                        <div class="regex-input">
+                            <label>Code</label>
+                                <input class="regex-input" type="text" v-model="detailBillingCode.code" placeholder="Code" pattern="^\w+_\d{4}$"> format WWWW_nnnn
+                        </div>
+                        <hr>
+                        <label>Project</label>
+                        <select v-model="detailBillingCode.project">
+                            <option v-for="project in projects" :value="project.ID">
+                                {{ project.name }}
+                            </option>
+                        </select>
+                        <div>
+                            <label>Start</label>
+                            <input type="date" v-model="detailBillingCode.active_start_vis">
+                            <label>End</label>
+                            <input type="date" v-model="detailBillingCode.active_end_vis">
+                        </div>
+                        <div>
+                            <label>Round Billables To: </label>
+                            <input type="number" v-model="detailBillingCode.rounded_to"> minutes
+                        </div>
+                        <hr>
+                        <div >
+                            <div style="display:block">
+                                <label>Billable Rate</label>
+                                <select v-model="detailBillingCode.rate_id">
+                                    <option v-for="rate in rates" :value="rate.ID">
+                                        {{ rate.name }} - ${{ rate.amount }}/hr
+                                    </option>
+                                </select>
+                            </div>
+                            <div style="display:block">
+                                <label>Internal Rate</label>
+                                <select v-model="detailBillingCode.internal_rate_id">
+                                    <option v-for="rate in rates" :value="rate.ID">
+                                        {{ rate.name }} - ${{ rate.amount }}/hr
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <h3>Billing Category</h3>
+                            <label>Category</label>
+                            <select v-model="detailBillingCode.type">
+                                <option v-for="bg in billingCategories" :value="bg.value">
+                                    {{ bg.name }}
+                                </option>
+                            </select>
+                        </div>
+                        <hr>
+                        <div>
+                            <button @click="submitPostPut('billing_code')" class="save-button">Save</button>
+                            <button @click="deleteObject(detailBillingCode, 'billing_code')" class="delete-button">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+<!--        RATES CODE UI SECTION-->
+        <div id="rates" v-if="workingScreen.rates" class="admin-content">
+            <h2 class="blog-title">Rates</h2>
+            <hr>
+            <div style="display:flex;">
+                <div class="col-6">
+                    <div class="admin-scroll-overlay">
+                        <div v-for="r in rates" class="admin-record-card">
+                            <div class="col-6">
+                                <div class=""><h3>{{ r.name }}</h3></div>
+                            </div>
+                            <div class="col-6">
+                                <div><strong>Fee: </strong>{{ r.amount }}/hr</div>
+                                <div class="">{{ parseDate(r.active_from, 'll') }} to {{ parseDate(r.active_to, 'll') }}</div>
+                                <button @click="editDetail(r, 'rate')" style="float:right;margin-right:15px"><i class="fa-solid fa-pen-to-square"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6" style="display:block; "@keydown.esc="exitDetail()" tabindex="0">
+                    <div class="col-12" style="margin-bottom:15px;">
+                        <button @click="createNew('rate')" class="" style="float:right;margin-right:15%">Create New</button>
+                    </div>
+                    <div v-if="showDetail" class="admin-record-card update-card">
+                        <span @click="exitDetail()" style="margin-left:95%"><i class="fa-solid fa-circle-xmark"></i></span>
+                        <h2>
+                            <label>Rate Name</label>
+                            <input type="text" v-model="detailRate.name" placeholder="Name">
+                        </h2>
+                        <hr>
+                        <div>
+                            <label>Start</label>
+                            <input type="date" v-model="detailRate.active_start_vis">
+                            <label>End</label>
+                            <input type="date" v-model="detailRate.active_end_vis">
+                        </div>
+                        <div>
+                            <label>Hourly Amount:</label>
+                            <input type="number" v-model="detailRate.amount">
+                        </div>
+                        <hr>
+                        <div>
+                            <h3>Associated Billing Codes</h3>
+                            <ul>
+                                <li v-for="bc in detailRate.BillingCodes">
+                                    {{ bc.name }} : {{bc.code}}
+                                </li>
+                            </ul>
+                        </div>
+                        <hr>
+                        <div>
+                            <button @click="submitPostPut('rate')" class="save-button">Save</button>
+                            <button @click="deleteObject(detailRate, 'rate')" class="delete-button">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!--        Accounts Section UI-->
+        <div id="accounts" v-if="workingScreen.accounts" class="admin-content">
+            <h2 class="blog-title">Accounts</h2>
+            <hr>
+            <div style="display:flex;">
+                <div class="col-6">
+                    <div class="admin-scroll-overlay">
+                        <div v-for="account in accounts" class="admin-record-card">
+                            <div class="col-6">
+                                <div class=""><h3><a :href="account.website" target="_blank">{{ account.name }}</a></h3></div>
+                                <div>
+                                    DBA: {{account.legal_name}}
+                                </div>
+                                <div>
+                                    {{account.address}}
+                                </div>
+
+                            </div>
+                            <div class="col-6">
+                                <div><strong>Type: </strong>{{ account.type }}</div>
+                                <div class="">{{ account.email }}</div>
+                                <button @click="editDetail(account, 'account')" style="float:right;margin-right:15px"><i class="fa-solid fa-pen-to-square"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6" style="display:block;">
+                    <div class="col-12" style="margin-bottom:15px;">
+                        <button @click="createNew('account')" class="" style="float:right;margin-right:15%">Create New</button>
+                    </div>
+                    <div v-if="showDetail" class="admin-record-card update-card" @keydown.esc="exitDetail()" tabindex="0">
+                        <span @click="exitDetail()" style="margin-left:95%"><i class="fa-solid fa-circle-xmark"></i></span>
+                        <h2>
+                            <label>Account Name</label>
+                            <input type="text" v-model="detailAccount.name" placeholder="Name">
+                        </h2>
+                        <label>Account Type</label>
+                        <select v-model="detailAccount.type">
+                            <option v-for="accountType in accountTypes" :value="accountType.type">
+                                {{ accountType.name }}
+                            </option>
+                        </select>
+                        <hr>
+                        <div>
+                            <label>Legal Name</label>
+                            <input type="text" v-model="detailAccount.legal_name">
+                            <label>Address</label>
+                            <input type="text" v-model="detailAccount.address">
+                        </div>
+                        <div>
+                            <label>Website</label>
+                            <input type="text" v-model="detailAccount.website">
+                            <label>Email</label>
+                            <input type="email" v-model="detailAccount.email">
+                        </div>
+                        <hr>
+                        <div>
+                            <label>Billing Frequency</label>
+                            <select type="text" v-model="detailAccount.billing_frequency">
+                                <option v-for="billingFrequency in billingFrequencies" :value="billingFrequency.value">
+                                    {{ billingFrequency.name }}
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Budget Hours</label>
+                            <input type="number" v-model="detailAccount.budget_hours">
+                            <label>Budget Dollars</label>
+                            <input type="number" v-model="detailAccount.budget_dollars">
+                        </div>
+                        <div>
+                            <label>Single Invoice for All Projects</label>
+                            <input type="checkbox" v-model="detailAccount.projects_single_invoice">
+                        </div>
+                        <hr>
+                        <div>
+                            <h3>Client Members</h3>
+                            <ul>
+                                <li v-for="client in detailAccount.clients">
+                                    {{ client.role }} : {{client.email}}
+                                </li>
+                            </ul>
+                            <label>Invite User</label>
+                            <input type="text" v-model="invitedUserEmail">
+                            <button @click="inviteUser(detailAccount)" class="save-button"><i class="fa-regular fa-paper-plane"></i></button>
+                        </div>
+                        <hr>
+                        <div>
+                            <button @click="submitPostPut('account')" class="save-button">Save</button>
+                            <button @click="deleteObject(detailAccount, 'account')" class="delete-button">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<footer class="footer py-4">
+    <div class="container">
+        <div class="row align-items-center">
+            <div class="col-lg-4 text-lg-start">Copyright &copy; Snowpack Data LLC 2022</div>
+            <div class="col-lg-4 my-3 my-lg-0">
+                <!-- <a class="btn btn-dark btn-social mx-2" href="#!" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
+                <a class="btn btn-dark btn-social mx-2" href="#!" aria-label="Facebook"><i class="fab fa-facebook-f"></i></a>
+                <a class="btn btn-dark btn-social mx-2" href="#!" aria-label="LinkedIn"><i class="fab fa-linkedin-in"></i></a> -->
+            </div>
+            <div class="col-lg-4 text-lg-end">
+                <a class="link-dark text-decoration-none me-3" href="#!">Privacy Policy</a>
+                <a class="link-dark text-decoration-none" href="#!">Terms of Use</a>
+            </div>
+        </div>
+    </div>
+</footer>
+
+</body>
+<script src="../assets/js/admin.js?v=3"></script>
+
+<script>
+    // Prepopulate Data we may need in the front end
+    App.fetchRates();
+    App.fetchAccounts();
+    App.fetchStaff();
+    App.fetchProjects();
+    App.fetchBillingCodes();
+    App.fetchActiveBillingCodes();
+    App.fetchEntries();
+    App.updateEventSizes();
+</script>
+</html>
