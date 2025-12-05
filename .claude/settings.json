@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(gh issue view:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(chmod:*)",
+      "Bash(gh label:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh pr create:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(gh pr create*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/protect-main-on-pr.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/capture-issue-create.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
