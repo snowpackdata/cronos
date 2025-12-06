@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // GenerateOfflineJournalHash creates a unique hash for deduplication
@@ -151,6 +153,32 @@ func (a *App) BulkUpdateOfflineJournalStatus(ids []uint, status string, staffID 
 	}
 
 	return a.DB.Model(&OfflineJournal{}).Where("id IN ?", ids).Updates(updates).Error
+}
+
+// ValidateSubaccountRequired checks if a subaccount is required for the given account
+// Returns an error if the account has subaccounts but none was provided
+func (a *App) ValidateSubaccountRequired(accountCode, subAccount string) error {
+	// Skip validation for special accounts that shouldn't have subaccounts
+	if accountCode == "" || accountCode == "UNCLASSIFIED" {
+		return nil
+	}
+	
+	// Check if this account has any subaccounts defined
+	var count int64
+	err := a.DB.Model(&ChartOfAccount{}).
+		Where("parent_account_code = ?", accountCode).
+		Count(&count).Error
+	
+	if err != nil {
+		return fmt.Errorf("failed to check for subaccounts: %w", err)
+	}
+	
+	// If subaccounts exist but none was provided, return error
+	if count > 0 && subAccount == "" {
+		return fmt.Errorf("account '%s' has %d subaccount(s) - you must select a specific subaccount", accountCode, count)
+	}
+	
+	return nil
 }
 
 // GetCombinedJournals returns both regular journals and approved offline journals
@@ -355,30 +383,35 @@ func (a *App) ImportCSVToOfflineJournals(csvContent []byte, dateCol, descCol, am
 		// Normalize date to midnight for consistent comparison
 		normalizedDate := time.Date(tx.Date.Year(), tx.Date.Month(), tx.Date.Day(), 0, 0, 0, 0, time.UTC)
 
+		// Generate unique transaction group ID for this transaction pair
+		transactionGroupID := uuid.New().String()
+
 		// Create debit entry (needs account assignment)
 		debitEntry := OfflineJournal{
-			Date:        normalizedDate,
-			Account:     "UNCLASSIFIED",
-			SubAccount:  "DEBIT - Assign Account",
-			Description: tx.Description,
-			Debit:       amountCents,
-			Credit:      0,
-			Source:      "csv_import",
-			Status:      "pending_review",
-			ImportedAt:  time.Now(),
+			Date:               normalizedDate,
+			Account:            "UNCLASSIFIED",
+			SubAccount:         "DEBIT - Assign Account",
+			Description:        tx.Description,
+			Debit:              amountCents,
+			Credit:             0,
+			TransactionGroupID: transactionGroupID,
+			Source:             "csv_import",
+			Status:             "pending_review",
+			ImportedAt:         time.Now(),
 		}
 
 		// Create credit entry (needs account assignment)
 		creditEntry := OfflineJournal{
-			Date:        normalizedDate,
-			Account:     "UNCLASSIFIED",
-			SubAccount:  "CREDIT - Assign Account",
-			Description: tx.Description,
-			Debit:       0,
-			Credit:      amountCents,
-			Source:      "csv_import",
-			Status:      "pending_review",
-			ImportedAt:  time.Now(),
+			Date:               normalizedDate,
+			Account:            "UNCLASSIFIED",
+			SubAccount:         "CREDIT - Assign Account",
+			Description:        tx.Description,
+			Debit:              0,
+			Credit:             amountCents,
+			TransactionGroupID: transactionGroupID,
+			Source:             "csv_import",
+			Status:             "pending_review",
+			ImportedAt:         time.Now(),
 		}
 
 		// Generate hashes for both entries
@@ -479,17 +512,25 @@ func (a *App) BulkUpdateOfflineJournalAccounts(ids []uint, account, subAccount s
 }
 
 // GetOfflineJournalTransactions retrieves offline journals grouped by transaction
-// Returns a map of description+date -> list of journal entries (typically 2 per transaction)
+// Returns a map of transaction key -> list of journal entries (typically 2 per transaction)
+// Groups by TransactionGroupID when available, falls back to date|description for legacy entries
 func (a *App) GetOfflineJournalTransactions(startDate, endDate time.Time, status string) (map[string][]OfflineJournal, error) {
 	journals, err := a.GetOfflineJournals(startDate, endDate, status)
 	if err != nil {
 		return nil, err
 	}
 
-	// Group by date + description (transactions that belong together)
+	// Group by TransactionGroupID (preferred) or date+description (legacy fallback)
 	transactions := make(map[string][]OfflineJournal)
 	for _, journal := range journals {
-		key := fmt.Sprintf("%s|%s", journal.Date.Format("2006-01-02"), journal.Description)
+		var key string
+		if journal.TransactionGroupID != "" {
+			// Use TransactionGroupID for entries that have it (new imports)
+			key = journal.TransactionGroupID
+		} else {
+			// Fall back to date|description for legacy entries without TransactionGroupID
+			key = fmt.Sprintf("%s|%s", journal.Date.Format("2006-01-02"), journal.Description)
+		}
 		transactions[key] = append(transactions[key], journal)
 	}
 
@@ -498,29 +539,51 @@ func (a *App) GetOfflineJournalTransactions(startDate, endDate time.Time, status
 
 // CategorizeCSVTransaction categorizes a CSV transaction by specifying from and to accounts
 // This updates both sides of the double-entry (debit and credit)
+// transactionGroupID is optional - if provided, it will be used to find the exact transaction pair
 func (a *App) CategorizeCSVTransaction(date time.Time, description string, 
-	fromAccount, fromSubAccount, toAccount, toSubAccount string) error {
+	fromAccount, fromSubAccount, toAccount, toSubAccount string, transactionGroupID string) error {
 	
-	// Find all offline journals for this transaction (should be 2: debit and credit)
-	// Use a 48-hour range to handle timezone differences between stored data and search query
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).Add(-24 * time.Hour)
-	endOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).Add(48 * time.Hour)
-	
-	log.Printf("Searching for transactions: date range [%v to %v), description=%q, account=UNCLASSIFIED, status=pending_review", 
-		startOfDay, endOfDay, description)
+	// Validate that subaccounts are provided if they exist for the account
+	if err := a.ValidateSubaccountRequired(fromAccount, fromSubAccount); err != nil {
+		return fmt.Errorf("from account validation failed: %w", err)
+	}
+	if err := a.ValidateSubaccountRequired(toAccount, toSubAccount); err != nil {
+		return fmt.Errorf("to account validation failed: %w", err)
+	}
 	
 	var journals []OfflineJournal
-	err := a.DB.Where("date >= ? AND date < ? AND description = ? AND account = ? AND status = ?",
-		startOfDay, endOfDay, description, "UNCLASSIFIED", "pending_review").
-		Order("debit DESC").  // Debit entry first
-		Find(&journals).Error
+	var err error
+	
+	// If TransactionGroupID is provided, use it (most precise)
+	if transactionGroupID != "" {
+		log.Printf("Searching for transaction by TransactionGroupID: %s", transactionGroupID)
+		err = a.DB.Where("transaction_group_id = ? AND account = ? AND status = ?",
+			transactionGroupID, "UNCLASSIFIED", "pending_review").
+			Order("debit DESC").  // Debit entry first
+			Find(&journals).Error
+	} else {
+		// Fall back to date+description search for legacy entries
+		// Use a 48-hour range to handle timezone differences between stored data and search query
+		startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).Add(-24 * time.Hour)
+		endOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).Add(48 * time.Hour)
+		
+		log.Printf("Searching for transactions: date range [%v to %v), description=%q, account=UNCLASSIFIED, status=pending_review", 
+			startOfDay, endOfDay, description)
+		
+		err = a.DB.Where("date >= ? AND date < ? AND description = ? AND account = ? AND status = ?",
+			startOfDay, endOfDay, description, "UNCLASSIFIED", "pending_review").
+			Order("debit DESC").  // Debit entry first
+			Find(&journals).Error
+	}
+	
 	if err != nil {
 		return fmt.Errorf("failed to find transactions: %w", err)
 	}
 
 	log.Printf("Found %d journal entries matching all filters", len(journals))
 	for i, j := range journals {
-		log.Printf("  Entry %d: ID=%d, Date=%v, Debit=%d, Credit=%d, Status=%s", i+1, j.ID, j.Date, j.Debit, j.Credit, j.Status)
+		log.Printf("  Entry %d: ID=%d, Date=%v, Debit=%d, Credit=%d, Status=%s, GroupID=%s", 
+			i+1, j.ID, j.Date, j.Debit, j.Credit, j.Status, j.TransactionGroupID)
 	}
 
 	if len(journals) != 2 {
@@ -626,12 +689,22 @@ func (a *App) ApproveAndBookOfflineJournals(ids []uint, staffID uint) (int, erro
 }
 
 // ApproveTransactionPair approves both sides of a transaction (debit and credit)
-// Finds all offline journals with matching date+description and approves them together
-func (a *App) ApproveTransactionPair(date time.Time, description string, staffID uint) (int, error) {
-	// Find all journal entries for this transaction
+// Finds all offline journals with matching TransactionGroupID (or date+description for legacy) and approves them together
+// transactionGroupID is optional - if provided, it will be used to find the exact transaction pair
+func (a *App) ApproveTransactionPair(date time.Time, description string, staffID uint, transactionGroupID string) (int, error) {
 	var journals []OfflineJournal
-	err := a.DB.Where("date = ? AND description = ? AND status = ?",
-		date, description, "pending_review").Find(&journals).Error
+	var err error
+	
+	// If TransactionGroupID is provided, use it (most precise)
+	if transactionGroupID != "" {
+		err = a.DB.Where("transaction_group_id = ? AND status = ?",
+			transactionGroupID, "pending_review").Find(&journals).Error
+	} else {
+		// Fall back to date+description for legacy entries
+		err = a.DB.Where("date = ? AND description = ? AND status = ?",
+			date, description, "pending_review").Find(&journals).Error
+	}
+	
 	if err != nil {
 		return 0, fmt.Errorf("failed to find transaction: %w", err)
 	}
@@ -755,6 +828,170 @@ func (a *App) PostOfflineJournalsToGL(ids []uint) error {
 
 	log.Printf("Posted %d offline journals to General Ledger", len(ids))
 	return nil
+}
+
+// SuggestedCategorization represents a suggested account categorization based on historical data
+type SuggestedCategorization struct {
+	Description      string  `json:"description"`
+	FromAccount      string  `json:"from_account"`
+	FromSubAccount   string  `json:"from_sub_account"`
+	ToAccount        string  `json:"to_account"`
+	ToSubAccount     string  `json:"to_sub_account"`
+	MatchCount       int     `json:"match_count"`       // How many times this pattern has been used
+	SimilarityScore  float64 `json:"similarity_score"`  // 0-1, how similar the description is
+	LastUsed         string  `json:"last_used"`         // Last time this categorization was used
+}
+
+// GetSuggestedCategorizations finds similar previously-categorized transactions
+// and suggests categorizations based on fuzzy matching of descriptions
+func (a *App) GetSuggestedCategorizations(description string, limit int) ([]SuggestedCategorization, error) {
+	// Get all categorized (non-UNCLASSIFIED) offline journals
+	var categorized []OfflineJournal
+	err := a.DB.Where("account != ? AND status IN ?", "UNCLASSIFIED", []string{"approved", "posted"}).
+		Order("date DESC").
+		Find(&categorized).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch categorized entries: %w", err)
+	}
+
+	// Group by transaction_group_id or date+description to find pairs
+	type TransactionPair struct {
+		DebitEntry  *OfflineJournal
+		CreditEntry *OfflineJournal
+		LastUsed    time.Time
+	}
+	
+	pairMap := make(map[string]*TransactionPair)
+	
+	for i := range categorized {
+		entry := &categorized[i]
+		var key string
+		
+		if entry.TransactionGroupID != "" {
+			key = entry.TransactionGroupID
+		} else {
+			key = fmt.Sprintf("%s|%s", entry.Date.Format("2006-01-02"), entry.Description)
+		}
+		
+		if _, exists := pairMap[key]; !exists {
+			pairMap[key] = &TransactionPair{LastUsed: entry.Date}
+		}
+		
+		if entry.Debit > 0 {
+			pairMap[key].DebitEntry = entry
+		} else if entry.Credit > 0 {
+			pairMap[key].CreditEntry = entry
+		}
+		
+		if entry.Date.After(pairMap[key].LastUsed) {
+			pairMap[key].LastUsed = entry.Date
+		}
+	}
+
+	// Calculate similarity scores and build suggestions
+	descLower := strings.ToLower(description)
+	suggestions := make(map[string]*SuggestedCategorization)
+	
+	for _, pair := range pairMap {
+		if pair.DebitEntry == nil || pair.CreditEntry == nil {
+			continue
+		}
+		
+		// Calculate similarity score (simple word overlap)
+		pairDescLower := strings.ToLower(pair.DebitEntry.Description)
+		score := calculateSimilarity(descLower, pairDescLower)
+		
+		// Only include if similarity is above threshold (30%)
+		if score < 0.3 {
+			continue
+		}
+		
+		// Create suggestion key
+		suggestionKey := fmt.Sprintf("%s|%s|%s|%s|%s|%s",
+			pair.DebitEntry.Description,
+			pair.DebitEntry.Account,
+			pair.DebitEntry.SubAccount,
+			pair.CreditEntry.Account,
+			pair.CreditEntry.SubAccount,
+		)
+		
+		if existing, exists := suggestions[suggestionKey]; exists {
+			// Increment match count and update last used if newer
+			existing.MatchCount++
+			if pair.LastUsed.Format("2006-01-02") > existing.LastUsed {
+				existing.LastUsed = pair.LastUsed.Format("2006-01-02")
+			}
+			// Use the highest similarity score
+			if score > existing.SimilarityScore {
+				existing.SimilarityScore = score
+			}
+		} else {
+			suggestions[suggestionKey] = &SuggestedCategorization{
+				Description:     pair.DebitEntry.Description,
+				FromAccount:     pair.DebitEntry.Account,
+				FromSubAccount:  pair.DebitEntry.SubAccount,
+				ToAccount:       pair.CreditEntry.Account,
+				ToSubAccount:    pair.CreditEntry.SubAccount,
+				MatchCount:      1,
+				SimilarityScore: score,
+				LastUsed:        pair.LastUsed.Format("2006-01-02"),
+			}
+		}
+	}
+
+	// Convert to slice and sort by similarity score, then by match count
+	result := make([]SuggestedCategorization, 0, len(suggestions))
+	for _, suggestion := range suggestions {
+		result = append(result, *suggestion)
+	}
+	
+	// Sort by similarity score (descending), then by match count (descending)
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[j].SimilarityScore > result[i].SimilarityScore ||
+				(result[j].SimilarityScore == result[i].SimilarityScore && result[j].MatchCount > result[i].MatchCount) {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+
+	// Limit results
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+
+	return result, nil
+}
+
+// calculateSimilarity calculates a simple similarity score between two strings
+// Returns a value between 0 and 1, where 1 is identical
+func calculateSimilarity(s1, s2 string) float64 {
+	// Tokenize both strings
+	words1 := strings.Fields(s1)
+	words2 := strings.Fields(s2)
+	
+	if len(words1) == 0 || len(words2) == 0 {
+		return 0
+	}
+	
+	// Count matching words
+	matchCount := 0
+	for _, w1 := range words1 {
+		for _, w2 := range words2 {
+			if w1 == w2 {
+				matchCount++
+				break
+			}
+		}
+	}
+	
+	// Similarity is the ratio of matching words to total unique words
+	totalWords := len(words1)
+	if len(words2) > totalWords {
+		totalWords = len(words2)
+	}
+	
+	return float64(matchCount) / float64(totalWords)
 }
 
 // ReverseJournalEntry creates a reversing entry for a given journal entry

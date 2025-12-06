@@ -164,7 +164,7 @@ func (a *App) ApproveEntries(entryIDs []uint) error {
 
 	// Load the entries with employee and invoice data
 	var entries []Entry
-	if err := a.DB.Preload("Employee").Preload("Invoice").Preload("Invoice.Account").
+	if err := a.DB.Preload("Employee.User").Preload("Employee").Preload("Invoice").Preload("Invoice.Account").
 		Where("id IN ?", entryIDs).Find(&entries).Error; err != nil {
 		return fmt.Errorf("failed to load entries: %w", err)
 	}
@@ -197,7 +197,7 @@ func (a *App) ApproveEntries(entryIDs []uint) error {
 	log.Printf("Updated %d entries to approved state", len(entries))
 
 	// Reload entries from database to get the updated state
-	if err := a.DB.Preload("Employee").Preload("Invoice").Preload("Invoice.Account").
+	if err := a.DB.Preload("Employee.User").Preload("Employee").Preload("Invoice").Preload("Invoice.Account").
 		Where("id IN ?", entryIDs).Find(&entries).Error; err != nil {
 		return fmt.Errorf("failed to reload entries after approval: %w", err)
 	}
@@ -230,7 +230,7 @@ func (a *App) ApproveEntries(entryIDs []uint) error {
 	for key, entryGroup := range entryMap {
 		// Load employee to check pay eligibility state
 		var employee Employee
-		if err := a.DB.First(&employee, key.EmployeeID).Error; err != nil {
+		if err := a.DB.Preload("User").First(&employee, key.EmployeeID).Error; err != nil {
 			log.Printf("Warning: Could not load employee %d: %v", key.EmployeeID, err)
 			continue
 		}
@@ -414,7 +414,7 @@ func (a *App) ApproveInvoice(invoiceID uint) error {
 		// Book accrued payroll to AP for newly created bills
 		log.Printf("Booking accrued payroll to AP for newly created bills on invoice ID: %d", invoiceID)
 		var bills []Bill
-		if err := a.DB.Preload("Entries").Preload("Entries.Employee").Preload("Employee").
+		if err := a.DB.Preload("Entries").Preload("Entries.Employee.User").Preload("Entries.Employee").Preload("Employee.User").Preload("Employee").
 			Joins("INNER JOIN entries ON entries.bill_id = bills.id").
 			Where("entries.invoice_id = ? AND entries.id IN ?", invoiceID, draftEntryIDs).
 			Group("bills.id").
@@ -446,10 +446,24 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	if invoice.State != InvoiceStateApproved.String() {
 		return InvalidPriorState
 	}
+	
+	// Check if dates were previously set (from earlier PDF generation)
+	hadPreviousDates := !invoice.SentAt.IsZero()
+	previousSentAt := invoice.SentAt
+	
 	invoice.State = InvoiceStateSent.String()
 	invoice.SentAt = time.Now()
 	// Set the due date based on invoice date (e.g., net 30)
 	invoice.DueAt = invoice.SentAt.AddDate(0, 0, 30) // Default to 30 days
+	
+	// Log if we're updating stale dates (PDF will be regenerated)
+	if hadPreviousDates {
+		daysDiff := int(invoice.SentAt.Sub(previousSentAt).Hours() / 24)
+		if daysDiff > 0 {
+			log.Printf("Invoice %d had previous sent date from %s (%d days ago), updating to current date and will regenerate PDF", 
+				invoiceID, previousSentAt.Format("2006-01-02"), daysDiff)
+		}
+	}
 
 	// Batch update entry states to sent
 	log.Printf("Updating %d entries to sent state", len(invoice.Entries))
@@ -491,7 +505,7 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	// Book payroll accruals and move to AP for SENT employees
 	log.Printf("Booking payroll accruals and moving to AP for ENTRY_STATE_SENT employees on invoice ID: %d", invoiceID)
 	var bills []Bill
-	if err := a.DB.Preload("Entries").Preload("Entries.Employee").Preload("Employee").
+	if err := a.DB.Preload("Entries").Preload("Entries.Employee.User").Preload("Entries.Employee").Preload("Employee.User").Preload("Employee").
 		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
 		Where("entries.invoice_id = ? AND entries.state = ?", invoiceID, EntryStateSent.String()).
 		Group("bills.id").
@@ -647,7 +661,7 @@ func (a *App) MarkInvoicePaid(invoiceID uint, paymentDate time.Time) error {
 	// Book payroll accruals and move to AP for PAID employees
 	log.Printf("Booking payroll accruals and moving to AP for ENTRY_STATE_PAID employees on invoice ID: %d", invoiceID)
 	var bills []Bill
-	if err := a.DB.Preload("Entries").Preload("Entries.Employee").Preload("Employee").
+	if err := a.DB.Preload("Entries").Preload("Entries.Employee.User").Preload("Entries.Employee").Preload("Employee.User").Preload("Employee").
 		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
 		Where("entries.invoice_id = ? AND entries.state = ?", invoiceID, EntryStatePaid.String()).
 		Group("bills.id").
@@ -836,6 +850,23 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 // SaveInvoiceToGCS saves the invoice to GCS
 func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 	ctx := context.Background()
+	
+	// Auto-set sent/due dates if not already set (for PDF generation before sending)
+	// This ensures the PDF always has proper dates displayed
+	datesWereEmpty := invoice.SentAt.IsZero()
+	if datesWereEmpty {
+		invoice.SentAt = time.Now()
+		invoice.DueAt = invoice.SentAt.AddDate(0, 0, 30) // Default to 30 days
+		// Save the dates to DB so they're consistent with the PDF
+		if err := a.DB.Model(invoice).Updates(map[string]interface{}{
+			"sent_at": invoice.SentAt,
+			"due_at":  invoice.DueAt,
+		}).Error; err != nil {
+			log.Printf("Warning: Failed to update invoice dates: %v", err)
+		}
+		log.Printf("Auto-set sent_at and due_at for invoice ID %d (PDF generation)", invoice.ID)
+	}
+	
 	// Generate the invoice
 	// The output must be stored as a list of bytes in-memory becasue of the readonly filesystem in GAE
 	pdfBytes := a.GenerateInvoicePDF(invoice)
@@ -1128,9 +1159,9 @@ func (a *App) processCommission(project *Project, role string, staffID uint, sta
 
 	subAccount := fmt.Sprintf("%d:%s %s", employee.ID, employee.FirstName, employee.LastName)
 
-	// DR: PAYROLL_EXPENSE or OWNER_DISTRIBUTIONS (based on employee title)
+	// DR: PAYROLL_EXPENSE or OWNER_DISTRIBUTIONS (based on employee IsOwner flag)
 	expenseAccount := AccountPayrollExpense
-	if employee.IsOwner() {
+	if employee.IsOwner {
 		expenseAccount = AccountOwnerDistributions
 	}
 
@@ -1237,7 +1268,7 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 	// Now book payroll expense accruals from bills
 	// We need to load bills associated with this invoice through entries
 	var bills []Bill
-	if err := a.DB.Preload("LineItems").Preload("LineItems.Employee").Preload("Employee").
+	if err := a.DB.Preload("LineItems").Preload("LineItems.Employee.User").Preload("LineItems.Employee").Preload("Employee.User").Preload("Employee").
 		Joins("INNER JOIN entries ON entries.bill_id = bills.id").
 		Where("entries.invoice_id = ?", invoice.ID).
 		Group("bills.id").
@@ -1266,7 +1297,7 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 		// Book: DR PAYROLL_EXPENSE or OWNER_DISTRIBUTIONS (based on employee title)
 		expenseAccount := AccountPayrollExpense
 		expenseType := "Payroll expense"
-		if bill.Employee.IsOwner() {
+		if bill.Employee.IsOwner {
 			expenseAccount = AccountOwnerDistributions
 			expenseType = "Owner distribution"
 		}
@@ -1316,7 +1347,7 @@ func (a *App) BookBillAccrual(bill *Bill) error {
 
 	// Load employee once
 	var employee Employee
-	if err := a.DB.First(&employee, bill.EmployeeID).Error; err != nil {
+	if err := a.DB.Preload("User").First(&employee, bill.EmployeeID).Error; err != nil {
 		log.Printf("Error loading employee %d for bill %d", bill.EmployeeID, bill.ID)
 		return fmt.Errorf("failed to load employee: %w", err)
 	}
@@ -1425,7 +1456,7 @@ func (a *App) ReverseEntryAccruals(entryIDs []uint) error {
 	// Reverse accruals for each employee
 	for employeeID, empEntries := range entriesByEmployee {
 		var employee Employee
-		if err := a.DB.First(&employee, employeeID).Error; err != nil {
+		if err := a.DB.Preload("User").First(&employee, employeeID).Error; err != nil {
 			log.Printf("Warning: Could not load employee %d: %v", employeeID, err)
 			continue
 		}

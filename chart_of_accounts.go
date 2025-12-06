@@ -190,12 +190,12 @@ func (a *App) SeedSystemAccounts() error {
 		{AccountCode: "OPERATING_EXPENSES_TAXES", AccountName: "Operating Expenses - Taxes", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Business taxes and licenses"},
 		{AccountCode: "OPERATING_EXPENSES_VENDORS", AccountName: "Operating Expenses - Vendors", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Vendor and contractor payments"},
 		{AccountCode: "OPERATING_EXPENSES_OFFICE", AccountName: "Operating Expenses - Office", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Office supplies and expenses"},
-		{AccountCode: "OWNER_DISTRIBUTIONS", AccountName: "Owner Distributions", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Distributions to owners/partners"},
 		{AccountCode: "EXPENSE_PASS_THROUGH", AccountName: "Pass-Through Expenses", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Client expenses to be reimbursed"},
 		{AccountCode: "OTHER_EXPENSES", AccountName: "Other Expenses", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Miscellaneous expenses"},
 
 		// Equity
 		{AccountCode: "EQUITY_OWNERSHIP", AccountName: "Equity - Ownership", AccountType: "EQUITY", IsSystemDefined: true, Description: "Owner equity"},
+		{AccountCode: "OWNER_DISTRIBUTIONS", AccountName: "Owner Distributions", AccountType: "EQUITY", IsSystemDefined: true, Description: "Draws/distributions to owners (reduces equity)"},
 		{AccountCode: "EQUITY", AccountName: "Equity", AccountType: "EQUITY", IsSystemDefined: true, Description: "General equity"},
 
 		// Unclassified
@@ -242,4 +242,159 @@ func (a *App) GetSubaccountForCode(code string) (*Subaccount, error) {
 		return nil, fmt.Errorf("subaccount not found: %s", code)
 	}
 	return &subaccount, nil
+}
+
+// MarkEmployeesAsOwners marks specific employees as owners based on their IDs
+// This is a helper migration to set the IsOwner flag for existing employees
+func (a *App) MarkEmployeesAsOwners(employeeIDs []uint) error {
+	if len(employeeIDs) == 0 {
+		log.Println("No employee IDs provided for owner marking")
+		return nil
+	}
+
+	result := a.DB.Model(&Employee{}).
+		Where("id IN ?", employeeIDs).
+		Update("is_owner", true)
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to mark employees as owners: %w", result.Error)
+	}
+
+	log.Printf("Marked %d employees as owners (IDs: %v)", result.RowsAffected, employeeIDs)
+	return nil
+}
+
+// ReclassifyOwnerPayrollToDistributions reclassifies historical PAYROLL_EXPENSE journal entries
+// for employees marked as owners to OWNER_DISTRIBUTIONS (equity)
+// This migration updates existing journal entries to reflect proper accounting treatment
+func (a *App) ReclassifyOwnerPayrollToDistributions() error {
+	log.Println("Running migration: Reclassify historical owner payroll expenses to equity distributions")
+
+	// Get all employees marked as owners
+	var owners []Employee
+	if err := a.DB.Where("is_owner = ?", true).Find(&owners).Error; err != nil {
+		return fmt.Errorf("failed to find owner employees: %w", err)
+	}
+
+	if len(owners) == 0 {
+		log.Println("No owners found - skipping payroll reclassification")
+		return nil
+	}
+
+	ownerIDs := make([]uint, len(owners))
+	for i, owner := range owners {
+		ownerIDs[i] = owner.ID
+		log.Printf("  Owner %d: %s %s (ID: %d)", i+1, owner.FirstName, owner.LastName, owner.ID)
+	}
+
+	log.Printf("Found %d owners to reclassify", len(owners))
+
+	// Find all journal entries with PAYROLL_EXPENSE account that are linked to bills for these owners
+	// We need to join through bills to get the employee_id
+	var journalsToUpdate []Journal
+	err := a.DB.
+		Joins("INNER JOIN bills ON bills.id = journals.bill_id").
+		Where("journals.account = ? AND bills.employee_id IN ?", "PAYROLL_EXPENSE", ownerIDs).
+		Find(&journalsToUpdate).Error
+
+	if err != nil {
+		return fmt.Errorf("failed to find owner payroll journal entries: %w", err)
+	}
+
+	if len(journalsToUpdate) == 0 {
+		log.Println("No historical payroll expense entries found for owners - nothing to reclassify")
+		return nil
+	}
+
+	log.Printf("Found %d journal entries to reclassify from PAYROLL_EXPENSE to OWNER_DISTRIBUTIONS", len(journalsToUpdate))
+
+	// Update all matching journal entries
+	journalIDs := make([]uint, len(journalsToUpdate))
+	for i, j := range journalsToUpdate {
+		journalIDs[i] = j.ID
+	}
+
+	result := a.DB.Model(&Journal{}).
+		Where("id IN ?", journalIDs).
+		Update("account", "OWNER_DISTRIBUTIONS")
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to update journal entries: %w", result.Error)
+	}
+
+	log.Printf("✓ Successfully reclassified %d journal entries from PAYROLL_EXPENSE to OWNER_DISTRIBUTIONS", result.RowsAffected)
+
+	// Also check for matching ACCRUED_PAYROLL entries (the credit side of payroll accrual)
+	// These should be paired with the payroll expense entries
+	var accruedPayrollCount int64
+	a.DB.Model(&Journal{}).
+		Joins("INNER JOIN bills ON bills.id = journals.bill_id").
+		Where("journals.account = ? AND bills.employee_id IN ?", "ACCRUED_PAYROLL", ownerIDs).
+		Count(&accruedPayrollCount)
+
+	if accruedPayrollCount > 0 {
+		log.Printf("Note: Found %d ACCRUED_PAYROLL entries for owners (these remain as-is for AP tracking)", accruedPayrollCount)
+	}
+
+	return nil
+}
+
+// MigrateOwnerDistributionsToEquity migrates the OWNER_DISTRIBUTIONS account from EXPENSE to EQUITY
+// This is a one-time migration for issue #67
+// Also updates existing journal entries to reflect the new classification
+func (a *App) MigrateOwnerDistributionsToEquity() error {
+	log.Println("Running migration: Update OWNER_DISTRIBUTIONS account type from EXPENSE to EQUITY")
+
+	// Step 1: Update the Chart of Accounts entry
+	result := a.DB.Model(&ChartOfAccount{}).
+		Where("account_code = ? AND account_type = ?", "OWNER_DISTRIBUTIONS", "EXPENSE").
+		Updates(map[string]interface{}{
+			"account_type": "EQUITY",
+			"description":  "Draws/distributions to owners (reduces equity)",
+		})
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to migrate OWNER_DISTRIBUTIONS chart of accounts: %w", result.Error)
+	}
+
+	if result.RowsAffected > 0 {
+		log.Printf("Migrated OWNER_DISTRIBUTIONS account type from EXPENSE to EQUITY (%d chart of accounts rows affected)", result.RowsAffected)
+	} else {
+		log.Println("OWNER_DISTRIBUTIONS account already migrated or does not exist in chart of accounts")
+	}
+
+	// Step 2: Update existing Journal entries that use OWNER_DISTRIBUTIONS
+	// This allows us to see the impact on the general ledger
+	var journalCount int64
+	err := a.DB.Model(&Journal{}).
+		Where("account = ?", "OWNER_DISTRIBUTIONS").
+		Count(&journalCount).Error
+
+	if err != nil {
+		log.Printf("Warning: Failed to count OWNER_DISTRIBUTIONS journal entries: %v", err)
+	} else if journalCount > 0 {
+		log.Printf("Found %d existing journal entries with OWNER_DISTRIBUTIONS account - these are now classified as EQUITY", journalCount)
+		// Note: We don't need to UPDATE the journal entries themselves
+		// The classification comes from the Chart of Accounts lookup
+		// Just logging the count so we know what's being reclassified
+	}
+
+	// Step 3: Update existing OfflineJournal entries if any
+	var offlineCount int64
+	err = a.DB.Model(&OfflineJournal{}).
+		Where("account = ?", "OWNER_DISTRIBUTIONS").
+		Count(&offlineCount).Error
+
+	if err != nil {
+		log.Printf("Warning: Failed to count OWNER_DISTRIBUTIONS offline journal entries: %v", err)
+	} else if offlineCount > 0 {
+		log.Printf("Found %d existing offline journal entries with OWNER_DISTRIBUTIONS account - these are now classified as EQUITY", offlineCount)
+	}
+
+	totalAffected := journalCount + offlineCount
+	if totalAffected > 0 {
+		log.Printf("Migration complete: %d total journal entries are now classified under EQUITY instead of EXPENSE", totalAffected)
+	}
+
+	return nil
 }
