@@ -306,6 +306,7 @@ type Employee struct {
 	FirstName               string       `json:"first_name"`
 	LastName                string       `json:"last_name"`
 	IsActive                bool         `json:"is_active"`
+	IsOwner                 bool         `json:"is_owner"`          // Company owner/partner - affects accounting treatment
 	EmploymentStatus        string       `json:"employment_status"` // "active", "inactive", "terminated"
 	StartDate               time.Time    `json:"start_date"`
 	EndDate                 time.Time    `json:"end_date"`
@@ -320,12 +321,6 @@ type Employee struct {
 	HasFixedInternalRate    bool         `json:"is_fixed_hourly"`
 	FixedHourlyRate         int          `json:"hourly_rate"`
 	EntryPayEligibleState   string       `json:"entry_pay_eligible_state"`
-}
-
-// IsOwner returns true if the employee is an owner (has "partner" in their title)
-// Owner distributions are not tax-deductible and should be tracked separately from payroll
-func (e *Employee) IsOwner() bool {
-	return strings.Contains(strings.ToLower(e.Title), "partner")
 }
 
 // RecurringEntry represents a template for auto-generating regular payroll entries
@@ -682,6 +677,9 @@ type OfflineJournal struct {
 	Debit       int64     `json:"debit"`  // in cents
 	Credit      int64     `json:"credit"` // in cents
 
+	// Transaction grouping - links debit/credit pairs from same transaction
+	TransactionGroupID string `gorm:"index" json:"transaction_group_id"` // UUID for grouping paired entries
+
 	// Deduplication - SHA256 of date+account+subaccount+description+amounts
 	ContentHash string `gorm:"uniqueIndex" json:"content_hash"`
 	Source      string `gorm:"default:'beancount'" json:"source"`
@@ -811,23 +809,23 @@ type Asset struct {
 // This allows dynamic creation of accounts beyond the predefined constants
 type ChartOfAccount struct {
 	gorm.Model
-	AccountCode     string `json:"account_code" gorm:"unique;not null"`                                            // e.g., "OPERATING_EXPENSES_SAAS"
-	AccountName     string `json:"account_name"`                                                                   // e.g., "Operating Expenses - SaaS"
-	AccountType     string `json:"account_type" gorm:"index:idx_account_type_active,priority:1"`                   // "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
-	ParentID        *uint  `json:"parent_id"`                                                                      // For hierarchical accounts
-	IsActive        bool   `json:"is_active" gorm:"default:true;index:idx_account_type_active,priority:2;index"`  // Composite index with account_type + individual index
+	AccountCode     string `json:"account_code" gorm:"unique;not null"`                                          // e.g., "OPERATING_EXPENSES_SAAS"
+	AccountName     string `json:"account_name"`                                                                 // e.g., "Operating Expenses - SaaS"
+	AccountType     string `json:"account_type" gorm:"index:idx_account_type_active,priority:1"`                 // "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
+	ParentID        *uint  `json:"parent_id"`                                                                    // For hierarchical accounts
+	IsActive        bool   `json:"is_active" gorm:"default:true;index:idx_account_type_active,priority:2;index"` // Composite index with account_type + individual index
 	Description     string `json:"description"`
-	IsSystemDefined bool   `json:"is_system_defined" gorm:"default:false"`                                         // True for predefined constants
+	IsSystemDefined bool   `json:"is_system_defined" gorm:"default:false"` // True for predefined constants
 }
 
 // Subaccount represents a sub-ledger account (e.g., specific vendors, clients, employees)
 type Subaccount struct {
 	gorm.Model
-	Code        string `json:"code" gorm:"not null;uniqueIndex:idx_subaccount_code_account"`                                                                               // e.g., "AWS", "VANTA_INC", "EMPLOYEE_123"
-	Name        string `json:"name"`                                                                                                                                       // e.g., "Amazon Web Services", "Vanta Inc"
-	AccountCode string `json:"account_code" gorm:"uniqueIndex:idx_subaccount_code_account;index:idx_subaccount_filters,priority:1"`                                        // Link to ChartOfAccount code, indexed for queries
-	Type        string `json:"type" gorm:"index:idx_subaccount_filters,priority:2"`                                                                                        // "VENDOR", "CLIENT", "EMPLOYEE", "CUSTOM"
-	IsActive    bool   `json:"is_active" gorm:"default:true;index:idx_subaccount_filters,priority:3;index"`                                                                // Composite index for account_code+type+is_active queries
+	Code        string `json:"code" gorm:"not null;uniqueIndex:idx_subaccount_code_account"`                                        // e.g., "AWS", "VANTA_INC", "EMPLOYEE_123"
+	Name        string `json:"name"`                                                                                                // e.g., "Amazon Web Services", "Vanta Inc"
+	AccountCode string `json:"account_code" gorm:"uniqueIndex:idx_subaccount_code_account;index:idx_subaccount_filters,priority:1"` // Link to ChartOfAccount code, indexed for queries
+	Type        string `json:"type" gorm:"index:idx_subaccount_filters,priority:2"`                                                 // "VENDOR", "CLIENT", "EMPLOYEE", "CUSTOM"
+	IsActive    bool   `json:"is_active" gorm:"default:true;index:idx_subaccount_filters,priority:3;index"`                         // Composite index for account_code+type+is_active queries
 }
 
 // Expense represents a pass-through expense that will be billed to a client
