@@ -907,7 +907,7 @@ func (a *App) GetSuggestedCategorizations(description string, limit int) ([]Sugg
 		}
 		
 		// Create suggestion key
-		suggestionKey := fmt.Sprintf("%s|%s|%s|%s|%s|%s",
+		suggestionKey := fmt.Sprintf("%s|%s|%s|%s|%s",
 			pair.DebitEntry.Description,
 			pair.DebitEntry.Account,
 			pair.DebitEntry.SubAccount,
