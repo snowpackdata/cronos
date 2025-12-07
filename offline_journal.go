@@ -162,22 +162,22 @@ func (a *App) ValidateSubaccountRequired(accountCode, subAccount string) error {
 	if accountCode == "" || accountCode == "UNCLASSIFIED" {
 		return nil
 	}
-	
+
 	// Check if this account has any subaccounts defined
 	var count int64
 	err := a.DB.Model(&ChartOfAccount{}).
 		Where("parent_account_code = ?", accountCode).
 		Count(&count).Error
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to check for subaccounts: %w", err)
 	}
-	
+
 	// If subaccounts exist but none was provided, return error
 	if count > 0 && subAccount == "" {
 		return fmt.Errorf("account '%s' has %d subaccount(s) - you must select a specific subaccount", accountCode, count)
 	}
-	
+
 	return nil
 }
 
@@ -226,9 +226,9 @@ func (a *App) GetCombinedJournals(startDate, endDate time.Time) ([]Journal, erro
 type CSVTransaction struct {
 	Date        time.Time
 	Description string
-	Amount      float64   // Positive for credits/deposits, negative for debits/expenses
-	Balance     *float64  // Optional running balance
-	Reference   string    // Check number, transaction ID, etc.
+	Amount      float64  // Positive for credits/deposits, negative for debits/expenses
+	Balance     *float64 // Optional running balance
+	Reference   string   // Check number, transaction ID, etc.
 }
 
 // convertDateFormat converts user-friendly date format strings to Go's format strings
@@ -252,7 +252,7 @@ func convertDateFormat(userFormat string) string {
 // Supports common CSV formats from banks and credit cards
 func ParseCSVTransactions(csvContent []byte, dateCol, descCol, amountCol int, hasHeader bool, dateFormat string) ([]CSVTransaction, error) {
 	reader := csv.NewReader(strings.NewReader(string(csvContent)))
-	
+
 	var transactions []CSVTransaction
 	lineNum := 0
 
@@ -286,13 +286,13 @@ func ParseCSVTransactions(csvContent []byte, dateCol, descCol, amountCol int, ha
 			continue
 		}
 
-	// Parse date (try common formats if dateFormat not specified)
-	var txDate time.Time
-	if dateFormat != "" {
-		// Convert user-friendly format strings to Go format strings
-		goFormat := convertDateFormat(dateFormat)
-		txDate, err = time.Parse(goFormat, strings.TrimSpace(record[dateCol]))
-	} else {
+		// Parse date (try common formats if dateFormat not specified)
+		var txDate time.Time
+		if dateFormat != "" {
+			// Convert user-friendly format strings to Go format strings
+			goFormat := convertDateFormat(dateFormat)
+			txDate, err = time.Parse(goFormat, strings.TrimSpace(record[dateCol]))
+		} else {
 			// Try common formats
 			dateStr := strings.TrimSpace(record[dateCol])
 			formats := []string{
@@ -373,7 +373,7 @@ func (a *App) ImportCSVToOfflineJournals(csvContent []byte, dateCol, descCol, am
 		// Each CSV transaction creates TWO unclassified journal entries
 		// Sign doesn't matter - we always create one debit and one credit
 		// User will categorize by assigning which accounts they represent
-		
+
 		// Always use absolute value - sign is irrelevant for double-entry
 		amountCents := int64(tx.Amount * 100)
 		if amountCents < 0 {
@@ -465,7 +465,7 @@ func (a *App) ImportCSVToOfflineJournals(csvContent []byte, dateCol, descCol, am
 		imported++
 	}
 
-	log.Printf("CSV import complete: %d transactions imported (%d journal entries), %d skipped (duplicates)", 
+	log.Printf("CSV import complete: %d transactions imported (%d journal entries), %d skipped (duplicates)",
 		imported, imported*2, skipped)
 	return imported, skipped, nil
 }
@@ -540,9 +540,9 @@ func (a *App) GetOfflineJournalTransactions(startDate, endDate time.Time, status
 // CategorizeCSVTransaction categorizes a CSV transaction by specifying from and to accounts
 // This updates both sides of the double-entry (debit and credit)
 // transactionGroupID is optional - if provided, it will be used to find the exact transaction pair
-func (a *App) CategorizeCSVTransaction(date time.Time, description string, 
+func (a *App) CategorizeCSVTransaction(date time.Time, description string,
 	fromAccount, fromSubAccount, toAccount, toSubAccount string, transactionGroupID string) error {
-	
+
 	// Validate that subaccounts are provided if they exist for the account
 	if err := a.ValidateSubaccountRequired(fromAccount, fromSubAccount); err != nil {
 		return fmt.Errorf("from account validation failed: %w", err)
@@ -550,44 +550,44 @@ func (a *App) CategorizeCSVTransaction(date time.Time, description string,
 	if err := a.ValidateSubaccountRequired(toAccount, toSubAccount); err != nil {
 		return fmt.Errorf("to account validation failed: %w", err)
 	}
-	
+
 	var journals []OfflineJournal
 	var err error
-	
+
 	// If TransactionGroupID is provided, use it (most precise)
 	if transactionGroupID != "" {
 		log.Printf("Searching for transaction by TransactionGroupID: %s", transactionGroupID)
 		err = a.DB.Where("transaction_group_id = ? AND account = ? AND status = ?",
 			transactionGroupID, "UNCLASSIFIED", "pending_review").
-			Order("debit DESC").  // Debit entry first
+			Order("debit DESC"). // Debit entry first
 			Find(&journals).Error
 	} else {
 		// Fall back to date+description search for legacy entries
 		// Use a 48-hour range to handle timezone differences between stored data and search query
 		startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).Add(-24 * time.Hour)
 		endOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC).Add(48 * time.Hour)
-		
-		log.Printf("Searching for transactions: date range [%v to %v), description=%q, account=UNCLASSIFIED, status=pending_review", 
+
+		log.Printf("Searching for transactions: date range [%v to %v), description=%q, account=UNCLASSIFIED, status=pending_review",
 			startOfDay, endOfDay, description)
-		
+
 		err = a.DB.Where("date >= ? AND date < ? AND description = ? AND account = ? AND status = ?",
 			startOfDay, endOfDay, description, "UNCLASSIFIED", "pending_review").
-			Order("debit DESC").  // Debit entry first
+			Order("debit DESC"). // Debit entry first
 			Find(&journals).Error
 	}
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to find transactions: %w", err)
 	}
 
 	log.Printf("Found %d journal entries matching all filters", len(journals))
 	for i, j := range journals {
-		log.Printf("  Entry %d: ID=%d, Date=%v, Debit=%d, Credit=%d, Status=%s, GroupID=%s", 
+		log.Printf("  Entry %d: ID=%d, Date=%v, Debit=%d, Credit=%d, Status=%s, GroupID=%s",
 			i+1, j.ID, j.Date, j.Debit, j.Credit, j.Status, j.TransactionGroupID)
 	}
 
 	if len(journals) != 2 {
-		return fmt.Errorf("expected 2 unclassified entries, found %d for transaction: %s", 
+		return fmt.Errorf("expected 2 unclassified entries, found %d for transaction: %s",
 			len(journals), description)
 	}
 
@@ -633,7 +633,7 @@ func (a *App) CategorizeCSVTransaction(date time.Time, description string,
 		return fmt.Errorf("failed to update TO account: %w", err)
 	}
 
-	log.Printf("Categorized transaction '%s': FROM %s/%s TO %s/%s", 
+	log.Printf("Categorized transaction '%s': FROM %s/%s TO %s/%s",
 		description, fromAccount, fromSubAccount, toAccount, toSubAccount)
 	return nil
 }
@@ -694,7 +694,7 @@ func (a *App) ApproveAndBookOfflineJournals(ids []uint, staffID uint) (int, erro
 func (a *App) ApproveTransactionPair(date time.Time, description string, staffID uint, transactionGroupID string) (int, error) {
 	var journals []OfflineJournal
 	var err error
-	
+
 	// If TransactionGroupID is provided, use it (most precise)
 	if transactionGroupID != "" {
 		err = a.DB.Where("transaction_group_id = ? AND status = ?",
@@ -704,7 +704,7 @@ func (a *App) ApproveTransactionPair(date time.Time, description string, staffID
 		err = a.DB.Where("date = ? AND description = ? AND status = ?",
 			date, description, "pending_review").Find(&journals).Error
 	}
-	
+
 	if err != nil {
 		return 0, fmt.Errorf("failed to find transaction: %w", err)
 	}
@@ -832,14 +832,14 @@ func (a *App) PostOfflineJournalsToGL(ids []uint) error {
 
 // SuggestedCategorization represents a suggested account categorization based on historical data
 type SuggestedCategorization struct {
-	Description      string  `json:"description"`
-	FromAccount      string  `json:"from_account"`
-	FromSubAccount   string  `json:"from_sub_account"`
-	ToAccount        string  `json:"to_account"`
-	ToSubAccount     string  `json:"to_sub_account"`
-	MatchCount       int     `json:"match_count"`       // How many times this pattern has been used
-	SimilarityScore  float64 `json:"similarity_score"`  // 0-1, how similar the description is
-	LastUsed         string  `json:"last_used"`         // Last time this categorization was used
+	Description     string  `json:"description"`
+	FromAccount     string  `json:"from_account"`
+	FromSubAccount  string  `json:"from_sub_account"`
+	ToAccount       string  `json:"to_account"`
+	ToSubAccount    string  `json:"to_sub_account"`
+	MatchCount      int     `json:"match_count"`      // How many times this pattern has been used
+	SimilarityScore float64 `json:"similarity_score"` // 0-1, how similar the description is
+	LastUsed        string  `json:"last_used"`        // Last time this categorization was used
 }
 
 // GetSuggestedCategorizations finds similar previously-categorized transactions
@@ -860,29 +860,29 @@ func (a *App) GetSuggestedCategorizations(description string, limit int) ([]Sugg
 		CreditEntry *OfflineJournal
 		LastUsed    time.Time
 	}
-	
+
 	pairMap := make(map[string]*TransactionPair)
-	
+
 	for i := range categorized {
 		entry := &categorized[i]
 		var key string
-		
+
 		if entry.TransactionGroupID != "" {
 			key = entry.TransactionGroupID
 		} else {
 			key = fmt.Sprintf("%s|%s", entry.Date.Format("2006-01-02"), entry.Description)
 		}
-		
+
 		if _, exists := pairMap[key]; !exists {
 			pairMap[key] = &TransactionPair{LastUsed: entry.Date}
 		}
-		
+
 		if entry.Debit > 0 {
 			pairMap[key].DebitEntry = entry
 		} else if entry.Credit > 0 {
 			pairMap[key].CreditEntry = entry
 		}
-		
+
 		if entry.Date.After(pairMap[key].LastUsed) {
 			pairMap[key].LastUsed = entry.Date
 		}
@@ -891,21 +891,21 @@ func (a *App) GetSuggestedCategorizations(description string, limit int) ([]Sugg
 	// Calculate similarity scores and build suggestions
 	descLower := strings.ToLower(description)
 	suggestions := make(map[string]*SuggestedCategorization)
-	
+
 	for _, pair := range pairMap {
 		if pair.DebitEntry == nil || pair.CreditEntry == nil {
 			continue
 		}
-		
+
 		// Calculate similarity score (simple word overlap)
 		pairDescLower := strings.ToLower(pair.DebitEntry.Description)
 		score := calculateSimilarity(descLower, pairDescLower)
-		
+
 		// Only include if similarity is above threshold (30%)
 		if score < 0.3 {
 			continue
 		}
-		
+
 		// Create suggestion key
 		suggestionKey := fmt.Sprintf("%s|%s|%s|%s|%s",
 			pair.DebitEntry.Description,
@@ -914,7 +914,7 @@ func (a *App) GetSuggestedCategorizations(description string, limit int) ([]Sugg
 			pair.CreditEntry.Account,
 			pair.CreditEntry.SubAccount,
 		)
-		
+
 		if existing, exists := suggestions[suggestionKey]; exists {
 			// Increment match count and update last used if newer
 			existing.MatchCount++
@@ -944,7 +944,7 @@ func (a *App) GetSuggestedCategorizations(description string, limit int) ([]Sugg
 	for _, suggestion := range suggestions {
 		result = append(result, *suggestion)
 	}
-	
+
 	// Sort by similarity score (descending), then by match count (descending)
 	for i := 0; i < len(result); i++ {
 		for j := i + 1; j < len(result); j++ {
@@ -969,11 +969,11 @@ func calculateSimilarity(s1, s2 string) float64 {
 	// Tokenize both strings
 	words1 := strings.Fields(s1)
 	words2 := strings.Fields(s2)
-	
+
 	if len(words1) == 0 || len(words2) == 0 {
 		return 0
 	}
-	
+
 	// Count matching words
 	matchCount := 0
 	for _, w1 := range words1 {
@@ -984,13 +984,13 @@ func calculateSimilarity(s1, s2 string) float64 {
 			}
 		}
 	}
-	
+
 	// Similarity is the ratio of matching words to total unique words
 	totalWords := len(words1)
 	if len(words2) > totalWords {
 		totalWords = len(words2)
 	}
-	
+
 	return float64(matchCount) / float64(totalWords)
 }
 
@@ -1028,4 +1028,3 @@ func (a *App) ReverseJournalEntry(journalID uint, reason string, correctedEntry 
 
 	return nil
 }
-
