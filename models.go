@@ -623,6 +623,8 @@ type BillLineItem struct {
 	Adjustment    *Adjustment  `json:"adjustment,omitempty" gorm:"foreignKey:AdjustmentID"`
 	CommissionID  *uint        `json:"commission_id,omitempty"`
 	Commission    *Commission  `json:"commission,omitempty" gorm:"foreignKey:CommissionID"`
+	ExpenseID     *uint        `json:"expense_id,omitempty"`
+	Expense       *Expense     `json:"expense,omitempty" gorm:"foreignKey:ExpenseID"`
 }
 
 // VerifyJournalBalance checks that all journal entries balance (total debits = total credits)
@@ -662,7 +664,8 @@ type Journal struct {
 	BillID                  *uint                 `json:"bill_id"`
 	RecurringBillLineItem   RecurringBillLineItem `json:"recurring_bill_line_item"`
 	RecurringBillLineItemID *uint                 `json:"recurring_bill_line_item_id"`
-	Memo                    string                `json:"memo"`
+	Memo                    string                `json:"memo"`            // Source description from original transaction
+	Notes                   string                `json:"notes,omitempty"` // User-added notes/context
 	Debit                   int64                 `json:"debit"`
 	Credit                  int64                 `json:"credit"`
 }
@@ -698,6 +701,10 @@ type OfflineJournal struct {
 	ReconciledAt        *time.Time `json:"reconciled_at"`
 	ReconciledBy        *uint      `json:"reconciled_by"` // Staff ID who reconciled
 	ReconciledExpense   *Expense   `json:"reconciled_expense" gorm:"foreignKey:ReconciledExpenseID"`
+
+	// Duplicate booking flag - if true, this transaction was already booked elsewhere (e.g., via expense approval)
+	// and should not be counted in financial statements or posted to GL
+	IsAlreadyBooked bool `json:"is_already_booked" gorm:"default:false"`
 }
 
 // CommitmentSegment represents a time period with a specific commitment level
@@ -856,6 +863,9 @@ type Expense struct {
 	CategoryID uint            `json:"category_id"` // Required category
 	Category   ExpenseCategory `json:"category"`
 	Tags       []ExpenseTag    `json:"tags" gorm:"many2many:expense_tag_assignments;joinForeignKey:expense_id;joinReferences:expense_tag_id"`
+
+	// Reimbursable flag - determines how expense is booked
+	IsReimbursable bool `json:"is_reimbursable" gorm:"default:false"` // If true, book AP to staff member for reimbursement
 
 	// Reconciliation - link to actual bank/CC transaction
 	ReconciledOfflineJournalID *uint           `json:"reconciled_offline_journal_id"` // Link to the actual bank/CC transaction
@@ -1316,6 +1326,36 @@ func (a *App) GenerateBillLineItems(bill *Bill) error {
 
 		if err := a.DB.Create(&lineItem).Error; err != nil {
 			return fmt.Errorf("failed to create adjustment line item: %w", err)
+		}
+	}
+
+	// Create line items for reimbursable expenses
+	// Only include reimbursable expenses that are approved and within the bill period
+	var reimbursableExpenses []Expense
+	if err := a.DB.Preload("Category").Where("submitter_id = ? AND is_reimbursable = ? AND state = ? AND date >= ? AND date <= ?",
+		bill.EmployeeID, true, ExpenseStateApproved.String(), bill.PeriodStart, bill.PeriodEnd).
+		Find(&reimbursableExpenses).Error; err != nil {
+		return fmt.Errorf("failed to load reimbursable expenses: %w", err)
+	}
+
+	for _, expense := range reimbursableExpenses {
+		description := fmt.Sprintf("Expense Reimbursement: %s", expense.Description)
+		if expense.CategoryID != 0 && expense.Category.Name != "" {
+			description = fmt.Sprintf("Expense Reimbursement (%s): %s", expense.Category.Name, expense.Description)
+		}
+
+		lineItem := BillLineItem{
+			BillID:      bill.ID,
+			Type:        LineItemTypeExpense.String(),
+			Description: description,
+			Quantity:    0,
+			Rate:        0,
+			Amount:      int64(expense.Amount),
+			ExpenseID:   &expense.ID,
+		}
+
+		if err := a.DB.Create(&lineItem).Error; err != nil {
+			return fmt.Errorf("failed to create expense line item: %w", err)
 		}
 	}
 
@@ -2031,12 +2071,24 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 		}
 	}
 
-	// Update the total amount (fees + commissions + adjustments + recurring)
-	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount)) + totalRecurringAmount
+	// Calculate total reimbursable expenses
+	var expenseLineItems []BillLineItem
+	totalExpensesAmount := 0
+	if err := a.DB.Where("bill_id = ? AND type = ?", bill.ID, LineItemTypeExpense.String()).Find(&expenseLineItems).Error; err != nil {
+		log.Printf("Error loading expense line items for bill ID %d: %v", bill.ID, err)
+	} else {
+		for _, item := range expenseLineItems {
+			totalExpensesAmount += int(item.Amount)
+			log.Printf("  Expense line item ID %d: $%.2f", item.ID, float64(item.Amount)/100)
+		}
+	}
+
+	// Update the total amount (fees + commissions + adjustments + recurring + expenses)
+	bill.TotalAmount = bill.TotalFees + bill.TotalCommissions + int(float64(totalAdjustmentsAmount)) + totalRecurringAmount + totalExpensesAmount
 	bill.TotalHours = math.Round(bill.TotalHours*100) / 100
 
-	log.Printf("Bill totals recalculated - Hours: %.2f, Fees: $%.2f, Recurring: $%.2f, Total: $%.2f",
-		bill.TotalHours, float64(bill.TotalFees)/100, float64(totalRecurringAmount)/100, float64(bill.TotalAmount)/100)
+	log.Printf("Bill totals recalculated - Hours: %.2f, Fees: $%.2f, Recurring: $%.2f, Expenses: $%.2f, Total: $%.2f",
+		bill.TotalHours, float64(bill.TotalFees)/100, float64(totalRecurringAmount)/100, float64(totalExpensesAmount)/100, float64(bill.TotalAmount)/100)
 
 	// Save the bill
 	if err := a.DB.Save(&bill).Error; err != nil {
@@ -2081,9 +2133,15 @@ func (a *App) MarkBillPaid(b *Bill, paymentDate time.Time) {
 
 func (a *App) GetBillLineItems(b *Bill) []BillLineItemDisplay {
 	// Load line items from database (created at bill generation)
+	// Include timesheet, commission, adjustment, and expense line items
 	var dbLineItems []BillLineItem
-	a.DB.Preload("BillingCode").
-		Where("bill_id = ? AND type = ?", b.ID, LineItemTypeTimesheet.String()).
+	a.DB.Preload("BillingCode").Preload("Expense").
+		Where("bill_id = ? AND type IN ?", b.ID, []string{
+			LineItemTypeTimesheet.String(),
+			LineItemTypeCommission.String(),
+			LineItemTypeAdjustment.String(),
+			LineItemTypeExpense.String(),
+		}).
 		Find(&dbLineItems)
 
 	// Convert database line items to display format
@@ -2096,8 +2154,27 @@ func (a *App) GetBillLineItems(b *Bill) []BillLineItemDisplay {
 			billingCodeCode = lineItem.BillingCode.Code
 		}
 
+		// For expenses, commissions, and adjustments, use the Description field
+		// For timesheet items, use BillingCode.Name
+		description := billingCodeName
+		if lineItem.Type == LineItemTypeExpense.String() ||
+			lineItem.Type == LineItemTypeCommission.String() ||
+			lineItem.Type == LineItemTypeAdjustment.String() {
+			description = lineItem.Description
+			if billingCodeCode == "" {
+				// Set a code for display purposes
+				if lineItem.Type == LineItemTypeExpense.String() {
+					billingCodeCode = "EXP"
+				} else if lineItem.Type == LineItemTypeCommission.String() {
+					billingCodeCode = "COMM"
+				} else if lineItem.Type == LineItemTypeAdjustment.String() {
+					billingCodeCode = "ADJ"
+				}
+			}
+		}
+
 		displayLineItems = append(displayLineItems, BillLineItemDisplay{
-			BillingCode:     billingCodeName,
+			BillingCode:     description, // Use description for expenses/commissions/adjustments
 			BillingCodeCode: billingCodeCode,
 			Hours:           lineItem.Quantity,
 			HoursFormatted:  fmt.Sprintf("%.2f", lineItem.Quantity),
@@ -2580,8 +2657,12 @@ func (a *App) approveInternalExpense(expense *Expense, approverID uint) error {
 	amountCents := int64(expense.Amount)
 
 	// Determine expense category account
-	expenseAccount := "OPERATING_EXPENSES_GENERAL" // Default
-	if expense.Category.GLAccountCode != "" {
+	// For reimbursable expenses, use OPERATING_EXPENSES_REIMBURSABLE
+	// For company-paid expenses, use category account or default
+	expenseAccount := "OPERATING_EXPENSES_GENERAL" // Default for company-paid
+	if expense.IsReimbursable {
+		expenseAccount = "OPERATING_EXPENSES_REIMBURSABLE"
+	} else if expense.Category.GLAccountCode != "" {
 		expenseAccount = expense.Category.GLAccountCode
 	} else if expense.ExpenseAccountCode != "" {
 		expenseAccount = expense.ExpenseAccountCode
@@ -2611,20 +2692,97 @@ func (a *App) approveInternalExpense(expense *Expense, approverID uint) error {
 		return fmt.Errorf("failed to book internal expense debit: %w", err)
 	}
 
-	// Book CR: ACCRUED_EXPENSES_PAYABLE (contra account until reconciled)
+	// Determine credit account based on reimbursable flag
+	var creditAccount string
+	var creditSubAccount string
+	var creditMemo string
+
+	if expense.IsReimbursable {
+		// Reimbursable: Book to ACCRUED_EXPENSES_PAYABLE first (will move to AP when bill is created/accepted)
+		// Use staff member subaccount for reimbursable expenses
+		var submitter Employee
+		if err := a.DB.First(&submitter, expense.SubmitterID).Error; err != nil {
+			return fmt.Errorf("failed to load submitter employee: %w", err)
+		}
+		creditAccount = AccountAccruedExpensesPayable.String()
+		creditSubAccount = fmt.Sprintf("%d:%s %s", submitter.ID, submitter.FirstName, submitter.LastName)
+		creditMemo = fmt.Sprintf("Reimbursable expense accrual for %s %s: %s", submitter.FirstName, submitter.LastName, expense.Description)
+	} else {
+		// Company card: Book to ACCRUED_EXPENSES_PAYABLE (contra account until reconciled)
+		creditAccount = AccountAccruedExpensesPayable.String()
+		creditSubAccount = expenseSubAccount
+		creditMemo = fmt.Sprintf("Internal expense accrual: %s", expense.Description)
+	}
+
+	// Book CR: ACCRUED_EXPENSES_PAYABLE (for both reimbursable and company paid - reimbursable moves to AP when bill is accepted)
 	accrualCR := Journal{
-		Account:    AccountAccruedExpensesPayable.String(),
-		SubAccount: expenseSubAccount,
-		Memo:       fmt.Sprintf("Internal expense accrual: %s", expense.Description),
+		Account:    creditAccount,
+		SubAccount: creditSubAccount,
+		Memo:       creditMemo,
 		Debit:      0,
 		Credit:     amountCents,
 	}
 	if err := a.DB.Create(&accrualCR).Error; err != nil {
-		return fmt.Errorf("failed to book internal expense accrual credit: %w", err)
+		return fmt.Errorf("failed to book internal expense credit: %w", err)
 	}
 
-	log.Printf("Booked internal expense ID %d: DR %s/%s, CR ACCRUED_EXPENSES_PAYABLE, amount=$%.2f",
-		expense.ID, expenseAccount, expenseSubAccount, float64(amountCents)/100)
+	expenseType := "company paid"
+	if expense.IsReimbursable {
+		expenseType = "reimbursable (will move to AP when bill is accepted)"
+
+		// If this is a reimbursable expense, check if there's an active bill for this employee
+		// and if the expense date falls within the bill period, regenerate bill line items
+		var activeBill Bill
+		err := a.DB.Where("employee_id = ? AND closed_at IS NULL AND period_start <= ? AND period_end >= ?",
+			expense.SubmitterID, expense.Date, expense.Date).First(&activeBill).Error
+
+		if err != nil {
+			// No active bill found - create one for the month containing the expense date
+			log.Printf("No active bill found for employee %d covering expense date %s - creating new bill", expense.SubmitterID, expense.Date.Format("2006-01-02"))
+
+			// Get employee info
+			var employee Employee
+			if err := a.DB.Where("id = ?", expense.SubmitterID).First(&employee).Error; err != nil {
+				log.Printf("Warning: Failed to load employee %d for bill creation: %v", expense.SubmitterID, err)
+			} else {
+				// Create bill for the month containing the expense date
+				firstOfMonth := time.Date(expense.Date.Year(), expense.Date.Month(), 1, 0, 0, 0, 0, expense.Date.Location())
+				lastOfMonth := firstOfMonth.AddDate(0, 1, -1)
+
+				activeBill = Bill{
+					Name:        fmt.Sprintf("Payroll %s %s %s - %s", employee.FirstName, employee.LastName, firstOfMonth.Format("01/02/2006"), lastOfMonth.Format("01/02/2006")),
+					State:       BillStateDraft,
+					EmployeeID:  expense.SubmitterID,
+					PeriodStart: firstOfMonth,
+					PeriodEnd:   lastOfMonth,
+					TotalHours:  0,
+					TotalFees:   0,
+					TotalAmount: 0,
+				}
+				if err := a.DB.Create(&activeBill).Error; err != nil {
+					log.Printf("Warning: Failed to create bill for employee %d: %v", expense.SubmitterID, err)
+				} else {
+					log.Printf("Created new bill ID %d for employee %d covering period %s to %s", activeBill.ID, expense.SubmitterID, firstOfMonth.Format("2006-01-02"), lastOfMonth.Format("2006-01-02"))
+				}
+			}
+		} else {
+			log.Printf("Found active bill ID %d for reimbursable expense %d", activeBill.ID, expense.ID)
+		}
+
+		// Regenerate bill line items to include the new expense (or create them if this is a new bill)
+		if activeBill.ID > 0 {
+			if err := a.GenerateBillLineItems(&activeBill); err != nil {
+				log.Printf("Warning: Failed to generate bill line items for bill %d after expense approval: %v", activeBill.ID, err)
+			} else {
+				// Recalculate bill totals to include the new expense
+				a.RecalculateBillTotals(&activeBill)
+				log.Printf("Generated bill line items and recalculated totals for bill ID %d (now includes expense %d)", activeBill.ID, expense.ID)
+			}
+		}
+	}
+
+	log.Printf("Booked internal expense ID %d (%s): DR %s/%s, CR %s/%s, amount=$%.2f",
+		expense.ID, expenseType, expenseAccount, expenseSubAccount, creditAccount, creditSubAccount, float64(amountCents)/100)
 	return nil
 }
 

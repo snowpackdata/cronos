@@ -1752,7 +1752,75 @@ func (a *App) MoveBillToAccountsPayable(bill *Bill) error {
 		return fmt.Errorf("failed to book accounts payable: %w", err)
 	}
 
-	log.Printf("Successfully moved bill ID %d to AP: $%.2f", bill.ID, float64(totalAmount)/100)
+	log.Printf("Successfully moved payroll accruals for bill ID %d to AP: $%.2f", bill.ID, float64(totalAmount)/100)
+
+	// Also move reimbursable expense accruals to AP
+	// Find reimbursable expenses for this employee in the bill period
+	var reimbursableExpenses []Expense
+	if err := a.DB.Where("submitter_id = ? AND is_reimbursable = ? AND state = ? AND date >= ? AND date <= ?",
+		bill.EmployeeID, true, ExpenseStateApproved.String(), bill.PeriodStart, bill.PeriodEnd).
+		Find(&reimbursableExpenses).Error; err != nil {
+		log.Printf("Warning: Failed to find reimbursable expenses for bill %d: %v", bill.ID, err)
+	} else if len(reimbursableExpenses) > 0 {
+		// Get employee for subaccount
+		var employee Employee
+		if err := a.DB.First(&employee, bill.EmployeeID).Error; err != nil {
+			log.Printf("Warning: Failed to load employee for bill %d: %v", bill.ID, err)
+		} else {
+			employeeSubAccount := fmt.Sprintf("%d:%s %s", employee.ID, employee.FirstName, employee.LastName)
+
+			// Find accrual entries for these expenses (they should have the employee subaccount)
+			var expenseAccrualEntries []Journal
+			var expenseIDs []uint
+			for _, exp := range reimbursableExpenses {
+				expenseIDs = append(expenseIDs, exp.ID)
+			}
+
+			// Find accrual entries that match the employee subaccount and are for reimbursable expenses
+			// We'll match by subaccount and date range since the accrual was created when expense was approved
+			if err := a.DB.Where("account = ? AND sub_account = ? AND credit > 0 AND created_at >= ? AND created_at <= ?",
+				AccountAccruedExpensesPayable.String(), employeeSubAccount, bill.PeriodStart, bill.PeriodEnd.Add(24*time.Hour)).
+				Find(&expenseAccrualEntries).Error; err != nil {
+				log.Printf("Warning: Failed to find expense accrual entries for bill %d: %v", bill.ID, err)
+			} else if len(expenseAccrualEntries) > 0 {
+				var totalExpenseAmount int64 = 0
+				for _, entry := range expenseAccrualEntries {
+					totalExpenseAmount += entry.Credit
+				}
+
+				if totalExpenseAmount > 0 {
+					// Reverse the accrued expenses payable (debit to contra it)
+					reverseExpenseAccrual := Journal{
+						Account:    AccountAccruedExpensesPayable.String(),
+						SubAccount: employeeSubAccount,
+						BillID:     &bill.ID,
+						Memo:       fmt.Sprintf("Move reimbursable expense accruals to AP for accepted bill #%d", bill.ID),
+						Debit:      totalExpenseAmount,
+						Credit:     0,
+					}
+					if err := a.DB.Create(&reverseExpenseAccrual).Error; err != nil {
+						log.Printf("Warning: Failed to reverse expense accruals for bill %d: %v", bill.ID, err)
+					} else {
+						// Book formal Accounts Payable for expenses
+						expenseAPEntry := Journal{
+							Account:    AccountAccountsPayable.String(),
+							SubAccount: employeeSubAccount,
+							BillID:     &bill.ID,
+							Memo:       fmt.Sprintf("Reimbursable expenses payable for accepted bill #%d", bill.ID),
+							Debit:      0,
+							Credit:     totalExpenseAmount,
+						}
+						if err := a.DB.Create(&expenseAPEntry).Error; err != nil {
+							log.Printf("Warning: Failed to book expense AP for bill %d: %v", bill.ID, err)
+						} else {
+							log.Printf("Successfully moved reimbursable expense accruals for bill ID %d to AP: $%.2f", bill.ID, float64(totalExpenseAmount)/100)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

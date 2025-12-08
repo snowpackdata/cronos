@@ -108,13 +108,22 @@ func (a *App) ImportBeancountToOfflineJournals(beancountContent []byte) (int, in
 }
 
 // GetOfflineJournals retrieves offline journals with optional filters
-func (a *App) GetOfflineJournals(startDate, endDate time.Time, status string) ([]OfflineJournal, error) {
+// By default excludes entries marked as already booked (IsAlreadyBooked = true) to prevent double-counting
+// Set includeAlreadyBooked=true to include all entries (useful for UI viewing)
+func (a *App) GetOfflineJournals(startDate, endDate time.Time, status string, includeAlreadyBooked ...bool) ([]OfflineJournal, error) {
 	var journals []OfflineJournal
 
 	query := a.DB.Where("date >= ? AND date <= ?", startDate, endDate)
 
 	if status != "" {
 		query = query.Where("status = ?", status)
+	}
+
+	// Exclude entries that are already booked elsewhere to prevent double-counting
+	// Unless explicitly requested to include them (for UI viewing)
+	includeAll := len(includeAlreadyBooked) > 0 && includeAlreadyBooked[0]
+	if !includeAll {
+		query = query.Where("is_already_booked = ?", false)
 	}
 
 	err := query.Order("date ASC").Find(&journals).Error
@@ -665,7 +674,8 @@ func (a *App) ApproveAndBookOfflineJournals(ids []uint, staffID uint) (int, erro
 		journal := Journal{
 			Account:    offline.Account,
 			SubAccount: offline.SubAccount,
-			Memo:       offline.Description,
+			Memo:       offline.Description, // Source description from original transaction
+			Notes:      offline.Notes,       // User-added notes/context
 			Debit:      offline.Debit,
 			Credit:     offline.Credit,
 		}
@@ -791,13 +801,16 @@ func (a *App) PostOfflineJournalsToGL(ids []uint) error {
 		return fmt.Errorf("failed to find offline journals: %w", err)
 	}
 
-	// Validate all are approved and categorized
+	// Validate all are approved and categorized, and not already booked elsewhere
 	for _, j := range journals {
 		if j.Status != "approved" {
 			return fmt.Errorf("offline journal %d is not approved (status: %s)", j.ID, j.Status)
 		}
 		if j.Account == "UNCLASSIFIED" {
 			return fmt.Errorf("offline journal %d is not categorized", j.ID)
+		}
+		if j.IsAlreadyBooked {
+			return fmt.Errorf("offline journal %d is already booked elsewhere and cannot be posted to GL", j.ID)
 		}
 	}
 
@@ -806,7 +819,8 @@ func (a *App) PostOfflineJournalsToGL(ids []uint) error {
 		journal := Journal{
 			Account:    offline.Account,
 			SubAccount: offline.SubAccount,
-			Memo:       offline.Description,
+			Memo:       offline.Description, // Source description from original transaction
+			Notes:      offline.Notes,       // User-added notes/context
 			Debit:      offline.Debit,
 			Credit:     offline.Credit,
 		}
@@ -817,7 +831,7 @@ func (a *App) PostOfflineJournalsToGL(ids []uint) error {
 			return fmt.Errorf("failed to create journal entry from offline journal %d: %w", offline.ID, err)
 		}
 
-		log.Printf("Posted offline journal %d to GL as journal entry %d", offline.ID, journal.ID)
+		log.Printf("Posted offline journal %d to GL as journal entry %d (memo: %s, notes: %s)", offline.ID, journal.ID, offline.Description, offline.Notes)
 	}
 
 	// Mark offline journals as posted

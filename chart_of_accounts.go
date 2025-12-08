@@ -190,6 +190,7 @@ func (a *App) SeedSystemAccounts() error {
 		{AccountCode: "OPERATING_EXPENSES_TAXES", AccountName: "Operating Expenses - Taxes", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Business taxes and licenses"},
 		{AccountCode: "OPERATING_EXPENSES_VENDORS", AccountName: "Operating Expenses - Vendors", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Vendor and contractor payments"},
 		{AccountCode: "OPERATING_EXPENSES_OFFICE", AccountName: "Operating Expenses - Office", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Office supplies and expenses"},
+		{AccountCode: "OPERATING_EXPENSES_REIMBURSABLE", AccountName: "Operating Expenses - Reimbursable", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Employee expenses to be reimbursed"},
 		{AccountCode: "EXPENSE_PASS_THROUGH", AccountName: "Pass-Through Expenses", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Client expenses to be reimbursed"},
 		{AccountCode: "OTHER_EXPENSES", AccountName: "Other Expenses", AccountType: "EXPENSE", IsSystemDefined: true, Description: "Miscellaneous expenses"},
 
