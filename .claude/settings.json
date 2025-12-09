@@ -3,6 +3,8 @@
     "allow": [
       "Bash(find:*)",
       "Bash(gh issue view:*)",
+      "Bash(gh issue create:*)",
+      "Bash(gh issue edit:*)",
       "Bash(grep:*)",
       "Bash(wc:*)",
       "Bash(chmod:*)",
@@ -28,7 +30,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash(gh issue create*)",
         "hooks": [
           {
             "type": "command",
