@@ -2560,6 +2560,21 @@ func (a *App) RefreshAssetsURLsIfExpired(assets []Asset) error {
 	return nil
 }
 
+// ValidateExpenseDate checks if an expense date is valid for booking.
+// Returns an error if the date is too far in the past (more than 1 year).
+// Future dates are allowed to support prepaid/scheduled expenses.
+func ValidateExpenseDate(expenseDate time.Time) error {
+	now := time.Now()
+
+	// Reject dates more than 1 year old (business requirement)
+	oneYearAgo := now.AddDate(-1, 0, 0)
+	if expenseDate.Before(oneYearAgo) {
+		return fmt.Errorf("expense date %s is too old (more than 1 year ago)", expenseDate.Format("2006-01-02"))
+	}
+
+	return nil
+}
+
 // ApproveExpense approves an expense (either client or internal)
 func (a *App) ApproveExpense(expenseID uint, approverID uint) error {
 	var expense Expense
@@ -2569,6 +2584,11 @@ func (a *App) ApproveExpense(expenseID uint, approverID uint) error {
 
 	if expense.State != ExpenseStateSubmitted.String() {
 		return fmt.Errorf("expense must be in submitted state to approve")
+	}
+
+	// Validate expense date before approval
+	if err := ValidateExpenseDate(expense.Date); err != nil {
+		return fmt.Errorf("invalid expense date: %w", err)
 	}
 
 	expense.State = ExpenseStateApproved.String()
@@ -2680,6 +2700,16 @@ func (a *App) approveInternalExpense(expense *Expense, approverID uint) error {
 		return fmt.Errorf("failed to save expense subaccount: %w", err)
 	}
 
+	// Normalize expense date to UTC noon for consistent journal timestamps
+	// This ensures consistent timestamps regardless of input timezone
+	journalDate := time.Date(
+		expense.Date.Year(),
+		expense.Date.Month(),
+		expense.Date.Day(),
+		12, 0, 0, 0,
+		time.UTC,
+	)
+
 	// Book DR: [Expense Category]
 	expenseDR := Journal{
 		Account:    expenseAccount,
@@ -2688,6 +2718,7 @@ func (a *App) approveInternalExpense(expense *Expense, approverID uint) error {
 		Debit:      amountCents,
 		Credit:     0,
 	}
+	expenseDR.CreatedAt = journalDate
 	if err := a.DB.Create(&expenseDR).Error; err != nil {
 		return fmt.Errorf("failed to book internal expense debit: %w", err)
 	}
@@ -2722,6 +2753,7 @@ func (a *App) approveInternalExpense(expense *Expense, approverID uint) error {
 		Debit:      0,
 		Credit:     amountCents,
 	}
+	accrualCR.CreatedAt = journalDate
 	if err := a.DB.Create(&accrualCR).Error; err != nil {
 		return fmt.Errorf("failed to book internal expense credit: %w", err)
 	}
@@ -2781,8 +2813,8 @@ func (a *App) approveInternalExpense(expense *Expense, approverID uint) error {
 		}
 	}
 
-	log.Printf("Booked internal expense ID %d (%s): DR %s/%s, CR %s/%s, amount=$%.2f",
-		expense.ID, expenseType, expenseAccount, expenseSubAccount, creditAccount, creditSubAccount, float64(amountCents)/100)
+	log.Printf("Booked internal expense ID %d (%s): DR %s/%s, CR %s/%s, amount=$%.2f, transaction_date=%s",
+		expense.ID, expenseType, expenseAccount, expenseSubAccount, creditAccount, creditSubAccount, float64(amountCents)/100, expense.Date.Format("2006-01-02"))
 	return nil
 }
 

@@ -2339,6 +2339,16 @@ func (a *App) BookExpenseAccrual(expense *Expense, invoice *Invoice) error {
 		return fmt.Errorf("failed to save expense subaccount: %w", err)
 	}
 
+	// Normalize expense date to UTC noon for consistent journal timestamps
+	// This ensures consistent timestamps regardless of input timezone
+	journalDate := time.Date(
+		expense.Date.Year(),
+		expense.Date.Month(),
+		expense.Date.Day(),
+		12, 0, 0, 0,
+		time.UTC,
+	)
+
 	// Book revenue side (client will reimburse us for this expense)
 	// DR: ACCRUED_RECEIVABLES
 	revenueAR := Journal{
@@ -2349,6 +2359,7 @@ func (a *App) BookExpenseAccrual(expense *Expense, invoice *Invoice) error {
 		Debit:      amountCents,
 		Credit:     0,
 	}
+	revenueAR.CreatedAt = journalDate
 	if err := a.DB.Create(&revenueAR).Error; err != nil {
 		return fmt.Errorf("failed to book expense AR debit: %w", err)
 	}
@@ -2362,6 +2373,7 @@ func (a *App) BookExpenseAccrual(expense *Expense, invoice *Invoice) error {
 		Debit:      0,
 		Credit:     amountCents,
 	}
+	revenueCR.CreatedAt = journalDate
 	if err := a.DB.Create(&revenueCR).Error; err != nil {
 		return fmt.Errorf("failed to book expense revenue credit: %w", err)
 	}
@@ -2376,6 +2388,7 @@ func (a *App) BookExpenseAccrual(expense *Expense, invoice *Invoice) error {
 		Debit:      amountCents,
 		Credit:     0,
 	}
+	expenseDR.CreatedAt = journalDate
 	if err := a.DB.Create(&expenseDR).Error; err != nil {
 		return fmt.Errorf("failed to book pass-through expense debit: %w", err)
 	}
@@ -2393,11 +2406,12 @@ func (a *App) BookExpenseAccrual(expense *Expense, invoice *Invoice) error {
 		Debit:      0,
 		Credit:     amountCents,
 	}
+	paymentCR.CreatedAt = journalDate
 	if err := a.DB.Create(&paymentCR).Error; err != nil {
 		return fmt.Errorf("failed to book expense payment credit: %w", err)
 	}
 
-	log.Printf("Booked expense accrual for expense ID %d: account=%s, subaccount=%s, amount=$%.2f",
-		expense.ID, expenseAccount, expenseSubAccount, float64(amountCents)/100)
+	log.Printf("Booked expense accrual for expense ID %d: account=%s, subaccount=%s, amount=$%.2f, transaction_date=%s",
+		expense.ID, expenseAccount, expenseSubAccount, float64(amountCents)/100, expense.Date.Format("2006-01-02"))
 	return nil
 }
