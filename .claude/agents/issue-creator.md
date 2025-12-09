@@ -52,22 +52,35 @@ On confirmation, create the issue:
 gh issue create --title "..." --body "..." --label "stage:backlog,type:...,priority:..."
 ```
 
-### Phase 5: Auto-Review (ON by default)
+### Phase 5: Auto-Review (MANDATORY)
 
-After creating the issue, **immediately invoke @issue-reviewer** to validate and enrich:
+IMMEDIATELY after creating the issue, you MUST:
 
-1. Extract issue number from `gh issue create` output
-2. Run: `@issue-reviewer #{number}`
-3. This chains the creation + review into one workflow
+1. Extract the issue number from the `gh issue create` output URL
+2. Output exactly this format:
+   ```
+   ## Issue Created Successfully
+   - **Issue**: #{number}
+   - **URL**: {url}
+   - **Labels**: {labels}
 
-The user can skip this by saying "skip review" or "create only".
+   Invoking @issue-reviewer to validate...
+   ```
+3. Invoke `@issue-reviewer #{number}` - DO NOT ask, DO NOT wait for confirmation
+
+**CRITICAL**:
+- Do NOT end your turn with a question after creating the issue
+- Do NOT ask "Would you like me to..." - just DO it
+- The ONLY way to skip auto-review is if the user explicitly said "skip review" or "create only" in their ORIGINAL request
+
+This ensures every issue gets validated before the workflow completes.
 
 ---
 
 ## Output
 
-After user confirms, create the issue and report:
-- Issue number and URL
-- Labels applied
+After creating the issue:
+1. Report issue number, URL, and labels applied
+2. IMMEDIATELY invoke `@issue-reviewer #{number}` (no questions, no confirmation)
 
-Then automatically invoke `@issue-reviewer #{number}` unless user requested "skip review".
+Only skip auto-review if user's original request included "skip review" or "create only".
