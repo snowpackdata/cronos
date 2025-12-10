@@ -325,3 +325,129 @@ func TestTimeCalculationFunctions(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateExpenseDate_FutureDate tests that future dates are allowed
+func TestValidateExpenseDate_FutureDate(t *testing.T) {
+	// Future dates should be allowed (for prepaid/scheduled expenses)
+	futureDate := time.Now().AddDate(0, 0, 7) // 7 days in the future
+	err := ValidateExpenseDate(futureDate)
+	if err != nil {
+		t.Errorf("expected nil error for future date, got: %v", err)
+	}
+}
+
+// TestValidateExpenseDate_TooOld tests that expenses older than 1 year are rejected
+func TestValidateExpenseDate_TooOld(t *testing.T) {
+	// Should reject expense more than 1 year old
+	oldDate := time.Now().AddDate(-2, 0, 0) // 2 years ago
+	err := ValidateExpenseDate(oldDate)
+	if err == nil {
+		t.Error("expected error for date too far in past, got nil")
+	}
+}
+
+// TestValidateExpenseDate_ValidDate tests that valid historical dates are accepted
+func TestValidateExpenseDate_ValidDate(t *testing.T) {
+	// Should accept valid historical date
+	validDate := time.Now().AddDate(0, -6, 0) // 6 months ago
+	err := ValidateExpenseDate(validDate)
+	if err != nil {
+		t.Errorf("expected nil error for valid date, got: %v", err)
+	}
+}
+
+// TestValidateExpenseDate_EdgeCase tests the boundary at exactly 1 year ago
+func TestValidateExpenseDate_EdgeCase(t *testing.T) {
+	// Date exactly at the 1 year boundary should be accepted
+	oneYearAgo := time.Now().AddDate(-1, 0, 0)
+	err := ValidateExpenseDate(oneYearAgo)
+	if err != nil {
+		t.Errorf("expected nil error for date exactly 1 year ago, got: %v", err)
+	}
+
+	// Date just over 1 year ago should be rejected
+	justOverOneYearAgo := time.Now().AddDate(-1, 0, -1)
+	err = ValidateExpenseDate(justOverOneYearAgo)
+	if err == nil {
+		t.Error("expected error for date just over 1 year ago, got nil")
+	}
+}
+
+// TestApproveExpense_RejectsOldDate tests that expense approval fails for old-dated expense
+func TestApproveExpense_RejectsOldDate(t *testing.T) {
+	// Setup test database
+	db := setupTestDB(t)
+	app := &App{DB: db}
+
+	// Create required expense category
+	category := ExpenseCategory{
+		Name:          "Test Category",
+		Description:   "Test Description",
+		GLAccountCode: "OPERATING_EXPENSES_GENERAL",
+		Active:        true,
+	}
+	if err := db.Create(&category).Error; err != nil {
+		t.Fatalf("Failed to create expense category: %v", err)
+	}
+
+	// Create a user and employee for the expense submitter
+	user := User{
+		Email:    "submitter@example.com",
+		Password: "password123",
+		Role:     UserRoleStaff.String(),
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
+	employee := Employee{
+		UserID:    user.ID,
+		FirstName: "Test",
+		LastName:  "Submitter",
+		IsActive:  true,
+		StartDate: time.Now().AddDate(-3, 0, 0),
+	}
+	if err := db.Create(&employee).Error; err != nil {
+		t.Fatalf("Failed to create employee: %v", err)
+	}
+
+	// Create an internal expense with a date more than 1 year ago
+	oldDate := time.Now().AddDate(-2, 0, 0) // 2 years ago
+	expense := Expense{
+		SubmitterID:  employee.ID,
+		Amount:       10000, // $100.00
+		Date:         oldDate,
+		Description:  "Old expense for testing",
+		State:        ExpenseStateSubmitted.String(),
+		CategoryID:   category.ID,
+		IsReimbursable: false,
+	}
+	if err := db.Create(&expense).Error; err != nil {
+		t.Fatalf("Failed to create expense: %v", err)
+	}
+
+	// Attempt to approve - should fail due to old date
+	err := app.ApproveExpense(expense.ID, employee.ID)
+	if err == nil {
+		t.Error("expected error when approving expense with old date, got nil")
+	}
+
+	// Verify the error message mentions the date issue
+	if err != nil && !containsString(err.Error(), "too old") {
+		t.Errorf("expected error about old date, got: %v", err)
+	}
+}
+
+// containsString is a helper to check if a string contains a substring
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStringHelper(s, substr))
+}
+
+func containsStringHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
