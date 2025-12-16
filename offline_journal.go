@@ -174,8 +174,8 @@ func (a *App) ValidateSubaccountRequired(accountCode, subAccount string) error {
 
 	// Check if this account has any subaccounts defined
 	var count int64
-	err := a.DB.Model(&ChartOfAccount{}).
-		Where("parent_account_code = ?", accountCode).
+	err := a.DB.Model(&Subaccount{}).
+		Where("account_code = ? AND is_active = ?", accountCode, true).
 		Count(&count).Error
 
 	if err != nil {
@@ -260,6 +260,11 @@ func convertDateFormat(userFormat string) string {
 // ParseCSVTransactions parses a CSV file with flexible column mapping
 // Supports common CSV formats from banks and credit cards
 func ParseCSVTransactions(csvContent []byte, dateCol, descCol, amountCol int, hasHeader bool, dateFormat string) ([]CSVTransaction, error) {
+	// Validate column indices are non-negative
+	if dateCol < 0 || descCol < 0 || amountCol < 0 {
+		return nil, fmt.Errorf("invalid column mapping: column indices must be non-negative (date: %d, desc: %d, amount: %d)", dateCol, descCol, amountCol)
+	}
+
 	reader := csv.NewReader(strings.NewReader(string(csvContent)))
 
 	var transactions []CSVTransaction
