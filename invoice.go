@@ -1899,7 +1899,7 @@ func (a *App) RecordBillCashPayment(bill *Bill, paymentDate time.Time) error {
 			// No liability entries found - use bill totals as fallback
 			// This is an edge case that shouldn't happen with proper flow, but we handle it gracefully
 			log.Printf("WARNING: No AP or ACCRUED_PAYROLL found for bill ID %d - creating direct expense-to-cash entry", bill.ID)
-			totalAmount = bill.TotalAmount
+			totalAmount = int64(bill.TotalAmount)
 			if totalAmount > 0 {
 				// Create balanced journal entry: DR PAYROLL_EXPENSE, CR CASH
 				// This records both the expense and payment in one step
