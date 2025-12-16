@@ -1342,6 +1342,7 @@ func (a *App) BookInvoiceAccrual(invoice *Invoice) error {
 // BookBillAccrual handles journal entries when a bill is created
 // Since accruals are already booked at invoice approval, this moves them to AP
 // Commissions are booked as new expenses since they don't exist at invoice approval time
+// This now handles ALL compensation types to ensure proper AP tracking for payment clearing
 func (a *App) BookBillAccrual(bill *Bill) error {
 	log.Printf("BookBillAccrual: Processing bill ID %d using line items", bill.ID)
 
@@ -1355,13 +1356,6 @@ func (a *App) BookBillAccrual(bill *Bill) error {
 	employeeID := employee.ID
 	employeeName := fmt.Sprintf("%s %s", employee.FirstName, employee.LastName)
 	subAccount := fmt.Sprintf("%d:%s", employeeID, employeeName)
-
-	// Only process variable or base+variable compensation
-	if employee.CompensationType != string(CompensationTypeFullyVariable) &&
-		employee.CompensationType != string(CompensationTypeBasePlusVariable) {
-		log.Printf("Employee %d has fixed salary, no AP booking needed", employee.ID)
-		return nil
-	}
 
 	// Load line items for this bill
 	var lineItems []BillLineItem
@@ -1638,8 +1632,19 @@ func (a *App) MoveInvoiceToAccountsReceivable(invoice *Invoice) error {
 // paymentDate is used to timestamp the journal entries
 // Reverses: DR ACCOUNTS_RECEIVABLE, CR: (contra)
 // Books: DR CASH
+// This function is idempotent - calling it multiple times has the same effect as calling once
 func (a *App) RecordInvoiceCashPayment(invoice *Invoice, paymentDate time.Time) error {
 	log.Printf("RecordInvoiceCashPayment: Processing invoice ID %d on date %s", invoice.ID, paymentDate.Format("2006-01-02"))
+
+	// Idempotency check: if cash receipt was already recorded, skip
+	var existingCashEntries []Journal
+	if err := a.DB.Where("invoice_id = ? AND account = ? AND debit > 0", invoice.ID, AccountCash.String()).Find(&existingCashEntries).Error; err != nil {
+		return fmt.Errorf("failed to check for existing cash entries: %w", err)
+	}
+	if len(existingCashEntries) > 0 {
+		log.Printf("Cash receipt already recorded for invoice ID %d, skipping to prevent double-booking", invoice.ID)
+		return nil
+	}
 
 	// Find existing AR entries for this invoice
 	var arEntries []Journal
@@ -1828,8 +1833,19 @@ func (a *App) MoveBillToAccountsPayable(bill *Bill) error {
 // paymentDate is used to timestamp the journal entries
 // Reverses: CR ACCOUNTS_PAYABLE, DR: (contra)
 // Books: CR CASH
+// Falls back to clearing ACCRUED_PAYROLL if no AP entries exist
 func (a *App) RecordBillCashPayment(bill *Bill, paymentDate time.Time) error {
 	log.Printf("RecordBillCashPayment: Processing bill ID %d on date %s", bill.ID, paymentDate.Format("2006-01-02"))
+
+	// Idempotency check: if cash payment was already recorded, skip
+	var existingCashEntries []Journal
+	if err := a.DB.Where("bill_id = ? AND account = ? AND credit > 0", bill.ID, AccountCash.String()).Find(&existingCashEntries).Error; err != nil {
+		return fmt.Errorf("failed to check for existing cash entries: %w", err)
+	}
+	if len(existingCashEntries) > 0 {
+		log.Printf("Cash payment already recorded for bill ID %d, skipping to prevent double-booking", bill.ID)
+		return nil
+	}
 
 	// Find existing AP entries for this bill
 	var apEntries []Journal
@@ -1837,36 +1853,104 @@ func (a *App) RecordBillCashPayment(bill *Bill, paymentDate time.Time) error {
 		return fmt.Errorf("failed to find AP entries: %w", err)
 	}
 
-	if len(apEntries) == 0 {
-		log.Printf("No AP entries found for bill ID %d - skipping cash recording", bill.ID)
-		return nil
-	}
-
 	// Calculate total from AP entries
 	var totalAmount int64 = 0
 	var subAccount string
-	for _, entry := range apEntries {
-		totalAmount += entry.Credit - entry.Debit
+	var clearingAccount string
+
+	if len(apEntries) > 0 {
+		// AP entries exist - use them
+		for _, entry := range apEntries {
+			totalAmount += entry.Credit - entry.Debit
+		}
+		subAccount = apEntries[0].SubAccount
+		clearingAccount = AccountAccountsPayable.String()
+		log.Printf("Found AP entries for bill ID %d, total: $%.2f", bill.ID, float64(totalAmount)/100)
+	} else {
+		// No AP entries - check for ACCRUED_PAYROLL entries for this employee
+		log.Printf("No AP entries found for bill ID %d - checking for ACCRUED_PAYROLL", bill.ID)
+
+		// Load employee for subaccount lookup
+		var employee Employee
+		if err := a.DB.First(&employee, bill.EmployeeID).Error; err != nil {
+			return fmt.Errorf("failed to load employee: %w", err)
+		}
+
+		employeeName := fmt.Sprintf("%s %s", employee.FirstName, employee.LastName)
+		subAccount = fmt.Sprintf("%d:%s", employee.ID, employeeName)
+
+		// Look for uncleared ACCRUED_PAYROLL entries for this employee (either by bill_id or by subaccount)
+		var accrualEntries []Journal
+		err := a.DB.Where("(bill_id = ? OR sub_account = ?) AND account = ?",
+			bill.ID, subAccount, AccountAccruedPayroll.String()).Find(&accrualEntries).Error
+		if err != nil {
+			return fmt.Errorf("failed to find accrual entries: %w", err)
+		}
+
+		// Calculate net accrued payroll (credits minus debits)
+		for _, entry := range accrualEntries {
+			totalAmount += entry.Credit - entry.Debit
+		}
+		clearingAccount = AccountAccruedPayroll.String()
+
+		if totalAmount > 0 {
+			log.Printf("Found ACCRUED_PAYROLL entries for employee %s, net amount: $%.2f", employeeName, float64(totalAmount)/100)
+		} else {
+			// No liability entries found - use bill totals as fallback
+			// This is an edge case that shouldn't happen with proper flow, but we handle it gracefully
+			log.Printf("WARNING: No AP or ACCRUED_PAYROLL found for bill ID %d - creating direct expense-to-cash entry", bill.ID)
+			totalAmount = bill.TotalAmount
+			if totalAmount > 0 {
+				// Create balanced journal entry: DR PAYROLL_EXPENSE, CR CASH
+				// This records both the expense and payment in one step
+				expenseEntry := Journal{
+					Account:    AccountPayrollExpense.String(),
+					SubAccount: subAccount,
+					BillID:     &bill.ID,
+					Memo:       fmt.Sprintf("Payroll expense for bill #%d (direct booking - no prior accrual)", bill.ID),
+					Debit:      totalAmount,
+					Credit:     0,
+				}
+				expenseEntry.CreatedAt = paymentDate
+				if err := a.DB.Create(&expenseEntry).Error; err != nil {
+					return fmt.Errorf("failed to record payroll expense: %w", err)
+				}
+
+				cashEntry := Journal{
+					Account:    AccountCash.String(),
+					SubAccount: "ChaseBusiness",
+					BillID:     &bill.ID,
+					Memo:       fmt.Sprintf("Cash paid for bill #%d (direct booking - no prior accrual)", bill.ID),
+					Debit:      0,
+					Credit:     totalAmount,
+				}
+				cashEntry.CreatedAt = paymentDate
+				if err := a.DB.Create(&cashEntry).Error; err != nil {
+					return fmt.Errorf("failed to record cash payment: %w", err)
+				}
+				log.Printf("WARNING: Created direct expense-to-cash entries for bill ID %d: $%.2f (DR PAYROLL_EXPENSE, CR CASH)", bill.ID, float64(totalAmount)/100)
+			}
+			return nil
+		}
 	}
 
-	if totalAmount == 0 {
+	if totalAmount <= 0 {
+		log.Printf("No positive balance to clear for bill ID %d", bill.ID)
 		return nil
 	}
 
-	subAccount = apEntries[0].SubAccount
-
-	// Clear the accounts payable (debit to contra it)
-	clearAP := Journal{
-		Account:    AccountAccountsPayable.String(),
+	// Clear the liability account (debit to contra it)
+	clearLiability := Journal{
+		Account:    clearingAccount,
 		SubAccount: subAccount,
 		BillID:     &bill.ID,
-		Memo:       fmt.Sprintf("Clear AP for paid bill #%d", bill.ID),
+		Memo:       fmt.Sprintf("Clear %s for paid bill #%d", clearingAccount, bill.ID),
 		Debit:      totalAmount,
 		Credit:     0,
 	}
-	clearAP.CreatedAt = paymentDate
-	if err := a.DB.Create(&clearAP).Error; err != nil {
-		return fmt.Errorf("failed to clear accounts payable: %w", err)
+	clearLiability.CreatedAt = paymentDate
+	if err := a.DB.Create(&clearLiability).Error; err != nil {
+		return fmt.Errorf("failed to clear %s: %w", clearingAccount, err)
 	}
 
 	// Record cash payment - always use ChaseBusiness subaccount
@@ -1883,7 +1967,7 @@ func (a *App) RecordBillCashPayment(bill *Bill, paymentDate time.Time) error {
 		return fmt.Errorf("failed to record cash payment: %w", err)
 	}
 
-	log.Printf("Successfully recorded cash payment for bill ID %d: $%.2f", bill.ID, float64(totalAmount)/100)
+	log.Printf("Successfully recorded cash payment for bill ID %d: $%.2f (cleared %s)", bill.ID, float64(totalAmount)/100, clearingAccount)
 	return nil
 }
 

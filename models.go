@@ -516,6 +516,12 @@ type Invoice struct {
 	TotalAmount      float64           `json:"total_amount"`
 	JournalID        *uint             `json:"journal_id"`
 	GCSFile          string            `json:"file"`
+
+	// Reconciliation - link to bank transaction when payment is reconciled
+	ReconciledOfflineJournalID *uint           `json:"reconciled_offline_journal_id"`
+	ReconciledAt               *time.Time      `json:"reconciled_at"`
+	ReconciledBy               *uint           `json:"reconciled_by"` // Staff ID who reconciled
+	ReconciledOfflineJournal   *OfflineJournal `json:"reconciled_offline_journal" gorm:"foreignKey:ReconciledOfflineJournalID"`
 }
 
 // InvoiceLineItem represents a single line item on an invoice or bill
@@ -602,6 +608,12 @@ type Bill struct {
 	TotalCommissions       int                     `json:"total_commissions"`
 	TotalAmount            int                     `json:"total_amount"`
 	GCSFile                string                  `json:"file"`
+
+	// Reconciliation - link to bank transaction when payment is reconciled
+	ReconciledOfflineJournalID *uint           `json:"reconciled_offline_journal_id"`
+	ReconciledAt               *time.Time      `json:"reconciled_at"`
+	ReconciledBy               *uint           `json:"reconciled_by"` // Staff ID who reconciled
+	ReconciledOfflineJournal   *OfflineJournal `json:"reconciled_offline_journal" gorm:"foreignKey:ReconciledOfflineJournalID"`
 }
 
 // BillLineItem represents a single line item on a payroll bill
@@ -702,6 +714,14 @@ type OfflineJournal struct {
 	ReconciledAt        *time.Time `json:"reconciled_at"`
 	ReconciledBy        *uint      `json:"reconciled_by"` // Staff ID who reconciled
 	ReconciledExpense   *Expense   `json:"reconciled_expense" gorm:"foreignKey:ReconciledExpenseID"`
+
+	// Reconciliation - link to a bill if this is a payroll payment
+	ReconciledBillID *uint `json:"reconciled_bill_id"`
+	ReconciledBill   *Bill `json:"reconciled_bill" gorm:"foreignKey:ReconciledBillID"`
+
+	// Reconciliation - link to an invoice if this is a client payment receipt
+	ReconciledInvoiceID *uint    `json:"reconciled_invoice_id"`
+	ReconciledInvoice   *Invoice `json:"reconciled_invoice" gorm:"foreignKey:ReconciledInvoiceID"`
 
 	// Duplicate booking flag - if true, this transaction was already booked elsewhere (e.g., via expense approval)
 	// and should not be counted in financial statements or posted to GL
@@ -2101,8 +2121,23 @@ func (a *App) RecalculateBillTotals(bill *Bill) {
 
 // MarkBillPaid marks a bill as paid with the specified payment date
 // paymentDate is the actual date the payment was made (can be backdated)
+// This function is idempotent - calling it multiple times has the same effect as calling once
 func (a *App) MarkBillPaid(b *Bill, paymentDate time.Time) {
 	log.Printf("MarkBillPaid called for bill ID: %d, payment date: %s", b.ID, paymentDate.Format("2006-01-02"))
+
+	// Idempotency check: if bill is already paid, skip the booking steps but allow date update
+	if b.State == BillStatePaid {
+		log.Printf("Bill ID %d is already paid, checking if journal entries exist", b.ID)
+		// Check if cash payment was already recorded
+		var existingCashEntries []Journal
+		a.DB.Where("bill_id = ? AND account = ? AND credit > 0", b.ID, AccountCash.String()).Find(&existingCashEntries)
+		if len(existingCashEntries) > 0 {
+			log.Printf("Bill ID %d already has cash payment recorded, skipping duplicate booking", b.ID)
+			return
+		}
+		// Cash entry doesn't exist - proceed to book it (recovery from partial failure)
+		log.Printf("Bill ID %d is paid but missing cash entry - attempting recovery", b.ID)
+	}
 
 	// Recalculate bill totals first to ensure accurate values
 	a.RecalculateBillTotals(b)
@@ -2121,6 +2156,13 @@ func (a *App) MarkBillPaid(b *Bill, paymentDate time.Time) {
 	if err := a.DB.Save(&b).Error; err != nil {
 		log.Printf("Error saving bill as paid: %v", err)
 		return
+	}
+
+	// Ensure accruals are moved to AP before recording cash payment
+	// This handles the case where BookBillAccrual was never called during invoice flow
+	log.Printf("Ensuring accruals are moved to AP for bill ID: %d", b.ID)
+	if err := a.BookBillAccrual(b); err != nil {
+		log.Printf("Warning: Failed to book bill accrual for bill %d: %v", b.ID, err)
 	}
 
 	// Record cash payment and clear accounts payable (includes adjustments)

@@ -265,7 +265,14 @@ func ParseCSVTransactions(csvContent []byte, dateCol, descCol, amountCol int, ha
 		return nil, fmt.Errorf("invalid column mapping: column indices must be non-negative (date: %d, desc: %d, amount: %d)", dateCol, descCol, amountCol)
 	}
 
-	reader := csv.NewReader(strings.NewReader(string(csvContent)))
+	// Strip UTF-8 BOM if present (Excel exports often include this)
+	content := csvContent
+	if len(content) >= 3 && content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF {
+		content = content[3:]
+		log.Printf("Stripped UTF-8 BOM from CSV content")
+	}
+
+	reader := csv.NewReader(strings.NewReader(string(content)))
 
 	var transactions []CSVTransaction
 	lineNum := 0
