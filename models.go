@@ -686,6 +686,7 @@ type OfflineJournal struct {
 	// Deduplication - SHA256 of date+account+subaccount+description+amounts
 	ContentHash string `gorm:"uniqueIndex" json:"content_hash"`
 	Source      string `gorm:"default:'beancount'" json:"source"`
+	SourceFile  string `json:"source_file,omitempty"` // File name for CSV imports to track which file the transaction came from
 
 	// Review workflow: pending_review, approved, duplicate, excluded, posted
 	Status string `gorm:"default:'pending_review';index" json:"status"`

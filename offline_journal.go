@@ -369,7 +369,8 @@ func ParseCSVTransactions(csvContent []byte, dateCol, descCol, amountCol int, ha
 
 // ImportCSVToOfflineJournals imports CSV transactions as offline journals for review
 // This creates UNCLASSIFIED entries that need to be categorized with from/to accounts
-func (a *App) ImportCSVToOfflineJournals(csvContent []byte, dateCol, descCol, amountCol int, hasHeader bool, dateFormat string) (int, int, error) {
+// sourceFile is the name of the uploaded file for tracking purposes
+func (a *App) ImportCSVToOfflineJournals(csvContent []byte, dateCol, descCol, amountCol int, hasHeader bool, dateFormat string, sourceFile string) (int, int, error) {
 	// Parse CSV
 	transactions, err := ParseCSVTransactions(csvContent, dateCol, descCol, amountCol, hasHeader, dateFormat)
 	if err != nil {
@@ -410,6 +411,7 @@ func (a *App) ImportCSVToOfflineJournals(csvContent []byte, dateCol, descCol, am
 			Credit:             0,
 			TransactionGroupID: transactionGroupID,
 			Source:             "csv_import",
+			SourceFile:         sourceFile,
 			Status:             "pending_review",
 			ImportedAt:         time.Now(),
 		}
@@ -424,6 +426,7 @@ func (a *App) ImportCSVToOfflineJournals(csvContent []byte, dateCol, descCol, am
 			Credit:             amountCents,
 			TransactionGroupID: transactionGroupID,
 			Source:             "csv_import",
+			SourceFile:         sourceFile,
 			Status:             "pending_review",
 			ImportedAt:         time.Now(),
 		}
@@ -600,9 +603,17 @@ func (a *App) CategorizeCSVTransaction(date time.Time, description string,
 			i+1, j.ID, j.Date, j.Debit, j.Credit, j.Status, j.TransactionGroupID)
 	}
 
-	if len(journals) != 2 {
-		return fmt.Errorf("expected 2 unclassified entries, found %d for transaction: %s",
+	if len(journals) < 2 {
+		return fmt.Errorf("expected at least 2 unclassified entries, found %d for transaction: %s",
 			len(journals), description)
+	}
+
+	// If more than 2 entries found, log a warning but proceed with the first 2
+	// This can happen if the CSV was imported multiple times or has duplicate transactions
+	if len(journals) > 2 {
+		log.Printf("WARNING: Found %d entries for transaction '%s', but expected 2. Using first 2 entries. This may indicate duplicate imports.", len(journals), description)
+		// Take only the first 2 entries
+		journals = journals[:2]
 	}
 
 	// First entry (debit) = FROM account
