@@ -15,16 +15,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
           go-version: 1.21
-          
       # Configure Git to access private repo
       - run: git config --global url."https://${{ secrets.GH_ACCESS_TOKEN }}:x-oauth-basic@github.com/snowpackdata".insteadOf "https://github.com/snowpackdata"
-          
-      # Setup Node.js for both Vue admin and portal
+      # Setup Node.js for Vue projects
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
@@ -36,15 +33,12 @@ jobs:
       - name: Install npm dependencies for Vue Admin
         working-directory: ./server/admin
         run: npm ci
-        
       - name: Build Vue Admin
         working-directory: ./server/admin
         run: npm run build
-        
       - name: Install npm dependencies for Vue Portal
         working-directory: ./server/portal
         run: npm ci
-        
       - name: Build Vue Portal
         working-directory: ./server/portal
         run: npm run build
@@ -54,20 +48,28 @@ jobs:
         working-directory: ./server
         run: mkdir -p ./static/css
         
+      # Clean up unnecessary folders to reduce file count
+      - name: Cleanup admin folder and node_modules
+        working-directory: ./server
+        run: |
+          echo "Removing admin folder to reduce deployed file count"
+          rm -rf ./admin
+          echo "Removing portal folder to reduce deployed file count"
+          rm -rf ./portal
+          echo "Removing tmp folders to reduce deployed file count"
+          rm -rf ./tmp
+        
       # Build the Go application
       - name: Go Get
         working-directory: ./server
         run: go get .
-        
       - name: Build
         working-directory: ./server
         run: go build -v ./...
-        
       # Create environment variable of current Git hash
       - name: Generate Commit Hash
         id: commit-hash
         run: echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-        
       - name: 'Authenticate to Google Cloud'
         uses: 'google-github-actions/auth@v1'
         with:
@@ -81,30 +83,15 @@ jobs:
         run: |
           gcloud components update
           gcloud components install app-engine-go
-      
-      # Clean up unnecessary files before deployment
-      - name: Clean up source files (keep only built assets)
-        working-directory: ./server
-        run: |
-          echo "Cleaning up unnecessary files for deployment..."
-          # Remove entire admin and portal folders (Vue apps are already built and embedded in Go binary)
-          rm -rf admin
-          rm -rf portal
-          # Remove development files
-          rm -rf tmp
-          echo "Cleanup complete!"
           
-      # List all files to verify build
+      # List all files to verify cleanup
       - name: List remaining files
         working-directory: ./server
         run: |
-          echo "Total file count after cleanup:"
+          echo "Total file count:"
           find . -type f | wc -l
           echo "Top-level directories:"
           ls -la
-          echo ""
-          echo "All remaining files:"
-          find . -type f | head -50
           
       - name: 'Deploy to GAE'
         uses: 'google-github-actions/deploy-appengine@v2'
@@ -112,13 +99,13 @@ jobs:
           project_id: '${{ secrets.GCP_PROJECT }}'
           working_directory: './server'
           build_env_vars: |-
-            GOPRIVATE=github.com/snowpackdata/cronos
-            GIT_HASH=${{ env.GIT_HASH }}
+              GOPRIVATE=github.com/snowpackdata/cronos
+              GIT_HASH=${{ env.GIT_HASH }}
           env_vars: |-
             SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
             CLOUD_SQL_CONNECTION_NAME=${{ secrets.CLOUD_SQL_CONNECTION_NAME }}
             CLOUD_SQL_USERNAME=${{ secrets.CLOUD_SQL_USERNAME }}
-            CLOUD_SQL_PASSWORD='${{ secrets.CLOUD_SQL_PASSWORD }}'
+            CLOUD_SQL_PASSWORD=${{ secrets.CLOUD_SQL_PASSWORD }}
             CLOUD_SQL_DATABASE_NAME=${{ secrets.CLOUD_SQL_DATABASE_NAME }}
             GCP_PROJECT=${{ secrets.GCP_PROJECT }}
             GCS_BUCKET=${{ secrets.GCS_BUCKET }}
