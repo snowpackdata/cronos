@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+server
 .idea/*
 # Test binary, built with `go test -c`
 *.test
@@ -44,8 +45,12 @@ node_modules/
 admin/dist/
 portal/dist/
 static/*
-!static/admin/.gitkeep
-!static/portal/.gitkeep
+!static/admin/
+!static/portal/
+static/admin/*
+static/portal/*
+!static/admin/index.html
+!static/portal/index.html
 
 # Air tmp directory
 tmp/
