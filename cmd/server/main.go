@@ -19,10 +19,10 @@ import (
 	"github.com/snowpackdata/cronos"
 )
 
-//go:embed static/admin/assets
+//go:embed static/admin
 var adminAssets embed.FS
 
-//go:embed static/portal/assets
+//go:embed static/portal
 var portalAssets embed.FS
 
 //go:embed templates

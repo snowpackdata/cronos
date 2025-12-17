@@ -261,67 +261,30 @@ func (a *App) VerifyLogin(w http.ResponseWriter, req *http.Request) {
 func (a *App) AdminLandingHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("Serving admin landing page to %s", req.RemoteAddr)
 
-	// Check if the file exists first
-	filePath := "./static/admin/index.html"
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		log.Printf("Warning: Admin index file not found at %s", filePath)
-		// Try fallback locations
-		alternativePaths := []string{
-			"./website/static/admin/index.html",
-			"./admin/dist/index.html",
-			"./website/admin/dist/index.html",
-		}
-
-		for _, altPath := range alternativePaths {
-			if _, err := os.Stat(altPath); err == nil {
-				log.Printf("Found admin index at alternative path: %s", altPath)
-				filePath = altPath
-				break
-			}
-		}
-	}
-
-	// If file still not found, return 404
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		log.Printf("Error: Admin index.html still not found after checking alternatives.")
+	content, err := adminAssets.ReadFile("static/admin/index.html")
+	if err != nil {
+		log.Printf("Error reading admin index.html from embedded assets: %v", err)
 		http.Error(w, "Admin interface not found.", http.StatusNotFound)
 		return
 	}
 
-	http.ServeFile(w, req, filePath)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(content)
 }
 
 // PortalLandingHandler serves the portal page when accessed via GET request
 func (a *App) PortalLandingHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("Serving portal landing page to %s", req.RemoteAddr)
 
-	// TODO: Consider serving from portalAssets embed.FS like other assets for consistency
-	filePath := "./static/portal/index.html"
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		log.Printf("Warning: Portal index file not found at %s", filePath)
-		// Add fallbacks if necessary, e.g., for development builds
-		alternativePaths := []string{
-			"./portal/dist/index.html",
-			"./website/portal/dist/index.html",
-		}
-
-		for _, altPath := range alternativePaths {
-			if _, err := os.Stat(altPath); err == nil {
-				log.Printf("Found portal index at alternative path: %s", altPath)
-				filePath = altPath
-				break
-			}
-		}
-	}
-
-	// If file still not found, return 404
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		log.Printf("Error: Portal index.html still not found after checking alternatives.")
+	content, err := portalAssets.ReadFile("static/portal/index.html")
+	if err != nil {
+		log.Printf("Error reading portal index.html from embedded assets: %v", err)
 		http.Error(w, "Portal interface not found.", http.StatusNotFound)
 		return
 	}
 
-	http.ServeFile(w, req, filePath)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(content)
 }
 
 // LegacyAdminLandingHandler serves the legacy admin page when accessed via GET request
