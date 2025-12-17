@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Cronos Platform</title>
+<!-- Bootstrap Files from CDN -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="Cronos Platform - Timesheet, invoicing, and project management software for consulting agencies" />
+<meta name="author" content="Snowpack Data LLC" />
+<title>Cronos Platform</title>
+<!-- Favicon-->
+<link rel="shortcut icon" type="icon" href="branding/favicon/favicon.ico">
+
+<!--  Montserrat font from Google Fonts-->
+<link href="https://fonts.googleapis.com/css?family=Montserrat:400,700" rel="stylesheet" type="text/css" />
+
+<!-- Tailwind CSS -->
+<link href="/assets/css/outputs.css?v={{ . }}" rel="stylesheet" />
+
+<style>
+</style>
+</head>
+<body>
+
+<!--TOP NAVBAR AND HAMBURGER MENU-->
+<div class="bg-gray-900">
+  <header class="absolute inset-x-0 top-0 z-50">
+    <nav class="flex items-center justify-between p-6 lg:px-8" aria-label="Global">
+      <div class="flex lg:flex-1">
+        <a href="/" class="-m-1.5 p-1.5">
+          <span class="sr-only">Cronos Platform</span>
+          <h1 class="text-2xl font-bold text-white">Cronos Platform</h1>
+        </a>
+      </div>
+      <div class="flex lg:hidden">
+        <button id="openMenu" type="button" class="-m-2.5 inline-flex items-center justify-center rounded-md p-2.5 text-white">
+          <span class="sr-only">Open main menu</span>
+          <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+          </svg>
+        </button>
+      </div>
+      <div class="hidden lg:flex lg:gap-x-12">
+        <a href="#features" class="text-sm/6 font-semibold text-white">Features</a>
+        <a href="#pricing" class="text-sm/6 font-semibold text-white">Pricing</a>
+        <a href="https://snowpack-data.com/contact" class="text-sm/6 font-semibold text-white">Contact</a>
+      </div>
+      <div class="hidden lg:flex lg:flex-1 lg:justify-end">
+        <a href="/login" class="text-sm/6 font-semibold text-white">Log In <span aria-hidden="true">&rarr;</span></a>
+      </div>
+    </nav>
+    <!-- Mobile menu -->
+    <div id="menu" class="hidden" role="dialog" aria-modal="true">
+      <div class="fixed inset-0 z-50"></div>
+      <div class="fixed inset-y-0 right-0 z-50 w-full overflow-y-auto bg-white px-6 py-6 sm:max-w-sm sm:ring-1 sm:ring-white/10">
+        <div class="flex items-center justify-between">
+          <a href="#" class="-m-1.5 p-1.5">
+            <span class="sr-only">Cronos Platform</span>
+            <h1 class="text-xl font-bold text-gray-dark">Cronos Platform</h1>
+          </a>
+          <button id="closeMenu" type="button" class="-m-2.5 rounded-md p-2.5 text-gray-dark">
+            <span class="sr-only">Close menu</span>
+            <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div class="mt-6 flow-root">
+          <div class="-my-6 divide-y divide-gray-500/25">
+            <div class="space-y-2 py-6">
+              <a href="#features" class="-mx-3 block rounded-lg px-3 py-2 text-base/7 font-semibold text-gray-dark hover:bg-gray-800">Features</a>
+              <a href="#pricing" class="-mx-3 block rounded-lg px-3 py-2 text-base/7 font-semibold text-gray-dark hover:bg-gray-800">Pricing</a>
+              <a href="https://snowpack-data.com/contact" class="-mx-3 block rounded-lg px-3 py-2 text-base/7 font-semibold text-gray-dark hover:bg-gray-800">Contact</a>
+            </div>
+            <div class="py-6">
+              <a href="/login" class="-mx-3 block rounded-lg px-3 py-2.5 text-base/7 font-semibold text-gray-dark hover:bg-gray-800">Log in</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+<!--  HERO IMAGE AND SUPERIMPOSED TEXT-->
+  <div class="relative isolate overflow-hidden pt-14">
+    <img src=/assets/img/mountain_splash.JPG alt="" class="absolute inset-0 -z-10 size-full object-cover brightness-50 bg-gray-900 opacity-50" >
+    <div class="mx-auto max-w-10xl px-10 lg:px-10">
+      <div class="mx-auto max-w-2xl py-32 sm:py-48 lg:py-56">
+        <div class="text-center">
+          <h1 class="text-balance text-5xl font-semibold tracking-tight text-white sm:text-7xl">Cronos Platform</h1>
+          <p class="mt-8 text-pretty text-lg font-l text-white sm:text-xl/8">Streamline your consulting business operations</p>
+          <p class="mt-4 text-pretty text-lg font-medium text-white sm:text-xl/8">Comprehensive timesheet tracking, automated invoicing, and powerful project management tools built specifically for consulting agencies.</p>
+          <div class="mt-10 flex items-center justify-center gap-x-6">
+            <a href="#features" class="rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-black shadow-sm hover:bg-gray-100">Learn More</a>
+            <a href="/login" class="text-sm/6 font-semibold text-white">Get Started<span aria-hidden="true">→</span></a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute inset-x-0 top-[calc(100%-13rem)] -z-10 transform-gpu overflow-hidden blur-3xl sm:top-[calc(100%-30rem)]" aria-hidden="true">
+      <div class="relative left-[calc(50%+3rem)] aspect-[1155/678] w-[36.125rem] -translate-x-1/2 bg-gradient-to-b from-0% to-90%  sm:left-[calc(50%+36rem)] sm:w-[72.1875rem]" style="clip-path: polygon(74.1% 44.1%, 100% 61.6%, 97.5% 26.9%, 85.5% 0.1%, 80.7% 2%, 72.5% 32.5%, 60.2% 62.4%, 52.4% 68.1%, 47.5% 58.3%, 45.2% 34.5%, 27.5% 76.7%, 0.1% 64.9%, 17.9% 100%, 27.6% 76.8%, 76.1% 97.7%, 74.1% 44.1%)"></div>
+    </div>
+  </div>
+</div>
+
+<!--Core Features-->
+<div class="relative bg-gray-50 py-24 sm:py-32" id="features">
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <!-- Header Section -->
+    <div class="mx-auto max-w-5xl lg:mx-0">
+      <h2 class="text-5xl font-semibold tracking-tight text-gray-dark sm:text-7xl">Built for Agencies</h2>
+      <p class="mt-6 text-xl/10 text-gray-600">Managing timesheets, invoices, and projects shouldn't slow you down.</p>
+      <p class="mt-2 text-xl/10 text-gray-600">Cronos gives consulting agencies the tools they need to focus on client work, not administrative overhead.</p>
+    </div>
+
+    <!-- Cards Grid -->
+    <div class="mx-auto mt-10 grid max-w-2xl grid-cols-1 gap-8 sm:mt-15 lg:mx-0 lg:max-w-none lg:grid-cols-3">
+
+      <!-- Timesheet Tracking Card -->
+      <div class="group relative flex flex-col p-8 rounded-xl bg-white shadow-lg transition-all duration-300 hover:shadow-xl hover:bg-gray-gray-light/10 border border-gray-100">
+        <div class="flex items-center mb-6">
+          <div class="p-2 rounded-lg bg-green">
+            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h3 class="ml-4 text-xl font-semibold text-gray-900">Timesheet Management</h3>
+        </div>
+        <div class="space-y-4">
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Intuitive time tracking with drag-and-drop calendar interface</p>
+          </div>
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Automatic billing code assignment and rate calculations</p>
+          </div>
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Multi-level approval workflows for time entry validation</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Invoicing Card -->
+      <div class="group relative flex flex-col p-8 rounded-xl bg-white shadow-lg transition-all duration-300 hover:shadow-xl hover:bg-gray-gray-light/10 border border-gray-100">
+        <div class="flex items-center mb-6">
+          <div class="p-2 rounded-lg bg-green">
+            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </div>
+          <h3 class="ml-4 text-xl font-semibold text-gray-900">Automated Invoicing</h3>
+        </div>
+        <div class="space-y-4">
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Generate professional invoices from approved time entries</p>
+          </div>
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Customizable billing cycles and payment terms</p>
+          </div>
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Track payment status and automate reminders</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Project Management Card -->
+      <div class="group relative flex flex-col p-8 rounded-xl bg-white shadow-lg transition-all duration-300 hover:shadow-xl hover:bg-gray-gray-light/10 border border-gray-100">
+        <div class="flex items-center mb-6">
+          <div class="p-2 rounded-lg bg-green">
+            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+          <h3 class="ml-4 text-xl font-semibold text-gray-900">Project Management</h3>
+        </div>
+        <div class="space-y-4">
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Real-time budget tracking against time and financial targets</p>
+          </div>
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Team capacity planning and resource allocation</p>
+          </div>
+          <div class="flex items-start">
+            <div class="w-1.5 h-1.5 mt-2 rounded-sm bg-green flex-shrink-0"></div>
+            <p class="ml-3 text-gray-600">Detailed analytics and reporting for profitability insights</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!--Client Portal Section-->
+<div class="bg-white py-24 sm:py-32">
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="mx-auto max-w-2xl lg:text-center">
+      <h2 class="text-base/7 font-semibold text-green">Client Portal</h2>
+      <p class="mt-2 text-pretty text-4xl font-semibold tracking-tight text-gray-900 sm:text-5xl lg:text-balance">
+        Transparency Your Clients Will Love
+      </p>
+      <p class="mt-6 text-lg/8 text-gray-600">
+        Give clients real-time visibility into project progress, time tracking, and billing with a beautiful, intuitive portal.
+      </p>
+    </div>
+    <div class="mx-auto mt-16 max-w-2xl sm:mt-20 lg:mt-24 lg:max-w-none">
+      <dl class="grid max-w-xl grid-cols-1 gap-x-8 gap-y-16 lg:max-w-none lg:grid-cols-3">
+        <div class="flex flex-col">
+          <dt class="flex items-center gap-x-3 text-base/7 font-semibold text-gray-900">
+            <svg class="h-5 w-5 flex-none text-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd" />
+            </svg>
+            Live Project Updates
+          </dt>
+          <dd class="mt-4 flex flex-auto flex-col text-base/7 text-gray-600">
+            <p class="flex-auto">Clients see draft entries, project budgets, and billing status in real-time</p>
+          </dd>
+        </div>
+        <div class="flex flex-col">
+          <dt class="flex items-center gap-x-3 text-base/7 font-semibold text-gray-900">
+            <svg class="h-5 w-5 flex-none text-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd" />
+            </svg>
+            Invoice Access
+          </dt>
+          <dd class="mt-4 flex flex-auto flex-col text-base/7 text-gray-600">
+            <p class="flex-auto">Easy access to all current and historical invoices with one-click downloads</p>
+          </dd>
+        </div>
+        <div class="flex flex-col">
+          <dt class="flex items-center gap-x-3 text-base/7 font-semibold text-gray-900">
+            <svg class="h-5 w-5 flex-none text-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd" />
+            </svg>
+            Secure & Branded
+          </dt>
+          <dd class="mt-4 flex flex-auto flex-col text-base/7 text-gray-600">
+            <p class="flex-auto">Bank-grade security with your agency's branding throughout</p>
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+</div>
+
+<!--CTA SECTION-->
+<div class="bg-blue-dark-blue" id="pricing">
+  <div class="px-6 py-24 sm:px-6 sm:py-32 lg:px-8">
+    <div class="mx-auto max-w-4xl text-center">
+      <h2 class="text-balance text-4xl font-semibold tracking-tight text-gray-gray-light sm:text-5xl">Ready to streamline your agency?</h2>
+      <p class="mx-auto mt-6 max-w-4xl text-pretty text-lg/8 text-gray-gray-light">Cronos Platform is available for consulting agencies of all sizes. Contact us for a personalized demo and pricing tailored to your team.</p>
+      <div class="mt-10 flex items-center justify-center gap-x-6">
+        <a href="https://snowpack-data.com/contact" class="rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-black-600 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">Get Started Today</a>
+        <a href="/login" class="text-sm/6 font-semibold text-white">Already a customer? Sign in <span aria-hidden="true">&rarr;</span></a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--FOOTER WITH LINKS-->
+<footer class="bg-blue-dark-blue">
+  <div class="mx-auto max-w-7xl overflow-hidden px-6 py-20 sm:py-24 lg:px-8">
+    <nav class="-mb-6 flex flex-wrap justify-center gap-x-12 gap-y-3 text-sm/6" aria-label="Footer">
+      <a href="#features" class="text-white hover:text-white">Features</a>
+      <a href="#pricing" class="text-white hover:text-white">Pricing</a>
+      <a href="https://snowpack-data.com/contact" class="text-white hover:text-white">Contact</a>
+      <a href="/login" class="text-white hover:text-white">Login</a>
+    </nav>
+    <p class="mt-10 text-center text-sm/6 text-white">&copy; 2024 Snowpack Data LLC. All rights reserved.</p>
+  </div>
+</footer>
+
+</body>
+</html>
+<!--Add Javascript-->
+<script>
+  // Mobile menu toggle
+  document.getElementById('openMenu').addEventListener('click', function() {
+    document.getElementById('menu').classList.remove('hidden');
+  });
+  
+  document.getElementById('closeMenu').addEventListener('click', function() {
+    document.getElementById('menu').classList.add('hidden');
+  });
+</script>

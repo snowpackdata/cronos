@@ -29,26 +29,26 @@ jobs:
           
       # Build Vue Admin Project
       - name: Install npm dependencies for Vue Admin
-        working-directory: ./cmd/server/admin
+        working-directory: cmd/server/admin
         run: npm ci
       - name: Build Vue Admin
-        working-directory: ./cmd/server/admin
+        working-directory: cmd/server/admin
         run: npm run build
       - name: Install npm dependencies for Vue Portal
-        working-directory: ./cmd/server/portal
+        working-directory: cmd/server/portal
         run: npm ci
       - name: Build Vue Portal
-        working-directory: ./cmd/server/portal
+        working-directory: cmd/server/portal
         run: npm run build
         
       # Ensure static directories exist
       - name: Ensure static directories
-        working-directory: ./cmd/server
+        working-directory: cmd/server
         run: mkdir -p ./static/css
         
       # Clean up unnecessary folders to reduce file count
       - name: Cleanup admin folder and node_modules
-        working-directory: ./cmd/server
+        working-directory: cmd/server
         run: |
           echo "Removing admin folder to reduce deployed file count"
           rm -rf ./admin

@@ -1,0 +1,24 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore.
+
+# Node.js dependencies (should already be removed by cleanup script)
+node_modules/
+admin/node_modules/
+portal/node_modules/
+
+# Vue source files (only need built static assets)
+admin/src/
+admin/public/
+portal/src/
+portal/public/
+
+# Development files
+.git
+.gitignore
+*.db
+.env*
+.envrc
+.air.toml
+Makefile
+*.md
+tmp/

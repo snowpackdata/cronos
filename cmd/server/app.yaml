@@ -1,0 +1,7 @@
+runtime: go123
+
+automatic_scaling:
+  max_instances: 20
+  min_instances: 1
+  target_cpu_utilization: 0.65
+
