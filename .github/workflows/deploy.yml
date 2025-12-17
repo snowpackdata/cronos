@@ -18,7 +18,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.21
+          go-version: '1.24'
       # Configure Git to access private repo
       - run: git config --global url."https://${{ secrets.GH_ACCESS_TOKEN }}:x-oauth-basic@github.com/snowpackdata".insteadOf "https://github.com/snowpackdata"
       # Setup Node.js for Vue projects
@@ -27,30 +27,30 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: 'server/admin/package-lock.json'
+          cache-dependency-path: 'cmd/server/admin/package-lock.json'
           
       # Build Vue Admin Project
       - name: Install npm dependencies for Vue Admin
-        working-directory: ./server/admin
+        working-directory: ./cmd/server/admin
         run: npm ci
       - name: Build Vue Admin
-        working-directory: ./server/admin
+        working-directory: ./cmd/server/admin
         run: npm run build
       - name: Install npm dependencies for Vue Portal
-        working-directory: ./server/portal
+        working-directory: ./cmd/server/portal
         run: npm ci
       - name: Build Vue Portal
-        working-directory: ./server/portal
+        working-directory: ./cmd/server/portal
         run: npm run build
         
       # Ensure static directories exist
       - name: Ensure static directories
-        working-directory: ./server
+        working-directory: ./cmd/server
         run: mkdir -p ./static/css
         
       # Clean up unnecessary folders to reduce file count
       - name: Cleanup admin folder and node_modules
-        working-directory: ./server
+        working-directory: ./cmd/server
         run: |
           echo "Removing admin folder to reduce deployed file count"
           rm -rf ./admin
@@ -61,11 +61,11 @@ jobs:
         
       # Build the Go application
       - name: Go Get
-        working-directory: ./server
+        working-directory: ./cmd/server
         run: go get .
       - name: Build
-        working-directory: ./server
-        run: go build -v ./...
+        working-directory: ./cmd/server
+        run: go build -v .
       # Create environment variable of current Git hash
       - name: Generate Commit Hash
         id: commit-hash
@@ -86,7 +86,7 @@ jobs:
           
       # List all files to verify cleanup
       - name: List remaining files
-        working-directory: ./server
+        working-directory: ./cmd/server
         run: |
           echo "Total file count:"
           find . -type f | wc -l
@@ -97,7 +97,7 @@ jobs:
         uses: 'google-github-actions/deploy-appengine@v2'
         with:
           project_id: '${{ secrets.GCP_PROJECT }}'
-          working_directory: './server'
+          deliverables: 'cmd/server/app.yaml'
           build_env_vars: |-
               GOPRIVATE=github.com/snowpackdata/cronos
               GIT_HASH=${{ env.GIT_HASH }}
@@ -117,3 +117,4 @@ jobs:
             GOOGLE_REDIRECT_URL=${{ secrets.GOOGLE_REDIRECT_URL }}
             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+
