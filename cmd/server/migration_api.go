@@ -139,7 +139,7 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	log.Printf("Created %d new subaccounts, skipped %d existing subaccounts", createdSubaccounts, skippedSubaccounts)
-	
+
 	// Now create subaccounts for all existing staff members
 	log.Println("Creating subaccounts for existing staff members...")
 	var employees []cronos.Employee
@@ -152,7 +152,7 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 			empName := fmt.Sprintf("%s %s", emp.FirstName, emp.LastName)
 			empCode := fmt.Sprintf("%d:%s", emp.ID, empName) // e.g., "1:Nate Robinson"
 			log.Printf("Processing employee: %s (code='%s')", empName, empCode)
-			
+
 			for _, accountCode := range staffAccountCodes {
 				var existing cronos.Subaccount
 				if err := a.cronosApp.DB.Where("code = ? AND account_code = ?", empCode, accountCode).First(&existing).Error; err == nil {
@@ -160,7 +160,7 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 					log.Printf("  %s subaccount already exists for %s", accountCode, empName)
 					continue
 				}
-				
+
 				subaccount := cronos.Subaccount{
 					Code:        empCode,
 					Name:        empName,
@@ -168,7 +168,7 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 					Type:        "EMPLOYEE",
 					IsActive:    true,
 				}
-				
+
 				if err := a.cronosApp.DB.Create(&subaccount).Error; err != nil {
 					log.Printf("  Failed to create %s subaccount for %s: %v", accountCode, empName, err)
 				} else {
@@ -178,7 +178,7 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
-	
+
 	// Create subaccounts for all existing client accounts
 	log.Println("Creating subaccounts for existing client accounts...")
 	var clientAccounts []cronos.Account
@@ -189,14 +189,14 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 		for _, acc := range clientAccounts {
 			accName := acc.Name
 			accCode := fmt.Sprintf("%d:%s", acc.ID, accName) // e.g., "37:Grid"
-			
+
 			for _, accountCode := range clientAccountCodes {
 				var existing cronos.Subaccount
 				if err := a.cronosApp.DB.Where("code = ? AND account_code = ?", accCode, accountCode).First(&existing).Error; err == nil {
 					// Already exists
 					continue
 				}
-				
+
 				subaccount := cronos.Subaccount{
 					Code:        accCode,
 					Name:        accName,
@@ -204,7 +204,7 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 					Type:        "CLIENT",
 					IsActive:    true,
 				}
-				
+
 				if err := a.cronosApp.DB.Create(&subaccount).Error; err != nil {
 					log.Printf("Failed to create client subaccount %s:%s: %v", accountCode, accCode, err)
 				} else {
@@ -214,19 +214,19 @@ func (a *App) MigrateChartOfAccountsHandler(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
-	
+
 	log.Println("Chart of Accounts migration complete!")
 
 	// Return summary
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"success":              true,
-		"message":              "Chart of Accounts migration complete",
-		"accounts_created":     createdAccounts,
-		"accounts_skipped":     skippedAccounts,
-		"subaccounts_created":  createdSubaccounts,
-		"subaccounts_skipped":  skippedSubaccounts,
-		"total_accounts":       len(accounts),
-		"total_subaccounts":    len(subaccounts),
+		"success":             true,
+		"message":             "Chart of Accounts migration complete",
+		"accounts_created":    createdAccounts,
+		"accounts_skipped":    skippedAccounts,
+		"subaccounts_created": createdSubaccounts,
+		"subaccounts_skipped": skippedSubaccounts,
+		"total_accounts":      len(accounts),
+		"total_subaccounts":   len(subaccounts),
 	})
 }
 
@@ -292,35 +292,35 @@ func toLowerRune(r rune) rune {
 // CleanupSubaccountsHandler fixes subaccounts where code contains ":" and should be split
 func (a *App) CleanupSubaccountsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Starting subaccount cleanup...")
-	
+
 	// Find all subaccounts where code contains ":"
 	var badSubaccounts []cronos.Subaccount
 	if err := a.cronosApp.DB.Where("code LIKE ?", "%:%").Find(&badSubaccounts).Error; err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to fetch subaccounts: "+err.Error())
 		return
 	}
-	
+
 	log.Printf("Found %d subaccounts with ':' in code field", len(badSubaccounts))
-	
+
 	fixed := 0
 	deleted := 0
-	
+
 	for _, sub := range badSubaccounts {
 		// Code is correct as-is (e.g., "37:Grid")
 		// But if name also contains "37:Grid", fix it to just "Grid"
 		// This handles the case where name was incorrectly set to the full code
-		
+
 		if sub.Name == sub.Code && strings.Contains(sub.Code, ":") {
 			parts := strings.SplitN(sub.Code, ":", 2)
 			if len(parts) != 2 {
 				log.Printf("Skipping %s - unexpected format", sub.Code)
 				continue
 			}
-			
-			properName := parts[1]  // "Grid"
-			
+
+			properName := parts[1] // "Grid"
+
 			log.Printf("Processing subaccount ID=%d, code='%s' (keeping), name='%s' -> '%s'", sub.ID, sub.Code, sub.Name, properName)
-			
+
 			// Just update the name, keep code as-is
 			if err := a.cronosApp.DB.Model(&sub).Updates(map[string]interface{}{
 				"name": properName,
@@ -334,9 +334,9 @@ func (a *App) CleanupSubaccountsHandler(w http.ResponseWriter, r *http.Request) 
 			log.Printf("Subaccount ID=%d looks fine, skipping (code='%s', name='%s')", sub.ID, sub.Code, sub.Name)
 		}
 	}
-	
+
 	log.Printf("Cleanup complete: %d fixed, %d duplicates deleted", fixed, deleted)
-	
+
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": "Subaccount cleanup complete",
@@ -344,4 +344,3 @@ func (a *App) CleanupSubaccountsHandler(w http.ResponseWriter, r *http.Request) 
 		"deleted": deleted,
 	})
 }
-

@@ -52,25 +52,25 @@ func createFileServer(embeddedFS embed.FS, fsRoot string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Serving embedded file: %s from root %s", r.URL.Path, fsRoot)
 
-	ext := path.Ext(r.URL.Path)
-	switch ext {
-	case ".css":
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	case ".js":
-		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	case ".svg":
-		w.Header().Set("Content-Type", "image/svg+xml")
-	case ".png":
-		w.Header().Set("Content-Type", "image/png")
-	case ".jpg", ".jpeg":
-		w.Header().Set("Content-Type", "image/jpeg")
-	case ".woff":
-		w.Header().Set("Content-Type", "font/woff")
-	case ".woff2":
-		w.Header().Set("Content-Type", "font/woff2")
-	case ".ttf":
-		w.Header().Set("Content-Type", "font/ttf")
-	}
+		ext := path.Ext(r.URL.Path)
+		switch ext {
+		case ".css":
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		case ".js":
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		case ".svg":
+			w.Header().Set("Content-Type", "image/svg+xml")
+		case ".png":
+			w.Header().Set("Content-Type", "image/png")
+		case ".jpg", ".jpeg":
+			w.Header().Set("Content-Type", "image/jpeg")
+		case ".woff":
+			w.Header().Set("Content-Type", "font/woff")
+		case ".woff2":
+			w.Header().Set("Content-Type", "font/woff2")
+		case ".ttf":
+			w.Header().Set("Content-Type", "font/ttf")
+		}
 
 		http.FileServer(http.FS(subFS)).ServeHTTP(w, r)
 	})

@@ -158,10 +158,10 @@ func (a *App) GetExpenseTagsHandler(w http.ResponseWriter, r *http.Request) {
 // CreateExpenseTagHandler creates a new expense tag
 func (a *App) CreateExpenseTagHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        string  `json:"name"`
-		Description string  `json:"description"`
-		Active      bool    `json:"active"`
-		Budget      *int    `json:"budget"` // Budget in cents
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Active      bool   `json:"active"`
+		Budget      *int   `json:"budget"` // Budget in cents
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -195,10 +195,10 @@ func (a *App) UpdateExpenseTagHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name        string  `json:"name"`
-		Description string  `json:"description"`
-		Active      bool    `json:"active"`
-		Budget      *int    `json:"budget"` // Budget in cents
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Active      bool   `json:"active"`
+		Budget      *int   `json:"budget"` // Budget in cents
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -245,4 +245,3 @@ func (a *App) DeleteExpenseTagHandler(w http.ResponseWriter, r *http.Request) {
 
 	respondWithJSON(w, http.StatusOK, map[string]string{"message": "Tag deleted successfully"})
 }
-

@@ -17,7 +17,29 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version: '1.23'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      # Build Vue apps (required for embedded assets)
+      - name: Ensure static directories
+        working-directory: cmd/server
+        run: mkdir -p ./static/admin/assets ./static/portal/assets ./static/css
+
+      - name: Install and Build Admin UI
+        working-directory: cmd/server/admin
+        run: npm ci && npm run build
+
+      - name: Install and Build Portal UI
+        working-directory: cmd/server/portal
+        run: npm ci && npm run build
+
+      - name: Install and Build Tailwind CSS
+        working-directory: cmd/server
+        run: npm ci && npm run tailwindcss:build
 
       - name: Run Tests
         run: |

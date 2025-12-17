@@ -362,8 +362,8 @@ func (a *App) UpdateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	
-	log.Printf("UpdateExpense - Form values: project_id=%s, amount=%s, date=%s, description=%s, category_id=%s, tag_ids=%s", 
+
+	log.Printf("UpdateExpense - Form values: project_id=%s, amount=%s, date=%s, description=%s, category_id=%s, tag_ids=%s",
 		r.FormValue("project_id"), r.FormValue("amount"), r.FormValue("date"), r.FormValue("description"),
 		r.FormValue("category_id"), r.FormValue("tag_ids"))
 
@@ -455,89 +455,89 @@ func (a *App) UpdateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		if errFile == nil { // File is present
 			defer file.Close()
 
-		// Read file
-		fileBytes, errRead := io.ReadAll(file)
-		if errRead != nil {
-			log.Printf("Failed to read receipt file: %v", errRead)
-			respondWithError(w, http.StatusInternalServerError, "Failed to read receipt file")
-			return
-		}
+			// Read file
+			fileBytes, errRead := io.ReadAll(file)
+			if errRead != nil {
+				log.Printf("Failed to read receipt file: %v", errRead)
+				respondWithError(w, http.StatusInternalServerError, "Failed to read receipt file")
+				return
+			}
 
-		// Detect content type
-		contentType := http.DetectContentType(fileBytes)
+			// Detect content type
+			contentType := http.DetectContentType(fileBytes)
 
-		// Upload to GCS
-		bucketName := a.cronosApp.Bucket
-		if bucketName == "" {
-			log.Println("Bucket name not configured")
-			respondWithError(w, http.StatusInternalServerError, "Storage not configured")
-			return
-		}
+			// Upload to GCS
+			bucketName := a.cronosApp.Bucket
+			if bucketName == "" {
+				log.Println("Bucket name not configured")
+				respondWithError(w, http.StatusInternalServerError, "Storage not configured")
+				return
+			}
 
-		// Generate UUID for secure filename
-		newUUID, errUUID := uuid.NewRandom()
-		if errUUID != nil {
-			log.Printf("Failed to generate UUID: %v", errUUID)
-			respondWithError(w, http.StatusInternalServerError, "Failed to generate filename")
-			return
-		}
+			// Generate UUID for secure filename
+			newUUID, errUUID := uuid.NewRandom()
+			if errUUID != nil {
+				log.Printf("Failed to generate UUID: %v", errUUID)
+				respondWithError(w, http.StatusInternalServerError, "Failed to generate filename")
+				return
+			}
 
-		ext := filepath.Ext(header.Filename)
-		// Use project ID if available, otherwise use "internal" for internal expenses
-		projectFolder := "internal"
-		if expense.ProjectID != nil {
-			projectFolder = fmt.Sprintf("%d", *expense.ProjectID)
-		}
-		objectName := fmt.Sprintf("assets/expenses/%s/%s%s", projectFolder, newUUID.String(), ext)
+			ext := filepath.Ext(header.Filename)
+			// Use project ID if available, otherwise use "internal" for internal expenses
+			projectFolder := "internal"
+			if expense.ProjectID != nil {
+				projectFolder = fmt.Sprintf("%d", *expense.ProjectID)
+			}
+			objectName := fmt.Sprintf("assets/expenses/%s/%s%s", projectFolder, newUUID.String(), ext)
 
-		if errUpload := a.cronosApp.UploadObject(r.Context(), bucketName, objectName, bytes.NewReader(fileBytes), contentType); errUpload != nil {
-			log.Printf("Failed to upload receipt: %v", errUpload)
-			respondWithError(w, http.StatusInternalServerError, "Failed to upload receipt")
-			return
-		}
+			if errUpload := a.cronosApp.UploadObject(r.Context(), bucketName, objectName, bytes.NewReader(fileBytes), contentType); errUpload != nil {
+				log.Printf("Failed to upload receipt: %v", errUpload)
+				respondWithError(w, http.StatusInternalServerError, "Failed to upload receipt")
+				return
+			}
 
-		// Generate URL
-		url := a.cronosApp.GetObjectURL(bucketName, objectName)
-		var expiresAt *time.Time
+			// Generate URL
+			url := a.cronosApp.GetObjectURL(bucketName, objectName)
+			var expiresAt *time.Time
 
-		signedURL, expiresTime, signedURLErr := a.cronosApp.GenerateSignedURL(bucketName, objectName)
-		if signedURLErr != nil {
-			log.Printf("Failed to generate signed URL (using public URL instead): %v", signedURLErr)
-			url = a.cronosApp.GetObjectURL(bucketName, objectName)
-			expiresAt = nil
-		} else {
-			url = signedURL
-			expiresAt = &expiresTime
-		}
+			signedURL, expiresTime, signedURLErr := a.cronosApp.GenerateSignedURL(bucketName, objectName)
+			if signedURLErr != nil {
+				log.Printf("Failed to generate signed URL (using public URL instead): %v", signedURLErr)
+				url = a.cronosApp.GetObjectURL(bucketName, objectName)
+				expiresAt = nil
+			} else {
+				url = signedURL
+				expiresAt = &expiresTime
+			}
 
-		// Create or update asset record
-		size := int64(len(fileBytes))
-		uploadStatus := "completed"
-		uploadedAt := time.Now()
+			// Create or update asset record
+			size := int64(len(fileBytes))
+			uploadStatus := "completed"
+			uploadedAt := time.Now()
 
-		asset := cronos.Asset{
-			ProjectID:     expense.ProjectID, // Already a pointer
-			AssetType:     "receipt",
-			Name:          header.Filename,
-			Url:           url,
-			IsPublic:      false,
-			BucketName:    &bucketName,
-			ContentType:   &contentType,
-			Size:          &size,
-			UploadStatus:  &uploadStatus,
-			UploadedBy:    &userID,
-			UploadedAt:    &uploadedAt,
-			ExpiresAt:     expiresAt,
-			GCSObjectPath: &objectName,
-		}
+			asset := cronos.Asset{
+				ProjectID:     expense.ProjectID, // Already a pointer
+				AssetType:     "receipt",
+				Name:          header.Filename,
+				Url:           url,
+				IsPublic:      false,
+				BucketName:    &bucketName,
+				ContentType:   &contentType,
+				Size:          &size,
+				UploadStatus:  &uploadStatus,
+				UploadedBy:    &userID,
+				UploadedAt:    &uploadedAt,
+				ExpiresAt:     expiresAt,
+				GCSObjectPath: &objectName,
+			}
 
-		if errAsset := a.cronosApp.DB.Create(&asset).Error; errAsset != nil {
-			log.Printf("Failed to create asset record: %v", errAsset)
-			respondWithError(w, http.StatusInternalServerError, "Failed to save receipt metadata")
-			return
-		}
+			if errAsset := a.cronosApp.DB.Create(&asset).Error; errAsset != nil {
+				log.Printf("Failed to create asset record: %v", errAsset)
+				respondWithError(w, http.StatusInternalServerError, "Failed to save receipt metadata")
+				return
+			}
 
-		expense.ReceiptID = &asset.ID
+			expense.ReceiptID = &asset.ID
 		} else if errFile != http.ErrMissingFile {
 			log.Printf("Error accessing receipt file: %v", errFile)
 			respondWithError(w, http.StatusBadRequest, "Error processing receipt file")

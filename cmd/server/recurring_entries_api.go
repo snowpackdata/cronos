@@ -20,7 +20,7 @@ func (a *App) GenerateRecurringEntriesHandler(w http.ResponseWriter, r *http.Req
 	// Get current month period
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	
+
 	// Count before generation
 	var beforeCount int64
 	a.cronosApp.DB.Model(&cronos.RecurringBillLineItem{}).Count(&beforeCount)
@@ -34,7 +34,7 @@ func (a *App) GenerateRecurringEntriesHandler(w http.ResponseWriter, r *http.Req
 	// Count after generation
 	var afterCount int64
 	a.cronosApp.DB.Model(&cronos.RecurringBillLineItem{}).Count(&afterCount)
-	
+
 	// Count GL entries
 	var glCount int64
 	a.cronosApp.DB.Model(&cronos.Journal{}).Where("recurring_bill_line_item_id IS NOT NULL").Count(&glCount)
@@ -157,7 +157,7 @@ func (a *App) SyncEmployeeRecurringEntriesHandler(w http.ResponseWriter, r *http
 	// Find all active salaried employees (support both formats)
 	var employees []cronos.Employee
 	if err := a.cronosApp.DB.Where("is_active = ? AND (compensation_type IN ? OR compensation_type IN ?)",
-		true, 
+		true,
 		[]string{"salaried", "SALARIED", "COMPENSATION_TYPE_SALARIED"},
 		[]string{"base-plus-variable", "BASE-PLUS-VARIABLE", "COMPENSATION_TYPE_BASE_PLUS_VARIABLE"}).
 		Find(&employees).Error; err != nil {
@@ -178,7 +178,7 @@ func (a *App) SyncEmployeeRecurringEntriesHandler(w http.ResponseWriter, r *http
 			var entry cronos.RecurringEntry
 			a.cronosApp.DB.Where("employee_id = ? AND type = ? AND is_active = ?",
 				employee.ID, "base_salary", true).First(&entry)
-			
+
 			if entry.CreatedAt.After(time.Now().Add(-1 * time.Minute)) {
 				created++
 			} else {
@@ -194,4 +194,3 @@ func (a *App) SyncEmployeeRecurringEntriesHandler(w http.ResponseWriter, r *http
 		"skipped": skipped,
 	})
 }
-

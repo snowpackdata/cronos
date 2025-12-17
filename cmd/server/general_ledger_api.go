@@ -47,7 +47,7 @@ func (a *App) ReverseJournalEntryHandler(w http.ResponseWriter, r *http.Request)
 
 	var correctedEntry *cronos.Journal
 	if req.CreateCorrected && req.Corrected != nil {
-		a.logger.Printf("Creating corrected entry: account=%s, subaccount=%s, debit=%.2f, credit=%.2f", 
+		a.logger.Printf("Creating corrected entry: account=%s, subaccount=%s, debit=%.2f, credit=%.2f",
 			req.Corrected.Account, req.Corrected.SubAccount, req.Corrected.Debit, req.Corrected.Credit)
 		correctedEntry = &cronos.Journal{
 			Account:    req.Corrected.Account,
@@ -71,4 +71,3 @@ func (a *App) ReverseJournalEntryHandler(w http.ResponseWriter, r *http.Request)
 		"message": "Journal entry reversed successfully",
 	})
 }
-
