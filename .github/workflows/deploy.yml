@@ -102,6 +102,9 @@ jobs:
           find . -type f | wc -l
           echo "Top-level directories:"
           ls -la
+          echo ""
+          echo "All remaining files:"
+          find . -type f | head -50
           
       - name: 'Deploy to GAE'
         uses: 'google-github-actions/deploy-appengine@v2'
