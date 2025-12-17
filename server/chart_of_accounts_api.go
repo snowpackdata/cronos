@@ -199,12 +199,18 @@ func (a *App) UploadCSVHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the file from the form
-	file, _, err := r.FormFile("file")
+	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Failed to get file", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
+
+	// Extract file name for tracking
+	sourceFileName := fileHeader.Filename
+	if sourceFileName == "" {
+		sourceFileName = "unknown.csv"
+	}
 
 	// Get column mappings from form
 	dateCol := 0
@@ -250,6 +256,7 @@ func (a *App) UploadCSVHandler(w http.ResponseWriter, r *http.Request) {
 		amountCol,
 		hasHeader,
 		dateFormat,
+		sourceFileName,
 	)
 	if err != nil {
 		http.Error(w, "Failed to import: "+err.Error(), http.StatusInternalServerError)
@@ -296,12 +303,13 @@ func (a *App) GetOfflineJournalTransactionsHandler(w http.ResponseWriter, r *htt
 // CategorizeCSVTransactionHandler categorizes a transaction with FROM and TO accounts
 func (a *App) CategorizeCSVTransactionHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date            string `json:"date"`
-		Description     string `json:"description"`
-		FromAccount     string `json:"from_account"`
-		FromSubAccount  string `json:"from_subaccount"`
-		ToAccount       string `json:"to_account"`
-		ToSubAccount    string `json:"to_subaccount"`
+		Date               string `json:"date"`
+		Description        string `json:"description"`
+		FromAccount        string `json:"from_account"`
+		FromSubAccount     string `json:"from_subaccount"`
+		ToAccount          string `json:"to_account"`
+		ToSubAccount       string `json:"to_subaccount"`
+		TransactionGroupID string `json:"transaction_group_id"` // Optional: for precise matching
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -316,7 +324,7 @@ func (a *App) CategorizeCSVTransactionHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Categorize transaction
+	// Categorize transaction (with optional transaction group ID)
 	err = a.cronosApp.CategorizeCSVTransaction(
 		date,
 		req.Description,
@@ -324,6 +332,7 @@ func (a *App) CategorizeCSVTransactionHandler(w http.ResponseWriter, r *http.Req
 		req.FromSubAccount,
 		req.ToAccount,
 		req.ToSubAccount,
+		req.TransactionGroupID,
 	)
 	if err != nil {
 		http.Error(w, "Failed to categorize transaction: "+err.Error(), http.StatusInternalServerError)
@@ -337,8 +346,9 @@ func (a *App) CategorizeCSVTransactionHandler(w http.ResponseWriter, r *http.Req
 // ApproveTransactionPairHandler approves both sides of a transaction
 func (a *App) ApproveTransactionPairHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date        string `json:"date"`
-		Description string `json:"description"`
+		Date               string `json:"date"`
+		Description        string `json:"description"`
+		TransactionGroupID string `json:"transaction_group_id"` // Optional: for precise matching
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -356,8 +366,8 @@ func (a *App) ApproveTransactionPairHandler(w http.ResponseWriter, r *http.Reque
 	// Get staff ID from context (TODO: from JWT)
 	staffID := uint(1)
 
-	// Approve transaction
-	booked, err := a.cronosApp.ApproveTransactionPair(date, req.Description, staffID)
+	// Approve transaction (with optional transaction group ID)
+	booked, err := a.cronosApp.ApproveTransactionPair(date, req.Description, staffID, req.TransactionGroupID)
 	if err != nil {
 		http.Error(w, "Failed to approve transaction: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -401,4 +411,3 @@ func parseDateRange(startDateStr, endDateStr string) (time.Time, time.Time, erro
 func parseDate(dateStr string) (time.Time, error) {
 	return time.Parse("2006-01-02", dateStr)
 }
-
