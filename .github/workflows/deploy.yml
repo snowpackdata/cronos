@@ -112,7 +112,6 @@ jobs:
         with:
           project_id: '${{ secrets.GCP_PROJECT }}'
           working_directory: './server'
-          deliverables: 'app.yaml'
           build_env_vars: |-
             GOPRIVATE=github.com/snowpackdata/cronos
             GIT_HASH=${{ env.GIT_HASH }}
