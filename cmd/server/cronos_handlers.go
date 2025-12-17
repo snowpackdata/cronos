@@ -66,13 +66,17 @@ func (a *App) RegistrationLandingHandler(w http.ResponseWriter, req *http.Reques
 
 // LoginLandingHandler serves the registration page when accessed via GET request
 func (a *App) LoginLandingHandler(w http.ResponseWriter, req *http.Request) {
-	data, err := templates.ReadFile("templates/login.html")
+	tmpl, err := template.ParseFS(templates, "templates/login.html")
 	if err != nil {
+		log.Printf("Error parsing login template: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	err = tmpl.Execute(w, a.GitHash)
+	if err != nil {
+		log.Printf("Error executing login template: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
 }
 
 // RegisterUser creates a new user in the database when accessed via POST request

@@ -26,6 +26,11 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '20'
+      
+      # Ensure static directories exist before building
+      - name: Ensure static directories
+        working-directory: cmd/server
+        run: mkdir -p ./static/admin/assets ./static/portal/assets ./static/css
           
       # Build Vue Admin Project
       - name: Install npm dependencies for Vue Admin
@@ -48,11 +53,6 @@ jobs:
       - name: Build Tailwind CSS
         working-directory: cmd/server
         run: npm run tailwindcss:build
-        
-      # Ensure static directories exist
-      - name: Ensure static directories
-        working-directory: cmd/server
-        run: mkdir -p ./static/css
         
       # Clean up unnecessary folders to reduce file count
       - name: Cleanup admin folder and node_modules
