@@ -119,12 +119,11 @@ jobs:
             SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
             CLOUD_SQL_CONNECTION_NAME=${{ secrets.CLOUD_SQL_CONNECTION_NAME }}
             CLOUD_SQL_USERNAME=${{ secrets.CLOUD_SQL_USERNAME }}
-            CLOUD_SQL_PASSWORD=${{ secrets.CLOUD_SQL_PASSWORD }}
+            CLOUD_SQL_PASSWORD='${{ secrets.CLOUD_SQL_PASSWORD }}'
             CLOUD_SQL_DATABASE_NAME=${{ secrets.CLOUD_SQL_DATABASE_NAME }}
             GCP_PROJECT=${{ secrets.GCP_PROJECT }}
             GCS_BUCKET=${{ secrets.GCS_BUCKET }}
             GIT_HASH=${{ env.GIT_HASH }}
-            HUBSPOT_API_KEY=${{ secrets.HUBSPOT_API_KEY }}
             JWT_SECRET=${{ secrets.JWT_SECRET }}
             SLACK_WEBHOOK_URL=${{ secrets.SLACK_WEBHOOK_URL }}
             ENVIRONMENT=production
