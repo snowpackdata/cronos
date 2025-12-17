@@ -10,6 +10,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
+      GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
       GOPRIVATE: github.com/snowpackdata/cronos
     steps:
       - name: Checkout repository
@@ -19,6 +20,9 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: 1.21
+          
+      # Configure Git to access private repo
+      - run: git config --global url."https://${{ secrets.GH_ACCESS_TOKEN }}:x-oauth-basic@github.com/snowpackdata".insteadOf "https://github.com/snowpackdata"
           
       # Setup Node.js for both Vue admin and portal
       - name: Setup Node.js
