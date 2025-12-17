@@ -124,10 +124,10 @@ const routes: Array<RouteRecordRaw> = [
   },
   {
     path: '/staff',
-    name: 'staff',
+    name: 'team',
     component: () => import('../views/staff/StaffView.vue'),
     meta: {
-      title: 'Staff',
+      title: 'Team',
       requiresAuth: true
     }
   },

@@ -2,7 +2,7 @@
   <div class="px-4 py-6 sm:px-6 lg:px-8">
     <div class="sm:flex sm:items-center">
       <div class="sm:flex-auto">
-        <h1 class="text-base font-semibold leading-6 text-gray-900">Staff Management</h1>
+        <h1 class="text-base font-semibold leading-6 text-gray-900">Team</h1>
         <p class="mt-2 text-sm text-gray-700">
           Manage your team members, their roles, capacity, and employment status.
         </p>
@@ -78,10 +78,10 @@
                   </td>
                   <td class="whitespace-nowrap px-3 py-4 text-sm">
                     <span :class="[
-                      getUserRoleClass(staff.user?.role || 'STAFF'),
+                      staff.is_owner ? 'bg-purple-50 text-purple-700 ring-purple-600/20' : getUserRoleClass(staff.user?.role || 'STAFF'),
                       'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset'
                     ]">
-                      {{ formatUserRole(staff.user?.role || 'STAFF') }}
+                      {{ staff.is_owner ? 'Partner' : formatUserRole(staff.user?.role || 'STAFF') }}
                     </span>
                   </td>
                   <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-900">

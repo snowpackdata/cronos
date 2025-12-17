@@ -459,14 +459,23 @@ async function saveEntry() {
   modalError.value = null;
 
   try {
+    // Convert date strings to ISO 8601 timestamps (add T00:00:00Z)
+    const startDateTime = formData.value.start_date 
+      ? new Date(formData.value.start_date + 'T00:00:00Z').toISOString()
+      : new Date().toISOString();
+    
+    const endDateTime = formData.value.end_date 
+      ? new Date(formData.value.end_date + 'T00:00:00Z').toISOString()
+      : undefined;
+
     const data = {
       employee_id: parseInt(formData.value.employee_id),
       type: formData.value.type,
       description: formData.value.description,
       amount: Math.round(formData.value.amount * 100), // Convert dollars to cents
       frequency: 'monthly',
-      start_date: formData.value.start_date,
-      end_date: formData.value.end_date || undefined,
+      start_date: startDateTime,
+      end_date: endDateTime,
       is_active: true,
     };
 

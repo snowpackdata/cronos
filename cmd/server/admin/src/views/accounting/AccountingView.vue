@@ -8,6 +8,8 @@ import { formatCurrency, formatAccountName, getAccountCategory } from '../../typ
 const journals = ref<Journal[]>([]);
 const balanceSummary = ref<BalanceSummary | null>(null);
 const priorBalanceSummary = ref<BalanceSummary | null>(null);
+const cumulativeBalanceSummary = ref<BalanceSummary | null>(null); // For Balance Sheet (inception → end date)
+const beginningBalanceSummary = ref<BalanceSummary | null>(null); // For beginning cash (inception → day before start)
 const isLoading = ref(true);
 const error = ref<string | null>(null);
 
@@ -71,21 +73,35 @@ async function fetchData() {
     const priorStartStr = priorStart.toISOString().split('T')[0];
     const priorEndStr = priorEnd.toISOString().split('T')[0];
     
+    // Calculate day before start for beginning balance
+    const dayBeforeStart = new Date(start.getTime() - 24 * 60 * 60 * 1000);
+    const dayBeforeStartStr = dayBeforeStart.toISOString().split('T')[0];
+    
     // Fetch journals from the official GL only (offline journals are managed separately)
-    const [journalsData, balancesData, priorBalancesData] = await Promise.all([
+    // balancesData: Period-based for P&L (start → end)
+    // cumulativeBalancesData: Cumulative for Balance Sheet (inception → end)
+    // beginningBalancesData: Cumulative for beginning cash (inception → day before start)
+    const [journalsData, balancesData, priorBalancesData, cumulativeBalancesData, beginningBalancesData] = await Promise.all([
       getJournals({ 
         start_date: startDate.value, 
         end_date: endDate.value,
         include_offline: false 
       }),
-      getAccountBalances(startDate.value, endDate.value),
-      getAccountBalances(priorStartStr, priorEndStr)
+      getAccountBalances(startDate.value, endDate.value), // Period for P&L
+      getAccountBalances(priorStartStr, priorEndStr),
+      getAccountBalances(undefined, endDate.value), // Cumulative (inception → end) for Balance Sheet
+      getAccountBalances(undefined, dayBeforeStartStr) // Cumulative (inception → day before start) for beginning cash
     ]);
     
     console.log('Journals received:', journalsData?.length, 'journals');
+    console.log('Period balances (for P&L):', startDate.value, '→', endDate.value);
+    console.log('Cumulative balances (for Balance Sheet): inception →', endDate.value);
+    console.log('Beginning balances (for Cash Flow): inception →', dayBeforeStartStr);
     journals.value = journalsData || [];
     balanceSummary.value = balancesData;
     priorBalanceSummary.value = priorBalancesData;
+    cumulativeBalanceSummary.value = cumulativeBalancesData;
+    beginningBalanceSummary.value = beginningBalancesData;
     
     // Pre-load account options on first load
     if (availableAccounts.value.length === 0) {
@@ -97,6 +113,8 @@ async function fetchData() {
     journals.value = [];
     balanceSummary.value = null;
     priorBalanceSummary.value = null;
+    cumulativeBalanceSummary.value = null;
+    beginningBalanceSummary.value = null;
   } finally {
     isLoading.value = false;
   }
@@ -146,7 +164,7 @@ function getAccountsByCategory(): Map<string, AccountBalance[]> {
   }
   
   accountsToShow.forEach(account => {
-    const category = getAccountCategory(account.account);
+    const category = getAccountCategory(account.account, account.account_type);
     if (!grouped.has(category)) {
       grouped.set(category, []);
     }
@@ -597,13 +615,18 @@ function getSummaryMetrics() {
   return { cash, ar, ap, netProfit };
 }
 
-// Calculate Balance Sheet
+// Calculate Balance Sheet (using cumulative balances from inception → end date)
 function calculateBalanceSheet() {
-  if (!balanceSummary.value || !balanceSummary.value.accounts) {
+  // Use cumulative balances for Balance Sheet (inception → end date)
+  if (!cumulativeBalanceSummary.value || !cumulativeBalanceSummary.value.accounts) {
     return { 
       assets: [], totalAssets: 0,
       liabilities: [], totalLiabilities: 0,
       equity: [], totalEquity: 0,
+      partnerCapital: 0,
+      ownerDistributions: 0,
+      cumulativeNetIncome: 0,
+      currentPeriodNetIncome: 0,
       retainedEarnings: 0,
       balances: false
     };
@@ -616,46 +639,99 @@ function calculateBalanceSheet() {
   let totalAssets = 0;
   let totalLiabilities = 0;
   let totalEquity = 0;
-
-  balanceSummary.value.accounts.forEach(account => {
+  let ownerDistributions = 0;
+  let partnerCapital = 0; // Track partner capital contributions separately
+  
+  // Use CUMULATIVE balances (from inception to end date)
+  cumulativeBalanceSummary.value.accounts.forEach(account => {
     const accountName = account.account;
-    const category = getAccountCategory(accountName);
+    const category = getAccountCategory(accountName, account.account_type);
     const balance = account.net_balance;
 
     if (category === 'Assets') {
       assets.push({ account: accountName, balance });
       totalAssets += balance;
     } else if (category === 'Liabilities') {
+      // Keep the natural accounting sign (negative for credit balances)
       liabilities.push({ account: accountName, balance });
       totalLiabilities += balance;
+      console.log(`Liability (cumulative): ${accountName}, Balance: ${balance}, Running Total: ${totalLiabilities}`);
     } else if (category === 'Equity') {
-      equity.push({ account: accountName, balance });
-      totalEquity += balance;
+      if (accountName === 'OWNER_DISTRIBUTIONS') {
+        // Owner distributions REDUCE equity (debit balance, cumulative)
+        ownerDistributions = balance;
+      } else if (accountName === 'EQUITY_OWNERSHIP') {
+        // Partner capital contributions (initial investments)
+        partnerCapital = balance;
+      } else {
+        equity.push({ account: accountName, balance });
+        totalEquity += balance;
+      }
     }
   });
+  
+  console.log(`Total Liabilities (cumulative): ${totalLiabilities}, Abs: ${Math.abs(totalLiabilities)}`);
 
-  // Calculate retained earnings from P&L
+  // Calculate cumulative net income from cumulative revenue and expenses
+  // (all revenue/expenses from inception to end date)
+  let cumulativeRevenue = 0;
+  let cumulativeExpenses = 0;
+  
+  cumulativeBalanceSummary.value.accounts.forEach(account => {
+    const accountName = account.account;
+    
+    // Revenue accounts (credits, negative balances)
+    if (accountName === 'REVENUE' || 
+        accountName === 'ADJUSTMENT_REVENUE' ||
+        accountName === 'OTHER_INCOME') {
+      cumulativeRevenue += account.net_balance;
+    }
+    
+    // Expense accounts (debits, positive balances)
+    if (accountName === 'PAYROLL_EXPENSE' || 
+        accountName === 'ADJUSTMENT_EXPENSE' ||
+        accountName.startsWith('OPERATING_EXPENSES_') ||
+        accountName === 'EQUIPMENT_EXPENSE' ||
+        accountName === 'OTHER_EXPENSES') {
+      cumulativeExpenses += account.net_balance;
+    }
+  });
+  
+  // Cumulative net income (all-time)
+  const cumulativeNetIncome = Math.abs(cumulativeRevenue) - Math.abs(cumulativeExpenses);
+  
+  // Get current period net income for display
   const pl = calculateProfitLoss();
-  const retainedEarnings = pl.netIncome;
+  const currentPeriodNetIncome = pl.netIncome;
   
-  // For balance sheet equation: Assets = Liabilities + Equity
-  // Account balances: Assets (positive), Liabilities (negative), Equity (negative)
-  // We need absolute values for the equation
-  const absAssets = Math.abs(totalAssets);
-  const absLiabilities = Math.abs(totalLiabilities);
-  const absEquity = Math.abs(totalEquity) + retainedEarnings; // Retained earnings already positive
+  // Partnership/LLC Equity Structure (using natural accounting signs):
+  // Assets (DR, positive) + Liabilities (CR, negative) + Equity (CR, negative) = 0
   
-  // Check if balance sheet balances
-  const balances = Math.abs(absAssets - (absLiabilities + absEquity)) < 0.01;
+  // Calculate total equity using natural signs:
+  // - Partner capital: credit balance (negative)
+  // - Cumulative net income: increases equity, so it's a credit (subtract since it's positive)
+  // - Owner distributions: debit balance (positive), reduces equity (add to make equity less negative)
+  const calculatedEquity = partnerCapital + totalEquity - cumulativeNetIncome + ownerDistributions;
+  
+  // Balance sheet equation check: Assets + Liabilities + Equity ≈ 0
+  const balanceCheck = totalAssets + totalLiabilities + calculatedEquity;
+  const balances = Math.abs(balanceCheck) < 0.01;
+  
+  console.log(`Cumulative Net Income (all-time): Revenue(${Math.abs(cumulativeRevenue)}) - Expenses(${Math.abs(cumulativeExpenses)}) = ${cumulativeNetIncome}`);
+  console.log(`Balance Check: Assets(${totalAssets}) + Liabilities(${totalLiabilities}) + Equity(${calculatedEquity}) = ${balanceCheck}`);
 
   return {
     assets,
-    totalAssets: absAssets,
+    totalAssets: Math.abs(totalAssets),
     liabilities,
-    totalLiabilities: absLiabilities,
+    totalLiabilities: Math.abs(totalLiabilities),
     equity,
-    totalEquity: absEquity,
-    retainedEarnings,
+    partnerCapital: Math.abs(partnerCapital),
+    ownerDistributions: Math.abs(ownerDistributions),
+    cumulativeNetIncome,  // All-time net income for balance sheet
+    currentPeriodNetIncome, // Current period for comparison
+    totalEquity: Math.abs(calculatedEquity),
+    retainedEarnings: cumulativeNetIncome, // Use cumulative for balance sheet
     balances
   };
 }
@@ -681,9 +757,9 @@ function calculateProfitLoss() {
     
     // Expense accounts (debits increase expenses)
     // Include all expense types from both Journal DB and Beancount
+    // NOTE: OWNER_DISTRIBUTIONS is NOT an expense - it's an equity distribution
     if (accountName === 'PAYROLL_EXPENSE' || 
         accountName === 'ADJUSTMENT_EXPENSE' ||
-        accountName === 'OWNER_DISTRIBUTIONS' ||
         accountName.startsWith('OPERATING_EXPENSES_') ||
         accountName === 'EQUIPMENT_EXPENSE' ||
         accountName === 'OTHER_EXPENSES') {
@@ -719,9 +795,9 @@ function calculatePriorProfitLoss() {
     }
     
     // Expense accounts - include all types
+    // NOTE: OWNER_DISTRIBUTIONS is NOT an expense - it's an equity distribution
     if (accountName === 'PAYROLL_EXPENSE' || 
         accountName === 'ADJUSTMENT_EXPENSE' ||
-        accountName === 'OWNER_DISTRIBUTIONS' ||
         accountName.startsWith('OPERATING_EXPENSES_') ||
         accountName === 'EQUIPMENT_EXPENSE' ||
         accountName === 'OTHER_EXPENSES') {
@@ -750,7 +826,7 @@ function calculatePercentChange(current: number, prior: number): { value: number
 
 // Calculate Cash Flow Statement
 function calculateCashFlow() {
-  if (!balanceSummary.value || !balanceSummary.value.accounts) {
+  if (!cumulativeBalanceSummary.value || !beginningBalanceSummary.value) {
     return { 
       operatingCash: 0, 
       netCashChange: 0, 
@@ -763,24 +839,33 @@ function calculateCashFlow() {
 
   let collections = 0; // Cash collected from customers
   let payments = 0;    // Cash paid to employees/vendors
+  let beginningCash = 0;
   let endingCash = 0;
 
-  balanceSummary.value.accounts.forEach(account => {
-    if (account.account === 'CASH') {
-      endingCash = account.net_balance;
-    }
-  });
+  // Get beginning cash (cumulative as of day before start date)
+  const beginningCashAccount = beginningBalanceSummary.value.accounts?.find(a => a.account === 'CASH');
+  if (beginningCashAccount) {
+    beginningCash = Math.abs(beginningCashAccount.net_balance);
+  }
 
-  // Calculate cash collections and payments from journals
+  // Get ending cash (cumulative as of end date)
+  const endingCashAccount = cumulativeBalanceSummary.value.accounts?.find(a => a.account === 'CASH');
+  if (endingCashAccount) {
+    endingCash = Math.abs(endingCashAccount.net_balance);
+  }
+
+  // Calculate cash collections and payments from period journals
   const cashJournals = journals.value.filter(j => j.account === 'CASH');
   cashJournals.forEach(j => {
-    if (j.debit > 0) collections += j.debit;
-    if (j.credit > 0) payments += j.credit;
+    if (j.debit > 0) collections += j.debit / 100; // Convert cents to dollars
+    if (j.credit > 0) payments += j.credit / 100; // Convert cents to dollars
   });
 
-  const netCashChange = collections - payments;
-  const beginningCash = endingCash - netCashChange;
+  const netCashChange = endingCash - beginningCash;
   const operatingCash = netCashChange; // Simplified - all cash flow is from operations
+
+  console.log(`Cash Flow: Beginning($${beginningCash}) + Change($${netCashChange}) = Ending($${endingCash})`);
+  console.log(`  Collections: $${collections}, Payments: $${payments}`);
 
   return { 
     operatingCash, 
@@ -876,7 +961,7 @@ function exportTrialBalanceToCSV() {
   const headers = ['Account', 'Category', 'Total Debits', 'Total Credits', 'Net Balance'];
   const rows = balanceSummary.value.accounts.map(account => [
     formatAccountName(account.account),
-    getAccountCategory(account.account),
+    getAccountCategory(account.account, account.account_type),
     (account.total_debits / 100).toFixed(2),
     (account.total_credits / 100).toFixed(2),
     (account.net_balance / 100).toFixed(2)
@@ -1170,6 +1255,9 @@ onMounted(() => {
                         <td class="px-3 py-1 pl-12 text-gray-600 text-xs">
                           <div>{{ formatDate(journal.CreatedAt) }}</div>
                           <div class="text-gray-500">{{ journal.memo || '-' }}</div>
+                          <div v-if="journal.notes" class="text-gray-400 italic text-[10px] mt-0.5">
+                            Note: {{ journal.notes }}
+                          </div>
                         </td>
                         <td class="px-3 py-1 text-right font-mono tabular-nums text-gray-600 text-xs w-28">
                           {{ journal.debit > 0 ? formatCurrency(journal.debit) : '-' }}
@@ -1400,9 +1488,19 @@ onMounted(() => {
               <tr class="bg-gray-100 border-b border-gray-300">
                 <td colspan="2" class="px-3 py-1.5 font-bold text-gray-900 uppercase">Equity</td>
               </tr>
+              
+              <!-- Partner Capital Contributions -->
+              <tr v-if="calculateBalanceSheet().partnerCapital > 0" class="border-b border-gray-50">
+                <td class="px-3 py-1 pl-6 text-gray-700">Partner Capital Contributions</td>
+                <td class="px-3 py-1 text-right font-mono tabular-nums text-gray-900">
+                  {{ formatCurrency(calculateBalanceSheet().partnerCapital) }}
+                </td>
+              </tr>
+              
+              <!-- Other Equity Accounts (if any) -->
               <tr 
                 v-for="eq in calculateBalanceSheet().equity" 
-                :key="eq.account"
+                :key="eq.account" 
                 class="border-b border-gray-50"
               >
                 <td class="px-3 py-1 pl-6 text-gray-700">{{ formatAccountName(eq.account) }}</td>
@@ -1410,17 +1508,28 @@ onMounted(() => {
                   {{ formatCurrency(Math.abs(eq.balance)) }}
                 </td>
               </tr>
+              
+              <!-- Net Income -->
               <tr class="border-b border-gray-50">
-                <td class="px-3 py-1 pl-6 text-gray-700">Retained Earnings</td>
+                <td class="px-3 py-1 pl-6 text-gray-700">Net Income</td>
                 <td 
                   class="px-3 py-1 text-right font-mono tabular-nums"
-                  :class="calculateBalanceSheet().retainedEarnings >= 0 ? 'text-green-700' : 'text-red-700'"
+                  :class="calculateBalanceSheet().cumulativeNetIncome >= 0 ? 'text-green-700' : 'text-red-700'"
                 >
-                  {{ formatCurrency(Math.abs(calculateBalanceSheet().retainedEarnings)) }}
+                  {{ formatCurrency(Math.abs(calculateBalanceSheet().cumulativeNetIncome)) }}
                 </td>
               </tr>
+              
+              <!-- Owner Distributions -->
+              <tr class="border-b border-gray-50" v-if="calculateBalanceSheet().ownerDistributions && calculateBalanceSheet().ownerDistributions > 0">
+                <td class="px-3 py-1 pl-6 text-gray-700">Owner Distributions</td>
+                <td class="px-3 py-1 text-right font-mono tabular-nums text-red-700">
+                  ({{ formatCurrency(calculateBalanceSheet().ownerDistributions || 0) }})
+                </td>
+              </tr>
+              
               <tr class="border-b border-gray-300 bg-gray-50">
-                <td class="px-3 py-1.5 pl-6 font-bold text-gray-900">Total Equity</td>
+                <td class="px-3 py-1.5 pl-6 font-bold text-gray-900">Retained Equity</td>
                 <td class="px-3 py-1.5 text-right font-bold font-mono tabular-nums text-gray-900">
                   {{ formatCurrency(Math.abs(calculateBalanceSheet().totalEquity)) }}
                   <span v-if="!calculateBalanceSheet().balances" class="ml-2 text-xs text-red-600">⚠️</span>
@@ -1489,7 +1598,12 @@ onMounted(() => {
                   <tr v-for="journal in accountJournals" :key="journal.ID" class="border-b border-gray-100 hover:bg-gray-50">
                     <td class="px-2 py-1 text-gray-900 whitespace-nowrap">{{ formatDate(journal.CreatedAt) }}</td>
                     <td class="px-2 py-1 text-gray-700 truncate" :title="journal.sub_account">{{ journal.sub_account || '-' }}</td>
-                    <td class="px-2 py-1 text-gray-600">{{ journal.memo }}</td>
+                    <td class="px-2 py-1 text-gray-600">
+                      <div>{{ journal.memo }}</div>
+                      <div v-if="journal.notes" class="text-gray-400 italic text-[10px] mt-0.5">
+                        Note: {{ journal.notes }}
+                      </div>
+                    </td>
                     <td class="px-2 py-1 text-right font-mono text-gray-900 tabular-nums">
                       {{ journal.debit > 0 ? formatCurrency(journal.debit) : '' }}
                     </td>

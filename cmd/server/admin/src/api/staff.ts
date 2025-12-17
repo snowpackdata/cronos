@@ -61,6 +61,7 @@ export const createStaff = async (staffData: Partial<Staff>): Promise<Staff> => 
     if (staffData.entry_pay_eligible_state) formData.append('entry_pay_eligible_state', staffData.entry_pay_eligible_state);
     if (staffData.employment_status) formData.append('employment_status', staffData.employment_status);
     if (staffData.compensation_type) formData.append('compensation_type', staffData.compensation_type);
+    if ((staffData as any).is_owner !== undefined) formData.append('is_owner', (staffData as any).is_owner.toString());
     
     // Handle headshot file upload
     if ((staffData as any).headshot) {
@@ -114,6 +115,7 @@ export const updateStaff = async (id: number, staffData: Partial<Staff>): Promis
     if (staffData.entry_pay_eligible_state) formData.append('entry_pay_eligible_state', staffData.entry_pay_eligible_state);
     if (staffData.employment_status) formData.append('employment_status', staffData.employment_status);
     if (staffData.compensation_type) formData.append('compensation_type', staffData.compensation_type);
+    if ((staffData as any).is_owner !== undefined) formData.append('is_owner', (staffData as any).is_owner.toString());
     
     // Handle headshot file upload
     if ((staffData as any).headshot) {

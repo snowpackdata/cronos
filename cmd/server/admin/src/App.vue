@@ -215,7 +215,7 @@ const adminNavigationSections = [
     items: [
   { name: 'Accounts', path: '/accounts', icon: 'fa-building' },
   { name: 'Projects', path: '/projects', icon: 'fa-bars-progress' },
-  { name: 'Staff', path: '/staff', icon: 'fa-users' },
+  { name: 'Team', path: '/staff', icon: 'fa-users' },
   { name: 'Billing Codes', path: '/billing-codes', icon: 'fa-barcode' },
   { name: 'Rates', path: '/rates', icon: 'fa-percent' },
       { name: 'Expenses', path: '/expense-config', icon: 'fa-tags' },

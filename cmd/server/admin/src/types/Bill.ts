@@ -91,6 +91,10 @@ export interface Bill {
     id: number;
   };
   file?: string; // GCS file URL for the bill PDF
+  // Reconciliation fields
+  reconciled_offline_journal_id?: number;
+  reconciled_at?: string;
+  reconciled_by?: number;
 }
 
 /**

@@ -15,7 +15,7 @@ export interface ChartOfAccount {
 export interface ChartOfAccountCreate {
   account_code: string;
   account_name: string;
-  account_type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
+  account_type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE' | '';
   description?: string;
   parent_id?: number;
   is_active?: boolean;

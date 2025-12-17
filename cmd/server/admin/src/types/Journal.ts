@@ -9,13 +9,15 @@ export interface Journal {
   sub_account: string;
   invoice_id: number | null;
   bill_id: number | null;
-  memo: string;
+  memo: string; // Source description from original transaction
+  notes?: string; // User-added notes/context
   debit: number;
   credit: number;
 }
 
 export interface AccountBalance {
   account: string;
+  account_type?: string; // From Chart of Accounts: "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
   total_debits: number;
   total_credits: number;
   net_balance: number;
@@ -78,9 +80,41 @@ export function formatAccountName(account: string): string {
 }
 
 // Get account category for grouping
-export function getAccountCategory(account: string): string {
-  // Check expenses first (including EQUIPMENT_EXPENSE, DISTRIBUTIONS)
-  if (account.includes('EXPENSE') || account.includes('OPERATING_EXPENSES') || account.includes('DISTRIBUTIONS')) {
+// If account_type is provided (from Chart of Accounts), use it directly
+// Otherwise fall back to string matching for backward compatibility
+export function getAccountCategory(account: string, accountType?: string): string {
+  // Use account type from Chart of Accounts if available
+  if (accountType) {
+    switch (accountType) {
+      case 'ASSET':
+        return 'Assets';
+      case 'LIABILITY':
+        return 'Liabilities';
+      case 'EQUITY':
+        return 'Equity';
+      case 'REVENUE':
+        return 'Revenue';
+      case 'EXPENSE':
+        return 'Expenses';
+      default:
+        // Fall through to string matching if unknown type
+        break;
+    }
+  }
+  
+  // Fallback to string matching for accounts not in Chart of Accounts
+  // Check equity first (including OWNER_DISTRIBUTIONS which should be equity, not expense)
+  if (account.includes('EQUITY') || account.includes('OWNERSHIP') || account === 'OWNER_DISTRIBUTIONS') {
+    return 'Equity';
+  }
+  // Check liabilities BEFORE expenses (to catch ACCRUED_EXPENSES_PAYABLE, etc.)
+  // This must come before the expense check since some liability accounts contain "EXPENSE" in the name
+  if (account.includes('PAYABLE') || account.includes('ACCRUED_PAYROLL') || account.includes('CREDIT_CARD') || 
+      account.includes('OTHER_LIABILITIES') || account === 'ACCRUED_EXPENSES_PAYABLE') {
+    return 'Liabilities';
+  }
+  // Check expenses (but NOT owner distributions, and NOT payable accounts which were already caught above)
+  if (account.includes('EXPENSE') || account.includes('OPERATING_EXPENSES')) {
     return 'Expenses';
   }
   // Then check assets (EQUIPMENT without _EXPENSE suffix, CASH, etc)
@@ -88,15 +122,8 @@ export function getAccountCategory(account: string): string {
       account === 'EQUIPMENT' || account.includes('OTHER_ASSETS')) {
     return 'Assets';
   }
-  if (account.includes('PAYABLE') || account.includes('ACCRUED_PAYROLL') || account.includes('CREDIT_CARD') || 
-      account.includes('OTHER_LIABILITIES')) {
-    return 'Liabilities';
-  }
   if (account.includes('REVENUE') || account.includes('CREDITS') || account.includes('OTHER_INCOME')) {
     return 'Revenue';
-  }
-  if (account.includes('EQUITY') || account.includes('OWNERSHIP')) {
-    return 'Equity';
   }
   return 'Other';
 }

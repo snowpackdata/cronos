@@ -6,16 +6,21 @@ export interface OfflineJournal {
   description: string;
   debit: number; // in cents
   credit: number; // in cents
+  transaction_group_id?: string; // UUID for grouping paired entries
   content_hash: string;
   source: string;
+  source_file?: string; // File name for CSV imports to track which file the transaction came from
   status: 'pending_review' | 'approved' | 'duplicate' | 'excluded' | 'posted';
   imported_at: string;
   reviewed_at?: string;
   reviewed_by?: number;
   notes?: string;
   reconciled_expense_id?: number;
+  reconciled_bill_id?: number;
+  reconciled_invoice_id?: number;
   reconciled_at?: string;
   reconciled_by?: number;
+  is_already_booked?: boolean;
   CreatedAt: string; // GORM uses uppercase
   UpdatedAt: string; // GORM uses uppercase
   DeletedAt?: string | null; // GORM uses uppercase

@@ -257,6 +257,21 @@
               </div>
             </fieldset>
 
+            <!-- Reimbursable Selection (only if internal expense) -->
+            <div v-if="isInternalExpense" class="py-1 border-b border-gray-100 mt-1.5">
+              <label class="flex items-center">
+                <input
+                  type="checkbox"
+                  v-model="formData.is_reimbursable"
+                  class="h-4 w-4 rounded border-gray-300 text-sage focus:ring-sage"
+                />
+                <span class="ml-2 text-xs font-medium text-gray-900">Reimbursable</span>
+              </label>
+              <p class="mt-1 text-xs text-gray-500">
+                Check if you made this payment with a personal credit card and require reimbursement. 
+              </p>
+            </div>
+
             <!-- Project Selection (only if client expense) -->
             <div v-if="!isInternalExpense" class="py-1 border-b border-gray-100 mt-1.5">
               <label class="block text-xs font-medium text-gray-700 mb-0.5">
@@ -534,6 +549,7 @@ const formData = ref({
   description: '',
   category_id: '',
   tag_ids: [] as number[],
+  is_reimbursable: false,
 });
 
 const isInternalExpense = ref(false); // Track if this is an internal expense (no project)
@@ -650,6 +666,7 @@ function openCreateModal() {
     description: '',
     category_id: '',
     tag_ids: [],
+    is_reimbursable: false,
   };
   selectedReceipt.value = null;
   modalError.value = null;
@@ -671,6 +688,7 @@ function openEditModal(expense: Expense) {
     description: expense.description,
     category_id: String(expense.category_id || ''),
     tag_ids: (expense as any).tags ? (expense as any).tags.map((t: any) => t.ID) : [],
+    is_reimbursable: expense.is_reimbursable || false,
   };
   selectedReceipt.value = null;
   modalError.value = null;
@@ -726,6 +744,10 @@ async function submitForm() {
     formDataToSend.append('description', formData.value.description);
     formDataToSend.append('category_id', formData.value.category_id);
     formDataToSend.append('tag_ids', formData.value.tag_ids.join(',')); // Comma-separated tag IDs
+    // Only include is_reimbursable for internal expenses
+    if (isInternalExpense.value) {
+      formDataToSend.append('is_reimbursable', formData.value.is_reimbursable ? 'true' : 'false');
+    }
     // payment_account_code removed - determined during reconciliation with bank statement
     
     if (selectedReceipt.value) {

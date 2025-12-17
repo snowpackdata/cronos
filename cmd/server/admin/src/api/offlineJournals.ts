@@ -77,6 +77,7 @@ export async function categorizeCSVTransaction(data: {
   from_subaccount: string;
   to_account: string;
   to_subaccount: string;
+  transaction_group_id?: string; // Optional: for precise matching of same-day transactions
 }): Promise<void> {
   await api.post(`${API_BASE}/categorize`, data);
 }
@@ -85,6 +86,7 @@ export async function categorizeCSVTransaction(data: {
 export async function approveTransactionPair(data: {
   date: string;
   description: string;
+  transaction_group_id?: string; // Optional: for precise matching of same-day transactions
 }): Promise<{ message: string; booked: number }> {
   const response = await api.post(`${API_BASE}/approve-transaction`, data);
   return response.data;
@@ -112,5 +114,27 @@ export async function deleteOfflineJournal(id: number): Promise<void> {
 export async function postOfflineJournalsToGL(ids: number[]): Promise<{ message: string; count: string }> {
   const response = await api.post(`${API_BASE}/post-to-gl`, { ids });
   return response.data;
+}
+
+// Get suggested categorizations based on fuzzy matching of description
+export interface SuggestedCategorization {
+  description: string;
+  from_account: string;
+  from_sub_account: string;
+  to_account: string;
+  to_sub_account: string;
+  match_count: number;
+  similarity_score: number;
+  last_used: string;
+}
+
+export async function getSuggestedCategorizations(
+  description: string,
+  limit: number = 5
+): Promise<SuggestedCategorization[]> {
+  const response = await api.get(`${API_BASE}/suggest-categorization`, {
+    params: { description, limit }
+  });
+  return response.data || [];
 }
 

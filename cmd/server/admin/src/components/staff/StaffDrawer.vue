@@ -123,10 +123,13 @@
                       name="email"
                       id="email"
                       v-model="formData.email"
-                      class="mt-2 block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm sm:leading-6"
+                      :disabled="false"
+                      class="mt-2 block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm sm:leading-6 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
                       placeholder="john.doe@snowpackdata.com"
                     />
-                    <p class="mt-1 text-sm text-gray-500">If not provided, will auto-generate from first/last name</p>
+                    <p class="mt-1 text-sm text-gray-500">
+                      {{ isEditing ? 'Updates the user account email address' : 'If not provided, will auto-generate from first/last name' }}
+                    </p>
                   </div>
 
                   <div class="mt-4">
@@ -158,6 +161,20 @@
                       <span class="ml-2 text-sm font-medium text-gray-900">Active in System</span>
                     </label>
                     <p class="mt-1 text-sm text-gray-500">Can access the system and log time entries</p>
+                  </div>
+
+                  <div class="mt-4">
+                    <label for="is_owner" class="flex items-center">
+                      <input
+                        type="checkbox"
+                        name="is_owner"
+                        id="is_owner"
+                        v-model="formData.is_owner"
+                        class="h-4 w-4 rounded border-gray-300 text-sage focus:ring-sage"
+                      />
+                      <span class="ml-2 text-sm font-medium text-gray-900">Company Owner/Partner</span>
+                    </label>
+                    <p class="mt-1 text-sm text-gray-500">Payouts will be classified as equity distributions instead of payroll expenses</p>
                   </div>
                 </div>
 
@@ -418,12 +435,13 @@ const emit = defineEmits<{
 }>();
 
 // Form data
-const formData = ref<Partial<Staff>>({
+const formData = ref<Partial<Staff & { is_owner: boolean }>>({
   first_name: '',
   last_name: '',
   title: '',
   email: '',
   is_active: true,
+  is_owner: false,
   employment_status: EmploymentStatus.ACTIVE,
   start_date: '',
   end_date: '',
@@ -533,6 +551,7 @@ watch(() => props.staffData, (newStaffData) => {
       title: '',
       email: '',
       is_active: true,
+      is_owner: false,
       employment_status: EmploymentStatus.ACTIVE,
       start_date: new Date().toISOString().split('T')[0], // Today's date
       end_date: '',

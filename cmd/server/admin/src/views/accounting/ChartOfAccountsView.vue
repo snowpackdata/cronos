@@ -79,7 +79,7 @@
               <tr class="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" @click="toggleAccount(account.account_code)">
                 <td class="px-3 py-1 text-gray-400">
                   <i 
-                    v-if="getSubaccountsByAccount(account.account_code).length > 0"
+                    v-if="hasSubaccounts(account.account_code)"
                     :class="expandedAccounts.has(account.account_code) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'" 
                     class="text-xs"
                   ></i>
@@ -199,6 +199,7 @@
                 required
                 class="block w-full rounded border-gray-300 text-2xs py-0.5 disabled:bg-gray-100"
               >
+                <option value="" disabled>Select account type...</option>
                 <option value="ASSET">Asset</option>
                 <option value="LIABILITY">Liability</option>
                 <option value="EQUITY">Equity</option>
@@ -363,6 +364,8 @@ import {
 
 const accounts = ref<ChartOfAccount[]>([]);
 const subaccounts = ref<Subaccount[]>([]);
+const subaccountCounts = ref<Map<string, number>>(new Map()); // Cache: account_code -> count of subaccounts
+const loadedSubaccounts = ref<Set<string>>(new Set()); // Track which accounts have loaded subaccounts
 const expandedAccounts = ref<Set<string>>(new Set());
 const isLoading = ref(false);
 const searchQuery = ref('');
@@ -382,7 +385,7 @@ const editingAccountCode = ref<string | null>(null);
 const formData = ref<ChartOfAccountCreate>({
   account_code: '',
   account_name: '',
-  account_type: 'EXPENSE',
+  account_type: '', // Empty default - user must select
   description: '',
   is_active: true,
 });
@@ -428,8 +431,47 @@ function getAccountsByType(type: string) {
   return filteredAccounts.value.filter((acc) => acc.account_type === type);
 }
 
+// Natural sort comparator for subaccount codes (handles numeric prefixes)
+function compareSubaccountCodes(a: string, b: string): number {
+  // Extract numeric prefix if format is "number:name"
+  const aMatch = a.match(/^(\d+):/);
+  const bMatch = b.match(/^(\d+):/);
+  
+  if (aMatch && bMatch) {
+    // Both have numeric prefixes - sort numerically
+    const aNum = parseInt(aMatch[1], 10);
+    const bNum = parseInt(bMatch[1], 10);
+    if (aNum !== bNum) {
+      return aNum - bNum;
+    }
+    // If numbers are equal, fall through to alphabetical sort
+  } else if (aMatch) {
+    // Only a has numeric prefix - it comes first
+    return -1;
+  } else if (bMatch) {
+    // Only b has numeric prefix - it comes first
+    return 1;
+  }
+  
+  // Default alphabetical sort
+  return a.localeCompare(b);
+}
+
 function getSubaccountsByAccount(accountCode: string) {
-  return subaccounts.value.filter((sub) => sub.account_code === accountCode);
+  return subaccounts.value
+    .filter((sub) => sub.account_code === accountCode)
+    .sort((a, b) => compareSubaccountCodes(a.code, b.code));
+}
+
+function hasSubaccounts(accountCode: string): boolean {
+  // Check the count cache first (set during initial account fetch)
+  const count = subaccountCounts.value.get(accountCode);
+  if (count !== undefined) {
+    return count > 0;
+  }
+  
+  // Fallback: check if we've loaded subaccounts for this account
+  return getSubaccountsByAccount(accountCode).length > 0;
 }
 
 async function toggleAccount(accountCode: string) {
@@ -439,14 +481,24 @@ async function toggleAccount(accountCode: string) {
     expandedAccounts.value.add(accountCode);
     
     // Lazy load subaccounts for this account if not already loaded
-    const hasSubaccounts = subaccounts.value.some(sub => sub.account_code === accountCode);
-    if (!hasSubaccounts) {
+    if (!loadedSubaccounts.value.has(accountCode)) {
       try {
         const accountSubaccounts = await getSubaccounts({
           account_code: accountCode,
           active_only: filters.value.activeOnly,
         });
+        
+        // Remove any existing subaccounts for this account (in case of re-fetch)
+        subaccounts.value = subaccounts.value.filter(sub => sub.account_code !== accountCode);
+        
+        // Add the newly fetched subaccounts
         subaccounts.value = [...subaccounts.value, ...accountSubaccounts];
+        
+        // Mark as loaded
+        loadedSubaccounts.value.add(accountCode);
+        
+        // Update the count cache
+        subaccountCounts.value.set(accountCode, accountSubaccounts.length);
       } catch (error) {
         console.error(`Failed to fetch subaccounts for ${accountCode}:`, error);
       }
@@ -476,9 +528,31 @@ async function fetchData() {
       }
     }
 
-    // Don't fetch all subaccounts upfront - only load when accounts are expanded
-    // This dramatically improves performance when there are many subaccounts
-    subaccounts.value = [];
+    // Fetch subaccount counts for ALL accounts to show chevrons correctly
+    // This is a lightweight query that doesn't fetch full subaccount data
+    try {
+      const allSubaccounts = await getSubaccounts({
+        active_only: filters.value.activeOnly,
+      });
+      
+      // Build a count map
+      const countMap = new Map<string, number>();
+      allSubaccounts.forEach(sub => {
+        const current = countMap.get(sub.account_code) || 0;
+        countMap.set(sub.account_code, current + 1);
+      });
+      subaccountCounts.value = countMap;
+    } catch (error) {
+      console.error('Failed to fetch subaccount counts:', error);
+    }
+
+    // Keep cached subaccounts but clear the loaded tracking when filters change
+    // This way we preserve data but re-fetch if user expands again with new filters
+    loadedSubaccounts.value.clear();
+    
+    // Only clear subaccounts if activeOnly filter changed (affects what should be shown)
+    // Otherwise keep the cache
+    // Note: We keep the subaccounts array intact to preserve expanded views
   } catch (error) {
     console.error('Failed to fetch data:', error);
   } finally {
@@ -493,7 +567,7 @@ function openCreateModal() {
   formData.value = {
     account_code: '',
     account_name: '',
-    account_type: 'EXPENSE',
+    account_type: '', // Empty default - user must select
     description: '',
     is_active: true,
   };
@@ -525,6 +599,13 @@ async function submitForm() {
   isSubmitting.value = true;
   modalError.value = null;
   
+  // Validate account type is selected when creating
+  if (!isEditing.value && !formData.value.account_type) {
+    modalError.value = 'Please select an account type';
+    isSubmitting.value = false;
+    return;
+  }
+  
   try {
     if (isEditing.value && editingAccountCode.value) {
       const updateData: ChartOfAccountUpdate = {
@@ -534,6 +615,12 @@ async function submitForm() {
       };
       await updateChartOfAccount(editingAccountCode.value, updateData);
     } else {
+      // Ensure account_type is set before creating
+      if (!formData.value.account_type) {
+        modalError.value = 'Account type is required';
+        isSubmitting.value = false;
+        return;
+      }
       await createChartOfAccount(formData.value);
     }
     await fetchData();
@@ -596,9 +683,21 @@ async function submitSubaccountForm() {
     } else {
       await createSubaccount(subaccountFormData.value);
     }
+    
+    // Refresh data and mark account as needing reload
+    const accountCode = subaccountFormData.value.account_code;
+    loadedSubaccounts.value.delete(accountCode); // Force reload on next expand
     await fetchData();
+    
     // Auto-expand the parent account
-    expandedAccounts.value.add(subaccountFormData.value.account_code);
+    expandedAccounts.value.add(accountCode);
+    
+    // If expanded, trigger a reload of subaccounts
+    if (expandedAccounts.value.has(accountCode)) {
+      await toggleAccount(accountCode); // Close
+      await toggleAccount(accountCode); // Re-open with fresh data
+    }
+    
     closeSubaccountModal();
   } catch (error: any) {
     console.error('Failed to save subaccount:', error);

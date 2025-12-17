@@ -20,6 +20,7 @@ export interface Staff {
   title?: string;
   email?: string;
   is_active?: boolean;
+  is_owner?: boolean;
   employment_status?: 'EMPLOYMENT_STATUS_ACTIVE' | 'EMPLOYMENT_STATUS_INACTIVE' | 'EMPLOYMENT_STATUS_TERMINATED';
   start_date?: string | Date;
   end_date?: string | Date;

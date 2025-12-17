@@ -285,7 +285,7 @@ const markInvoicePaid = async () => {
     showPaymentDateModal.value = false;
     selectedInvoiceForPayment.value = null;
     await fetchInvoices();
-    setTimeout(() => { successMessage.value = null; }, 3000);
+    // Success message stays visible until user dismisses it
   } catch (err) {
     console.error('Error marking invoice as paid:', err);
     invoiceError.value[invoice.ID] = err instanceof Error ? err.message : 'Failed to mark invoice as paid';
@@ -368,8 +368,14 @@ const sendEmailAndInvoice = async () => {
   if (!selectedInvoiceForEmail.value) return;
   
   const invoice = selectedInvoiceForEmail.value;
+  const invoiceNumber = formatInvoiceNumber(invoice);
+  
   invoiceError.value[invoice.ID] = null;
   sendingEmail.value = true;
+  
+  // Close modal immediately and show processing message
+  showEmailModal.value = false;
+  successMessage.value = `Sending invoice #${invoiceNumber}... This may take a moment.`;
   
   try {
     const token = localStorage.getItem('snowpack_token');
@@ -392,13 +398,15 @@ const sendEmailAndInvoice = async () => {
       throw new Error(errorData.error || 'Failed to send email');
     }
     
-    successMessage.value = `Invoice #${formatInvoiceNumber(invoice)} sent via email`;
-    showEmailModal.value = false;
+    // Success - update message (no auto-dismiss, user can close it)
+    successMessage.value = `Invoice #${invoiceNumber} sent successfully!`;
     await fetchInvoices();
-    setTimeout(() => { successMessage.value = null; }, 3000);
   } catch (err) {
     console.error('Error sending invoice email:', err);
-    invoiceError.value[invoice.ID] = err instanceof Error ? err.message : 'Failed to send email';
+    const errorMsg = err instanceof Error ? err.message : 'Failed to send email';
+    successMessage.value = null; // Clear the "sending" message
+    invoiceError.value[invoice.ID] = `Failed to send invoice #${invoiceNumber}: ${errorMsg}`;
+    // Error message stays visible until user dismisses it or page refresh
   } finally {
     sendingEmail.value = false;
   }
@@ -605,8 +613,17 @@ const voidInvoice = async (invoice: Invoice) => {
     </div>
     
     <!-- Success Message -->
-    <div v-if="successMessage" class="mt-4 bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg">
-      <i class="fas fa-check-circle mr-2"></i>{{ successMessage }}
+    <div v-if="successMessage" class="mt-4 bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg flex items-center justify-between">
+      <div class="flex items-center">
+        <i class="fas fa-check-circle mr-2"></i>{{ successMessage }}
+      </div>
+      <button 
+        @click="successMessage = null" 
+        class="ml-4 text-green-600 hover:text-green-800"
+        aria-label="Dismiss"
+      >
+        <i class="fas fa-times"></i>
+      </button>
     </div>
     
     <!-- Invoices Table -->
@@ -656,9 +673,18 @@ const voidInvoice = async (invoice: Invoice) => {
               <td colspan="6" class="px-3 py-3">
                 <div class="bg-white rounded-lg border border-gray-200 p-3">
                   <!-- Error Message -->
-                  <div v-if="invoiceError[invoice.ID]" class="mb-3 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-                    <i class="fas fa-exclamation-circle mr-2"></i>{{ invoiceError[invoice.ID] }}
+                  <div v-if="invoiceError[invoice.ID]" class="mb-3 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm flex items-center justify-between">
+                    <div class="flex items-center flex-1">
+                      <i class="fas fa-exclamation-circle mr-2"></i>{{ invoiceError[invoice.ID] }}
                     </div>
+                    <button 
+                      @click="invoiceError[invoice.ID] = null" 
+                      class="ml-4 text-red-600 hover:text-red-800 flex-shrink-0"
+                      aria-label="Dismiss"
+                    >
+                      <i class="fas fa-times"></i>
+                    </button>
+                  </div>
 
                   <div class="flex justify-between items-start mb-3">
                     <div class="flex items-center gap-3">

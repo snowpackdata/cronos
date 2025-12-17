@@ -359,6 +359,56 @@ const canApproveInvoice = (invoice: DraftInvoice | null): boolean => {
   return allEntriesReady && allAdjustmentsReady;
 };
 
+// Check if invoice has unaccepted entries
+const hasUnacceptedEntries = (invoice: DraftInvoice): boolean => {
+  const hasUnacceptedEntry = invoice.line_items.some(entry => 
+    entry.state !== 'ENTRY_STATE_APPROVED' && entry.state !== 'ENTRY_STATE_VOID'
+  );
+  const hasUnacceptedAdjustment = invoice.adjustments?.some(adjustment => 
+    adjustment.state !== 'ADJUSTMENT_STATE_APPROVED' && adjustment.state !== 'ADJUSTMENT_STATE_VOID'
+  );
+  return hasUnacceptedEntry || hasUnacceptedAdjustment;
+};
+
+// Check if invoice is overdue (period ended > 14 days ago)
+const isOverdue = (invoice: DraftInvoice): boolean => {
+  if (!isInvoicePeriodEnded(invoice)) return false;
+  const periodEnd = new Date(invoice.period_end);
+  const now = new Date();
+  const daysDiff = Math.floor((now.getTime() - periodEnd.getTime()) / (1000 * 60 * 60 * 24));
+  return daysDiff > 14;
+};
+
+// Categorize invoices into Kanban columns
+const needsReviewInvoices = computed(() => {
+  return draftInvoices.value.filter(inv => hasUnacceptedEntries(inv));
+});
+
+const draftInvoicesColumn = computed(() => {
+  return draftInvoices.value.filter(inv => 
+    !hasUnacceptedEntries(inv) && 
+    canApproveInvoice(inv) && 
+    !isInvoicePeriodEnded(inv)
+  );
+});
+
+const readyInvoices = computed(() => {
+  return draftInvoices.value.filter(inv => 
+    !hasUnacceptedEntries(inv) && 
+    canApproveInvoice(inv) && 
+    isInvoicePeriodEnded(inv) && 
+    !isOverdue(inv)
+  );
+});
+
+const overdueInvoices = computed(() => {
+  return draftInvoices.value.filter(inv => 
+    !hasUnacceptedEntries(inv) && 
+    canApproveInvoice(inv) && 
+    isOverdue(inv)
+  );
+});
+
 // Approve all draft entries and adjustments for an invoice
 const handleApproveAll = async (invoice: DraftInvoice) => {
   try {
@@ -386,22 +436,112 @@ const handleApproveAll = async (invoice: DraftInvoice) => {
 
 <template>
   <div class="px-4 sm:px-6 lg:px-8">
-    <div class="sm:flex sm:items-center sm:justify-between">
-      <div class="sm:flex-auto">
-        <h1 class="text-lg font-medium text-gray-900">Draft Invoices</h1>
-        <p class="mt-2 text-sm text-gray-500">Review and approve draft invoices before sending them to clients.</p>
-      </div>
-      
-      <!-- Invoice selector dropdown -->
-      <div v-if="!isLoading && draftInvoices.length > 0" class="mt-4 sm:mt-0 sm:ml-16 sm:flex-none min-w-96">
-        <select
-          v-model="selectedInvoiceId"
-          class="block w-full rounded-md border-gray-300 py-2 pl-3 pr-10 text-sm focus:border-sage focus:outline-none focus:ring-sage"
-        >
-          <option v-for="inv in draftInvoices" :key="inv.ID" :value="inv.ID">
-            {{ inv.invoice_name }} - {{ inv.account_name }}
-          </option>
-        </select>
+    <!-- Kanban Board -->
+    <div v-if="!isLoading && draftInvoices.length > 0" class="mt-4 mb-6">
+      <div class="grid grid-cols-4 gap-3">
+        <!-- Needs Review Column -->
+        <div class="bg-gray-50 rounded-lg p-2 min-h-[120px] flex flex-col">
+          <div class="text-xs font-semibold text-gray-700 mb-2 px-1 flex-shrink-0">
+            Needs Review ({{ needsReviewInvoices.length }})
+          </div>
+          <div class="space-y-2 overflow-y-auto flex-1" style="max-height: 180px;">
+            <button
+              v-for="inv in needsReviewInvoices"
+              :key="inv.ID"
+              @click="selectedInvoiceId = inv.ID"
+              :class="[
+                'w-full text-left px-2 py-2 rounded-md text-xs transition-all',
+                selectedInvoiceId === inv.ID
+                  ? 'bg-red-100 border-2 border-red-400 shadow-md'
+                  : 'bg-white border border-gray-200 hover:border-red-300 hover:shadow-sm'
+              ]"
+            >
+              <div class="font-medium text-gray-900 truncate">{{ inv.account_name }}</div>
+              <div v-if="inv.project_name" class="text-gray-600 truncate text-[10px] mt-0.5">{{ inv.project_name }}</div>
+              <div class="text-gray-500 text-[10px] mt-1">
+                {{ formatDate(inv.period_start) }} - {{ formatDate(inv.period_end) }}
+              </div>
+            </button>
+          </div>
+        </div>
+        
+        <!-- Draft Column -->
+        <div class="bg-gray-50 rounded-lg p-2 min-h-[120px] flex flex-col">
+          <div class="text-xs font-semibold text-gray-700 mb-2 px-1 flex-shrink-0">
+            Draft ({{ draftInvoicesColumn.length }})
+          </div>
+          <div class="space-y-2 overflow-y-auto flex-1" style="max-height: 180px;">
+            <button
+              v-for="inv in draftInvoicesColumn"
+              :key="inv.ID"
+              @click="selectedInvoiceId = inv.ID"
+              :class="[
+                'w-full text-left px-2 py-2 rounded-md text-xs transition-all',
+                selectedInvoiceId === inv.ID
+                  ? 'bg-blue-100 border-2 border-blue-400 shadow-md'
+                  : 'bg-white border border-gray-200 hover:border-blue-300 hover:shadow-sm'
+              ]"
+            >
+              <div class="font-medium text-gray-900 truncate">{{ inv.account_name }}</div>
+              <div v-if="inv.project_name" class="text-gray-600 truncate text-[10px] mt-0.5">{{ inv.project_name }}</div>
+              <div class="text-gray-500 text-[10px] mt-1">
+                {{ formatDate(inv.period_start) }} - {{ formatDate(inv.period_end) }}
+              </div>
+            </button>
+          </div>
+        </div>
+        
+        <!-- Ready Column -->
+        <div class="bg-gray-50 rounded-lg p-2 min-h-[120px] flex flex-col">
+          <div class="text-xs font-semibold text-gray-700 mb-2 px-1 flex-shrink-0">
+            Ready ({{ readyInvoices.length }})
+          </div>
+          <div class="space-y-2 overflow-y-auto flex-1" style="max-height: 180px;">
+            <button
+              v-for="inv in readyInvoices"
+              :key="inv.ID"
+              @click="selectedInvoiceId = inv.ID"
+              :class="[
+                'w-full text-left px-2 py-2 rounded-md text-xs transition-all',
+                selectedInvoiceId === inv.ID
+                  ? 'bg-green-100 border-2 border-green-400 shadow-md'
+                  : 'bg-white border border-gray-200 hover:border-green-300 hover:shadow-sm'
+              ]"
+            >
+              <div class="font-medium text-gray-900 truncate">{{ inv.account_name }}</div>
+              <div v-if="inv.project_name" class="text-gray-600 truncate text-[10px] mt-0.5">{{ inv.project_name }}</div>
+              <div class="text-gray-500 text-[10px] mt-1">
+                {{ formatDate(inv.period_start) }} - {{ formatDate(inv.period_end) }}
+              </div>
+            </button>
+          </div>
+        </div>
+        
+        <!-- Overdue Column -->
+        <div class="bg-gray-50 rounded-lg p-2 min-h-[120px] flex flex-col">
+          <div class="text-xs font-semibold text-gray-700 mb-2 px-1 flex-shrink-0">
+            Overdue ({{ overdueInvoices.length }})
+          </div>
+          <div class="space-y-2 overflow-y-auto flex-1" style="max-height: 180px;">
+            <button
+              v-for="inv in overdueInvoices"
+              :key="inv.ID"
+              @click="selectedInvoiceId = inv.ID"
+              :class="[
+                'w-full text-left px-2 py-2 rounded-md text-xs transition-all',
+                selectedInvoiceId === inv.ID
+                  ? 'bg-orange-100 border-2 border-orange-400 shadow-md'
+                  : 'bg-white border border-gray-200 hover:border-orange-300 hover:shadow-sm'
+              ]"
+            >
+              <div class="font-medium text-gray-900 truncate">{{ inv.account_name }}</div>
+              <div v-if="inv.project_name" class="text-gray-600 truncate text-[10px] mt-0.5">{{ inv.project_name }}</div>
+              <div class="text-gray-500 text-[10px] mt-1">
+                {{ formatDate(inv.period_start) }} - {{ formatDate(inv.period_end) }}
+              </div>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 

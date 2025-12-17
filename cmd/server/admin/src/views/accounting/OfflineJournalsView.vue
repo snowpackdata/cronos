@@ -252,6 +252,14 @@
         </span>
         <div class="space-x-1">
           <button
+            v-if="hasSelectedUnclassifiedEntries"
+            @click="openBulkCategorizeModal"
+            class="px-2 py-1 bg-purple-600 text-white text-xs rounded hover:bg-purple-700"
+          >
+            <i class="fas fa-tags mr-1"></i>
+            Bulk Categorize
+          </button>
+          <button
             v-if="hasSelectedPendingEntries"
             @click="bulkUpdate('approved')"
             class="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700"
@@ -306,9 +314,9 @@
           <colgroup>
             <col class="w-8"> <!-- Checkbox -->
             <col class="w-20"> <!-- Date -->
-            <col class="w-32"> <!-- Account -->
+            <col class="w-48"> <!-- Account (wider) -->
             <col class="w-28"> <!-- Sub-Account -->
-            <col> <!-- Description (flexible) -->
+            <col class="w-64"> <!-- Description (fixed width) -->
             <col class="w-24"> <!-- Debit -->
             <col class="w-24"> <!-- Credit -->
             <col class="w-20"> <!-- Status -->
@@ -324,26 +332,50 @@
                   class="rounded"
                 />
               </th>
-              <th class="px-2 py-1 text-left text-xs font-semibold text-gray-700 uppercase">
+              <th 
+                @click="toggleSort('date')" 
+                class="px-2 py-1 text-left text-xs font-semibold text-gray-700 uppercase cursor-pointer hover:bg-gray-100"
+              >
                 Date
+                <i v-if="sortColumn === 'date'" :class="['fas ml-1', sortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down']"></i>
               </th>
-              <th class="px-2 py-1 text-left text-xs font-semibold text-gray-700 uppercase">
+              <th 
+                @click="toggleSort('account')" 
+                class="px-2 py-1 text-left text-xs font-semibold text-gray-700 uppercase cursor-pointer hover:bg-gray-100"
+              >
                 Account
+                <i v-if="sortColumn === 'account'" :class="['fas ml-1', sortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down']"></i>
               </th>
               <th class="px-2 py-1 text-left text-xs font-semibold text-gray-700 uppercase">
                 Sub-Account
               </th>
-              <th class="px-2 py-1 text-left text-xs font-semibold text-gray-700 uppercase">
+              <th 
+                @click="toggleSort('description')" 
+                class="px-2 py-1 text-left text-xs font-semibold text-gray-700 uppercase cursor-pointer hover:bg-gray-100"
+              >
                 Description
+                <i v-if="sortColumn === 'description'" :class="['fas ml-1', sortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down']"></i>
               </th>
-              <th class="px-1.5 py-1 text-right text-xs font-semibold text-gray-700 uppercase">
+              <th 
+                @click="toggleSort('debit')" 
+                class="px-1.5 py-1 text-right text-xs font-semibold text-gray-700 uppercase cursor-pointer hover:bg-gray-100"
+              >
                 Debit
+                <i v-if="sortColumn === 'debit'" :class="['fas ml-1', sortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down']"></i>
               </th>
-              <th class="px-1.5 py-1 text-right text-xs font-semibold text-gray-700 uppercase">
+              <th 
+                @click="toggleSort('credit')" 
+                class="px-1.5 py-1 text-right text-xs font-semibold text-gray-700 uppercase cursor-pointer hover:bg-gray-100"
+              >
                 Credit
+                <i v-if="sortColumn === 'credit'" :class="['fas ml-1', sortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down']"></i>
               </th>
-              <th class="px-1 py-1 text-center text-xs font-semibold text-gray-700 uppercase">
+              <th 
+                @click="toggleSort('status')" 
+                class="px-1 py-1 text-center text-xs font-semibold text-gray-700 uppercase cursor-pointer hover:bg-gray-100"
+              >
                 Status
+                <i v-if="sortColumn === 'status'" :class="['fas ml-1', sortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down']"></i>
               </th>
               <th class="px-1 py-1 text-center text-xs font-semibold text-gray-700 uppercase">
                 Actions
@@ -365,11 +397,8 @@
               v-else
               v-for="journal in filteredJournals"
               :key="journal.ID"
-              :class="[
-                'hover:bg-gray-50',
-                journal.account === 'UNCLASSIFIED' ? 'cursor-pointer' : ''
-              ]"
-              @click="journal.account === 'UNCLASSIFIED' ? openCategorizeModal(journal) : null"
+              class="hover:bg-gray-50 cursor-pointer"
+              @click="openCategorizeModal(journal)"
             >
               <td class="px-2 py-1">
                 <input
@@ -400,12 +429,21 @@
                   >
                     <i :class="['fas', journal.notes ? 'fa-sticky-note' : 'fa-plus-circle', 'text-xs']"></i>
                   </button>
-                  <span 
-                    class="truncate" 
-                    :title="journal.description"
-                  >
-                    {{ journal.description }}
-                  </span>
+                  <div class="flex flex-col min-w-0 flex-1">
+                    <span 
+                      class="truncate" 
+                      :title="journal.description"
+                    >
+                      {{ journal.description }}
+                    </span>
+                    <span 
+                      v-if="journal.source_file" 
+                      class="text-[10px] text-gray-400 truncate"
+                      :title="journal.source_file"
+                    >
+                      File: {{ journal.source_file }}
+                    </span>
+                  </div>
                 </div>
               </td>
               <td class="px-1.5 py-1 text-xs text-right text-gray-900 font-mono tabular-nums truncate">
@@ -432,20 +470,54 @@
                   </button>
                   <!-- Match to Expense button for approved payment entries -->
                   <button
-                    v-if="journal.status === 'approved' && !journal.reconciled_expense_id && (journal.debit > 0 || journal.credit > 0)"
+                    v-if="journal.status === 'approved' && !journal.reconciled_expense_id && !journal.reconciled_bill_id && (journal.debit > 0 || journal.credit > 0)"
                     @click.stop="openReconcileModal(journal)"
                     class="text-purple-600 hover:text-purple-900"
                     title="Match to Expense"
                   >
                     <i class="fas fa-link text-xs"></i>
                   </button>
-                  <!-- Reconciled indicator -->
+                  <!-- Match to Payroll Bill button for approved payment entries -->
+                  <button
+                    v-if="journal.status === 'approved' && !journal.reconciled_expense_id && !journal.reconciled_bill_id && !journal.reconciled_invoice_id && (journal.debit > 0 || journal.credit > 0)"
+                    @click.stop="openPayrollReconcileModal(journal)"
+                    class="text-green-600 hover:text-green-900"
+                    title="Match to Payroll Bill"
+                  >
+                    <i class="fas fa-user-tie text-xs"></i>
+                  </button>
+                  <!-- Match to Invoice (Client Payment) button for approved deposit entries -->
+                  <button
+                    v-if="journal.status === 'approved' && !journal.reconciled_expense_id && !journal.reconciled_bill_id && !journal.reconciled_invoice_id && (journal.debit > 0 || journal.credit > 0)"
+                    @click.stop="openInvoiceReconcileModal(journal)"
+                    class="text-blue-600 hover:text-blue-900"
+                    title="Match to Invoice Payment"
+                  >
+                    <i class="fas fa-file-invoice-dollar text-xs"></i>
+                  </button>
+                  <!-- Reconciled to expense indicator -->
                   <span
                     v-if="journal.reconciled_expense_id"
                     class="text-purple-600"
                     title="Reconciled with expense"
                   >
                     <i class="fas fa-check-circle text-xs"></i>
+                  </span>
+                  <!-- Reconciled to bill indicator -->
+                  <span
+                    v-if="journal.reconciled_bill_id"
+                    class="text-green-600"
+                    title="Reconciled with payroll bill"
+                  >
+                    <i class="fas fa-user-check text-xs"></i>
+                  </span>
+                  <!-- Reconciled to invoice indicator -->
+                  <span
+                    v-if="journal.reconciled_invoice_id"
+                    class="text-blue-600"
+                    title="Reconciled with invoice payment"
+                  >
+                    <i class="fas fa-file-invoice text-xs"></i>
                   </span>
                   <!-- Reset button for duplicate/excluded entries -->
                   <button
@@ -492,42 +564,43 @@
         <div
           @click.stop
           :style="notePopoverStyle"
-          class="pointer-events-auto absolute w-72 transform rounded bg-white shadow-lg ring-1 ring-black ring-opacity-5"
+          class="pointer-events-auto absolute w-64 transform rounded bg-yellow-50 shadow-lg ring-1 ring-yellow-200"
         >
-          <div class="p-2">
-            <div class="flex items-start gap-2">
+          <div class="p-1.5">
+            <div class="flex items-start gap-1.5">
               <div class="shrink-0">
-                <i class="fas fa-sticky-note text-amber-500 text-xs"></i>
+                <i class="fas fa-sticky-note text-amber-500 text-[10px]"></i>
               </div>
               <div class="flex-1 min-w-0">
-                <div class="flex items-center justify-between mb-1">
-                  <p class="text-2xs font-medium text-gray-900">Note</p>
+                <div class="flex items-center justify-between mb-0.5">
+                  <p class="text-[10px] font-medium text-gray-900 leading-tight">Note</p>
                   <button
                     @click="closeNotePopover"
                     class="inline-flex rounded text-gray-400 hover:text-gray-500 focus:outline-none"
                   >
                     <span class="sr-only">Close</span>
-                    <i class="fas fa-times text-2xs"></i>
+                    <i class="fas fa-times text-[9px]"></i>
                   </button>
                 </div>
                 <textarea
                   ref="noteTextarea"
                   v-model="notePopoverText"
                   placeholder="Add a note..."
-                  class="w-full px-1.5 py-1 text-2xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-transparent resize-none"
+                  style="font-size: 10px; line-height: 1.2;"
+                  class="w-full px-1 py-0.5 border border-yellow-200 rounded bg-yellow-50 focus:outline-none focus:ring-1 focus:ring-amber-400 focus:border-transparent resize-none"
                   rows="2"
                   @keydown.escape="closeNotePopover"
                 ></textarea>
-                <div class="flex justify-end gap-1 mt-1.5">
+                <div class="flex justify-end gap-1 mt-1">
                   <button
                     @click="closeNotePopover"
-                    class="px-1.5 py-0.5 text-2xs text-gray-700 hover:text-gray-900 focus:outline-none"
+                    class="px-1.5 py-0.5 text-[10px] leading-none text-gray-700 hover:text-gray-900 focus:outline-none"
                   >
                     Cancel
                   </button>
                   <button
                     @click="saveNoteFromPopover"
-                    class="px-2 py-0.5 text-2xs bg-amber-600 text-white rounded hover:bg-amber-700 focus:outline-none"
+                    class="px-1.5 py-0.5 text-[10px] leading-none bg-amber-600 text-white rounded hover:bg-amber-700 focus:outline-none"
                   >
                     Save
                   </button>
@@ -684,6 +757,194 @@
       </div>
     </div>
 
+    <!-- Reconcile to Payroll Bill Modal -->
+    <div
+      v-if="payrollReconcileModalOpen"
+      @click="closePayrollReconcileModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-gray-500/75"
+    >
+      <div
+        @click.stop
+        class="bg-white rounded-lg shadow-xl w-full max-w-3xl mx-4"
+      >
+        <div class="bg-green-600 px-4 py-3 rounded-t-lg flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-white">
+            <i class="fas fa-user-tie mr-2"></i>
+            Match Transaction to Payroll Bill
+          </h3>
+          <button @click="closePayrollReconcileModal" class="text-white hover:text-gray-200">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        <div class="p-4">
+          <!-- Transaction Info -->
+          <div v-if="selectedJournalForPayrollReconcile" class="bg-gray-50 rounded p-3 mb-4">
+            <div class="text-xs text-gray-700 mb-2 font-semibold">Transaction Details:</div>
+            <div class="grid grid-cols-3 gap-3 text-xs">
+              <div>
+                <span class="text-gray-600">Date:</span>
+                <span class="ml-1 font-medium">{{ formatDate(selectedJournalForPayrollReconcile.date) }}</span>
+              </div>
+              <div>
+                <span class="text-gray-600">Account:</span>
+                <span class="ml-1 font-medium">{{ selectedJournalForPayrollReconcile.account }}</span>
+              </div>
+              <div>
+                <span class="text-gray-600">Amount:</span>
+                <span class="ml-1 font-medium font-mono">{{ formatCurrency(selectedJournalForPayrollReconcile.debit || selectedJournalForPayrollReconcile.credit) }}</span>
+              </div>
+            </div>
+            <div class="mt-2 text-xs">
+              <span class="text-gray-600">Description:</span>
+              <span class="ml-1">{{ selectedJournalForPayrollReconcile.description }}</span>
+            </div>
+          </div>
+
+          <!-- Search for Bills -->
+          <div class="mb-4">
+            <label class="block text-xs font-medium text-gray-700 mb-1">Search for matching payroll bill:</label>
+            <input
+              v-model="billSearchQuery"
+              @input="searchBillsForReconcile"
+              type="text"
+              placeholder="Search by employee name..."
+              class="w-full px-3 py-2 text-xs border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
+            />
+          </div>
+
+          <!-- Matching Bills -->
+          <div v-if="matchingBills.length > 0" class="border rounded max-h-80 overflow-y-auto">
+            <table class="w-full text-xs">
+              <thead class="bg-gray-50 sticky top-0">
+                <tr>
+                  <th class="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Bill #</th>
+                  <th class="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Employee</th>
+                  <th class="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Paid Date</th>
+                  <th class="px-2 py-1.5 text-right text-xs font-semibold text-gray-700">Amount</th>
+                  <th class="px-2 py-1.5 text-center text-xs font-semibold text-gray-700">Action</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200">
+                <tr v-for="bill in matchingBills" :key="bill.ID" class="hover:bg-gray-50">
+                  <td class="px-2 py-1.5 text-gray-900">#{{ bill.ID }}</td>
+                  <td class="px-2 py-1.5 text-gray-700">{{ bill.user?.first_name }} {{ bill.user?.last_name }}</td>
+                  <td class="px-2 py-1.5 text-gray-700">{{ bill.closed_at ? formatDate(bill.closed_at) : '-' }}</td>
+                  <td class="px-2 py-1.5 text-right font-mono text-gray-900">{{ formatCurrency(bill.total_amount) }}</td>
+                  <td class="px-2 py-1.5 text-center">
+                    <button
+                      @click="reconcileBill(bill.ID)"
+                      class="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700"
+                    >
+                      <i class="fas fa-check mr-1"></i>
+                      Match
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else-if="billSearchQuery || selectedJournalForPayrollReconcile" class="text-xs text-gray-500 text-center py-4">
+            No matching payroll bills found
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reconcile to Invoice (Client Payment) Modal -->
+    <div
+      v-if="invoiceReconcileModalOpen"
+      @click="closeInvoiceReconcileModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-gray-500/75"
+    >
+      <div
+        @click.stop
+        class="bg-white rounded-lg shadow-xl w-full max-w-3xl mx-4"
+      >
+        <div class="bg-blue-600 px-4 py-3 rounded-t-lg flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-white">
+            <i class="fas fa-file-invoice-dollar mr-2"></i>
+            Match Transaction to Invoice Payment
+          </h3>
+          <button @click="closeInvoiceReconcileModal" class="text-white hover:text-gray-200">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        <div class="p-4">
+          <!-- Transaction Info -->
+          <div v-if="selectedJournalForInvoiceReconcile" class="bg-gray-50 rounded p-3 mb-4">
+            <div class="text-xs text-gray-700 mb-2 font-semibold">Transaction Details:</div>
+            <div class="grid grid-cols-3 gap-3 text-xs">
+              <div>
+                <span class="text-gray-600">Date:</span>
+                <span class="ml-1 font-medium">{{ formatDate(selectedJournalForInvoiceReconcile.date) }}</span>
+              </div>
+              <div>
+                <span class="text-gray-600">Account:</span>
+                <span class="ml-1 font-medium">{{ selectedJournalForInvoiceReconcile.account }}</span>
+              </div>
+              <div>
+                <span class="text-gray-600">Amount:</span>
+                <span class="ml-1 font-medium font-mono">{{ formatCurrency(selectedJournalForInvoiceReconcile.debit || selectedJournalForInvoiceReconcile.credit) }}</span>
+              </div>
+            </div>
+            <div class="mt-2 text-xs">
+              <span class="text-gray-600">Description:</span>
+              <span class="ml-1">{{ selectedJournalForInvoiceReconcile.description }}</span>
+            </div>
+          </div>
+
+          <!-- Search for Invoices -->
+          <div class="mb-4">
+            <label class="block text-xs font-medium text-gray-700 mb-1">Search for matching invoice:</label>
+            <input
+              v-model="invoiceSearchQuery"
+              @input="searchInvoicesForReconcile"
+              type="text"
+              placeholder="Search by client or project name..."
+              class="w-full px-3 py-2 text-xs border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+
+          <!-- Matching Invoices -->
+          <div v-if="matchingInvoices.length > 0" class="border rounded max-h-80 overflow-y-auto">
+            <table class="w-full text-xs">
+              <thead class="bg-gray-50 sticky top-0">
+                <tr>
+                  <th class="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Invoice</th>
+                  <th class="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Client</th>
+                  <th class="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Project</th>
+                  <th class="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Paid Date</th>
+                  <th class="px-2 py-1.5 text-right text-xs font-semibold text-gray-700">Amount</th>
+                  <th class="px-2 py-1.5 text-center text-xs font-semibold text-gray-700">Action</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200">
+                <tr v-for="invoice in matchingInvoices" :key="invoice.ID" class="hover:bg-gray-50">
+                  <td class="px-2 py-1.5 text-gray-900">{{ invoice.name || `#${invoice.ID}` }}</td>
+                  <td class="px-2 py-1.5 text-gray-700">{{ invoice.account?.name || '-' }}</td>
+                  <td class="px-2 py-1.5 text-gray-700">{{ invoice.project?.name || '-' }}</td>
+                  <td class="px-2 py-1.5 text-gray-700">{{ invoice.closed_at ? formatDate(invoice.closed_at) : '-' }}</td>
+                  <td class="px-2 py-1.5 text-right font-mono text-gray-900">{{ formatDollars(invoice.total_amount) }}</td>
+                  <td class="px-2 py-1.5 text-center">
+                    <button
+                      @click="reconcileInvoice(invoice.ID)"
+                      class="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                    >
+                      <i class="fas fa-check mr-1"></i>
+                      Match
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else-if="invoiceSearchQuery || selectedJournalForInvoiceReconcile" class="text-xs text-gray-500 text-center py-4">
+            No matching invoices found
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Edit Offline Journal Modal -->
     <div
       v-if="editModalOpen"
@@ -782,6 +1043,45 @@
             </p>
           </div>
 
+          <!-- Suggested Categorizations -->
+          <div v-if="suggestedCategorizations.length > 0" class="mb-4">
+            <h4 class="text-xs font-semibold text-gray-900 mb-2">
+              <i class="fas fa-lightbulb text-yellow-500 mr-1"></i>
+              Suggested Categorizations
+            </h4>
+            <div class="space-y-1 max-h-40 overflow-y-auto">
+              <div
+                v-for="(suggestion, index) in suggestedCategorizations"
+                :key="index"
+                @click="applySuggestedCategorization(suggestion)"
+                class="flex items-center justify-between p-2 bg-gray-50 hover:bg-blue-50 rounded cursor-pointer border border-gray-200 hover:border-blue-300 transition-colors"
+              >
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 text-2xs">
+                    <span class="font-medium text-gray-900 truncate">{{ suggestion.description }}</span>
+                    <span class="px-1 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-semibold">
+                      {{ Math.round(suggestion.similarity_score * 100) }}% match
+                    </span>
+                    <span v-if="suggestion.match_count > 1" class="px-1 py-0.5 bg-green-100 text-green-700 rounded text-[10px]">
+                      Used {{ suggestion.match_count }}x
+                    </span>
+                  </div>
+                  <div class="text-[10px] text-gray-600 mt-0.5">
+                    DR: {{ suggestion.from_account }}{{ suggestion.from_sub_account ? '/' + suggestion.from_sub_account : '' }}
+                    <i class="fas fa-arrow-right mx-1"></i>
+                    CR: {{ suggestion.to_account }}{{ suggestion.to_sub_account ? '/' + suggestion.to_sub_account : '' }}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="ml-2 px-2 py-1 text-[10px] bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div class="grid grid-cols-2 gap-4 mb-4">
             <!-- Debit Side -->
             <div class="border-2 border-green-200 bg-green-50 rounded p-3">
@@ -803,13 +1103,24 @@
                   </select>
                 </div>
                 <div>
-                  <label class="block text-2xs text-gray-700 mb-1">Subaccount</label>
-                  <select v-model="categorizeForm.debitSubaccount" class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-sage">
-                    <option value="">None</option>
+                  <label class="block text-2xs text-gray-700 mb-1">
+                    Subaccount
+                    <span v-if="hasSubaccounts(categorizeForm.debitAccount)" class="text-red-600">*</span>
+                  </label>
+                  <select 
+                    v-model="categorizeForm.debitSubaccount" 
+                    class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-sage"
+                    :class="{ 'border-red-300 bg-red-50': hasSubaccounts(categorizeForm.debitAccount) && !categorizeForm.debitSubaccount }"
+                  >
+                    <option value="" v-if="!hasSubaccounts(categorizeForm.debitAccount)">None</option>
+                    <option value="" v-else disabled>Select subaccount...</option>
                     <option v-for="sub in getSubaccountsForAccount(categorizeForm.debitAccount)" :key="sub.code" :value="sub.code">
                       {{ sub.name }}
                     </option>
                   </select>
+                  <p v-if="hasSubaccounts(categorizeForm.debitAccount) && !categorizeForm.debitSubaccount" class="text-2xs text-red-600 mt-0.5">
+                    *required
+                  </p>
                 </div>
               </div>
             </div>
@@ -834,13 +1145,24 @@
                   </select>
                 </div>
                 <div>
-                  <label class="block text-2xs text-gray-700 mb-1">Subaccount</label>
-                  <select v-model="categorizeForm.creditSubaccount" class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-sage">
-                    <option value="">None</option>
+                  <label class="block text-2xs text-gray-700 mb-1">
+                    Subaccount
+                    <span v-if="hasSubaccounts(categorizeForm.creditAccount)" class="text-red-600">*</span>
+                  </label>
+                  <select 
+                    v-model="categorizeForm.creditSubaccount" 
+                    class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-sage"
+                    :class="{ 'border-red-300 bg-red-50': hasSubaccounts(categorizeForm.creditAccount) && !categorizeForm.creditSubaccount }"
+                  >
+                    <option value="" v-if="!hasSubaccounts(categorizeForm.creditAccount)">None</option>
+                    <option value="" v-else disabled>Select subaccount...</option>
                     <option v-for="sub in getSubaccountsForAccount(categorizeForm.creditAccount)" :key="sub.code" :value="sub.code">
                       {{ sub.name }}
                     </option>
                   </select>
+                  <p v-if="hasSubaccounts(categorizeForm.creditAccount) && !categorizeForm.creditSubaccount" class="text-2xs text-red-600 mt-0.5">
+                    *required
+                  </p>
                 </div>
               </div>
             </div>
@@ -855,10 +1177,179 @@
             </button>
             <button
               @click="saveCategorization"
-              :disabled="!categorizeForm.debitAccount || !categorizeForm.creditAccount"
+              :disabled="!isCategorizeFormValid"
               class="px-3 py-1.5 text-xs bg-sage text-white rounded hover:bg-sage-dark disabled:bg-gray-300 disabled:cursor-not-allowed"
             >
-              Save & Categorize
+              {{ isEditingCategorization ? 'Update' : 'Save & Categorize' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bulk Categorize Modal -->
+    <div
+      v-if="bulkCategorizeModalOpen"
+      @click="closeBulkCategorizeModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-gray-500/75"
+    >
+      <div
+        @click.stop
+        class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4"
+      >
+        <div class="bg-purple-600 px-4 py-3 rounded-t-lg">
+          <h3 class="text-sm font-semibold text-white">Bulk Categorize Transactions</h3>
+        </div>
+        <div class="p-4">
+          <div class="mb-3">
+            <p class="text-xs text-gray-700">
+              Categorize {{ selectedJournalsForBulkCategorize.length }} selected unclassified entries
+            </p>
+            
+            <!-- Balance Check -->
+            <div class="mt-2 p-2 rounded" :class="bulkCategorizeBalance.isBalanced ? 'bg-green-50' : 'bg-red-50'">
+              <div class="flex items-center justify-between text-xs">
+                <div>
+                  <span class="font-semibold" :class="bulkCategorizeBalance.isBalanced ? 'text-green-900' : 'text-red-900'">
+                    <i :class="['fas mr-1', bulkCategorizeBalance.isBalanced ? 'fa-check-circle' : 'fa-exclamation-triangle']"></i>
+                    {{ bulkCategorizeBalance.isBalanced ? 'Balanced' : 'Unbalanced' }}
+                  </span>
+                </div>
+                <div class="text-2xs font-mono">
+                  DR: {{ formatCurrency(bulkCategorizeBalance.totalDebits) }} | 
+                  CR: {{ formatCurrency(bulkCategorizeBalance.totalCredits) }}
+                  <span v-if="!bulkCategorizeBalance.isBalanced" class="ml-1 font-semibold text-red-700">
+                    (Diff: {{ formatCurrency(Math.abs(bulkCategorizeBalance.difference)) }})
+                  </span>
+                </div>
+              </div>
+              <p v-if="!bulkCategorizeBalance.isBalanced" class="text-2xs text-red-700 mt-1">
+                Selected entries must have equal debits and credits to categorize in bulk
+              </p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 mb-4">
+            <!-- Debit Side -->
+            <div class="border-2 border-green-200 bg-green-50 rounded p-3">
+              <h4 class="text-xs font-semibold text-green-900 mb-2">Debit Account (DR)</h4>
+              <div class="space-y-2">
+                <div>
+                  <label class="block text-2xs text-gray-700 mb-1">Account *</label>
+                  <select v-model="bulkCategorizeForm.debitAccount" class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-purple-500">
+                    <option value="">Select account...</option>
+                    <option v-for="account in availableAccounts" :key="account.account_code" :value="account.account_code">
+                      {{ account.account_name }}
+                    </option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-2xs text-gray-700 mb-1">
+                    Subaccount
+                    <span v-if="hasSubaccounts(bulkCategorizeForm.debitAccount)" class="text-red-600">*</span>
+                  </label>
+                  <select 
+                    v-model="bulkCategorizeForm.debitSubaccount" 
+                    class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-purple-500"
+                    :class="{ 'border-red-300 bg-red-50': hasSubaccounts(bulkCategorizeForm.debitAccount) && !bulkCategorizeForm.debitSubaccount }"
+                  >
+                    <option value="" v-if="!hasSubaccounts(bulkCategorizeForm.debitAccount)">None</option>
+                    <option value="" v-else disabled>Select subaccount...</option>
+                    <option v-for="sub in getSubaccountsForAccount(bulkCategorizeForm.debitAccount)" :key="sub.code" :value="sub.code">
+                      {{ sub.name }}
+                    </option>
+                  </select>
+                  <p v-if="hasSubaccounts(bulkCategorizeForm.debitAccount) && !bulkCategorizeForm.debitSubaccount" class="text-2xs text-red-600 mt-0.5">
+                    *required
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Credit Side -->
+            <div class="border-2 border-blue-200 bg-blue-50 rounded p-3">
+              <h4 class="text-xs font-semibold text-blue-900 mb-2">Credit Account (CR)</h4>
+              <div class="space-y-2">
+                <div>
+                  <label class="block text-2xs text-gray-700 mb-1">Account *</label>
+                  <select v-model="bulkCategorizeForm.creditAccount" class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-purple-500">
+                    <option value="">Select account...</option>
+                    <option v-for="account in availableAccounts" :key="account.account_code" :value="account.account_code">
+                      {{ account.account_name }}
+                    </option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-2xs text-gray-700 mb-1">
+                    Subaccount
+                    <span v-if="hasSubaccounts(bulkCategorizeForm.creditAccount)" class="text-red-600">*</span>
+                  </label>
+                  <select 
+                    v-model="bulkCategorizeForm.creditSubaccount" 
+                    class="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-purple-500"
+                    :class="{ 'border-red-300 bg-red-50': hasSubaccounts(bulkCategorizeForm.creditAccount) && !bulkCategorizeForm.creditSubaccount }"
+                  >
+                    <option value="" v-if="!hasSubaccounts(bulkCategorizeForm.creditAccount)">None</option>
+                    <option value="" v-else disabled>Select subaccount...</option>
+                    <option v-for="sub in getSubaccountsForAccount(bulkCategorizeForm.creditAccount)" :key="sub.code" :value="sub.code">
+                      {{ sub.name }}
+                    </option>
+                  </select>
+                  <p v-if="hasSubaccounts(bulkCategorizeForm.creditAccount) && !bulkCategorizeForm.creditSubaccount" class="text-2xs text-red-600 mt-0.5">
+                    *required
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-2">
+            <button
+              @click="closeBulkCategorizeModal"
+              class="px-3 py-1.5 text-xs text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              @click="saveBulkCategorization"
+              :disabled="!isBulkCategorizeFormValid"
+              class="px-3 py-1.5 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              Categorize All
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Message Modal -->
+    <div
+      v-if="messageModalOpen"
+      @click="messageModalOpen = false"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-gray-500/75"
+    >
+      <div
+        @click.stop
+        class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4"
+      >
+        <div 
+          class="px-4 py-3 rounded-t-lg"
+          :class="{
+            'bg-green-600': messageModalContent.type === 'success',
+            'bg-red-600': messageModalContent.type === 'error',
+            'bg-blue-600': messageModalContent.type === 'info'
+          }"
+        >
+          <h3 class="text-sm font-semibold text-white">{{ messageModalContent.title }}</h3>
+        </div>
+        <div class="p-4">
+          <p class="text-sm text-gray-900 whitespace-pre-line">{{ messageModalContent.message }}</p>
+          <div class="flex justify-end gap-2 mt-4">
+            <button
+              @click="messageModalOpen = false"
+              class="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
+            >
+              OK
             </button>
           </div>
         </div>
@@ -871,6 +1362,14 @@
 import { ref, computed, onMounted } from 'vue';
 import type { OfflineJournal } from '../../types/OfflineJournal';
 import { formatCurrency, getStatusColor } from '../../types/OfflineJournal';
+
+// Format dollars (for invoice amounts which are already in dollars)
+function formatDollars(dollars: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(dollars);
+}
 import {
   uploadCSVFile,
   getOfflineJournals,
@@ -880,10 +1379,12 @@ import {
   editOfflineJournal,
   deleteOfflineJournal as deleteOfflineJournalAPI,
   postOfflineJournalsToGL,
+  getSuggestedCategorizations,
+  type SuggestedCategorization,
 } from '../../api/offlineJournals';
 import { getChartOfAccounts } from '../../api/chartOfAccounts';
 import { getSubaccounts } from '../../api/subaccounts';
-import { searchExpensesForReconciliation, reconcileExpenseWithOfflineJournal } from '../../api/reconciliation';
+import { searchExpensesForReconciliation, reconcileExpenseWithOfflineJournal, searchBillsForReconciliation, reconcileBillWithOfflineJournal, searchInvoicesForReconciliation, reconcileInvoiceWithOfflineJournal } from '../../api/reconciliation';
 import type { ChartOfAccount } from '../../types/ChartOfAccount';
 import type { Subaccount } from '../../types/Subaccount';
 
@@ -895,6 +1396,10 @@ const statusFilter = ref('');
 const selectedJournals = ref<number[]>([]);
 const selectAllCheckbox = ref(false);
 const showAccountSummary = ref(true);
+
+// Sorting state
+const sortColumn = ref<string>('date');
+const sortDirection = ref<'asc' | 'desc'>('asc');
 
 // Notes editing - flyout popover
 const notePopoverOpen = ref(false);
@@ -923,6 +1428,18 @@ const selectedJournalForReconcile = ref<OfflineJournal | null>(null);
 const expenseSearchQuery = ref('');
 const matchingExpenses = ref<any[]>([]);
 
+// Reconcile to Bill (Payroll) modal
+const payrollReconcileModalOpen = ref(false);
+const selectedJournalForPayrollReconcile = ref<OfflineJournal | null>(null);
+const billSearchQuery = ref('');
+const matchingBills = ref<any[]>([]);
+
+// Reconcile to Invoice (Client Payment) modal
+const invoiceReconcileModalOpen = ref(false);
+const selectedJournalForInvoiceReconcile = ref<OfflineJournal | null>(null);
+const invoiceSearchQuery = ref('');
+const matchingInvoices = ref<any[]>([]);
+
 // Categorization modal
 const categorizeModalOpen = ref(false);
 const categorizeJournal = ref<OfflineJournal | null>(null);
@@ -934,10 +1451,88 @@ const categorizeForm = ref({
 });
 const availableAccounts = ref<ChartOfAccount[]>([]);
 const availableSubaccounts = ref<Subaccount[]>([]);
+const suggestedCategorizations = ref<SuggestedCategorization[]>([]);
+
+// Check if an account has subaccounts and requires one to be selected
+const hasSubaccounts = (accountCode: string) => {
+  if (!accountCode) return false;
+  return getSubaccountsForAccount(accountCode).length > 0;
+};
+
+// Check if categorization form is valid (including subaccount requirements)
+const isCategorizeFormValid = computed(() => {
+  if (!categorizeForm.value.debitAccount || !categorizeForm.value.creditAccount) {
+    return false;
+  }
+  
+  // Check if debit account has subaccounts and requires selection
+  if (hasSubaccounts(categorizeForm.value.debitAccount) && !categorizeForm.value.debitSubaccount) {
+    return false;
+  }
+  
+  // Check if credit account has subaccounts and requires selection
+  if (hasSubaccounts(categorizeForm.value.creditAccount) && !categorizeForm.value.creditSubaccount) {
+    return false;
+  }
+  
+  return true;
+});
+
+// Check if bulk categorize form is valid (including subaccount requirements)
+const isBulkCategorizeFormValid = computed(() => {
+  if (!bulkCategorizeForm.value.debitAccount || !bulkCategorizeForm.value.creditAccount) {
+    return false;
+  }
+  
+  if (!bulkCategorizeBalance.value.isBalanced) {
+    return false;
+  }
+  
+  // Check if debit account has subaccounts and requires selection
+  if (hasSubaccounts(bulkCategorizeForm.value.debitAccount) && !bulkCategorizeForm.value.debitSubaccount) {
+    return false;
+  }
+  
+  // Check if credit account has subaccounts and requires selection
+  if (hasSubaccounts(bulkCategorizeForm.value.creditAccount) && !bulkCategorizeForm.value.creditSubaccount) {
+    return false;
+  }
+  
+  return true;
+});
+
+// Bulk categorization modal
+const bulkCategorizeModalOpen = ref(false);
+const bulkCategorizeForm = ref({
+  debitAccount: '',
+  debitSubaccount: '',
+  creditAccount: '',
+  creditSubaccount: '',
+});
+
+// Message modal for bulk categorization
+const messageModalOpen = ref(false);
+const messageModalContent = ref({
+  title: '',
+  message: '',
+  type: 'info' as 'success' | 'error' | 'info',
+});
 
 // Computed property to find the paired entry
 const pairedEntry = computed(() => {
   if (!categorizeJournal.value) return null;
+  
+  // If we have a transaction_group_id, use it for precise matching (preferred)
+  if (categorizeJournal.value.transaction_group_id) {
+    return journals.value.find(j => 
+      j.ID !== categorizeJournal.value!.ID &&
+      j.transaction_group_id === categorizeJournal.value!.transaction_group_id &&
+      ((j.debit > 0 && categorizeJournal.value!.credit > 0) || 
+       (j.credit > 0 && categorizeJournal.value!.debit > 0))
+    );
+  }
+  
+  // Fall back to date+description matching for legacy entries
   return journals.value.find(j => 
     j.ID !== categorizeJournal.value!.ID &&
     j.date === categorizeJournal.value!.date &&
@@ -945,6 +1540,11 @@ const pairedEntry = computed(() => {
     ((j.debit > 0 && categorizeJournal.value!.credit > 0) || 
      (j.credit > 0 && categorizeJournal.value!.debit > 0))
   );
+});
+
+// Check if we're editing an existing categorization (not UNCLASSIFIED)
+const isEditingCategorization = computed(() => {
+  return categorizeJournal.value?.account !== 'UNCLASSIFIED';
 });
 
 // CSV upload
@@ -1014,6 +1614,110 @@ async function reconcileExpense(expenseID: number) {
     await fetchData();
   } catch (error) {
     console.error('Failed to reconcile expense:', error);
+  }
+}
+
+// Reconcile to Bill (Payroll) functions
+async function openPayrollReconcileModal(journal: OfflineJournal) {
+  selectedJournalForPayrollReconcile.value = journal;
+  billSearchQuery.value = '';
+  payrollReconcileModalOpen.value = true;
+  
+  // Auto-search for matching bills by amount and date
+  await searchBillsForReconcile();
+}
+
+function closePayrollReconcileModal() {
+  payrollReconcileModalOpen.value = false;
+  selectedJournalForPayrollReconcile.value = null;
+  billSearchQuery.value = '';
+  matchingBills.value = [];
+}
+
+async function searchBillsForReconcile() {
+  if (!selectedJournalForPayrollReconcile.value) {
+    matchingBills.value = [];
+    return;
+  }
+
+  try {
+    const amount = selectedJournalForPayrollReconcile.value.debit || selectedJournalForPayrollReconcile.value.credit;
+    const date = formatDate(selectedJournalForPayrollReconcile.value.date);
+    
+    const results = await searchBillsForReconciliation({
+      query: billSearchQuery.value || undefined,
+      date: date,
+      amount: amount, // Already in cents
+    });
+    
+    matchingBills.value = results;
+  } catch (error) {
+    console.error('Failed to search bills:', error);
+    matchingBills.value = [];
+  }
+}
+
+async function reconcileBill(billID: number) {
+  if (!selectedJournalForPayrollReconcile.value) return;
+
+  try {
+    await reconcileBillWithOfflineJournal(billID, selectedJournalForPayrollReconcile.value.ID);
+    closePayrollReconcileModal();
+    await fetchData();
+  } catch (error) {
+    console.error('Failed to reconcile bill:', error);
+  }
+}
+
+// Reconcile to Invoice (Client Payment) functions
+async function openInvoiceReconcileModal(journal: OfflineJournal) {
+  selectedJournalForInvoiceReconcile.value = journal;
+  invoiceSearchQuery.value = '';
+  invoiceReconcileModalOpen.value = true;
+  
+  // Auto-search for matching invoices by amount and date
+  await searchInvoicesForReconcile();
+}
+
+function closeInvoiceReconcileModal() {
+  invoiceReconcileModalOpen.value = false;
+  selectedJournalForInvoiceReconcile.value = null;
+  invoiceSearchQuery.value = '';
+  matchingInvoices.value = [];
+}
+
+async function searchInvoicesForReconcile() {
+  if (!selectedJournalForInvoiceReconcile.value) {
+    matchingInvoices.value = [];
+    return;
+  }
+
+  try {
+    const amount = selectedJournalForInvoiceReconcile.value.debit || selectedJournalForInvoiceReconcile.value.credit;
+    const date = formatDate(selectedJournalForInvoiceReconcile.value.date);
+    
+    const results = await searchInvoicesForReconciliation({
+      query: invoiceSearchQuery.value || undefined,
+      date: date,
+      amount: amount, // Already in cents
+    });
+    
+    matchingInvoices.value = results;
+  } catch (error) {
+    console.error('Failed to search invoices:', error);
+    matchingInvoices.value = [];
+  }
+}
+
+async function reconcileInvoice(invoiceID: number) {
+  if (!selectedJournalForInvoiceReconcile.value) return;
+
+  try {
+    await reconcileInvoiceWithOfflineJournal(invoiceID, selectedJournalForInvoiceReconcile.value.ID);
+    closeInvoiceReconcileModal();
+    await fetchData();
+  } catch (error) {
+    console.error('Failed to reconcile invoice:', error);
   }
 }
 
@@ -1207,8 +1911,8 @@ function openNotePopover(journal: OfflineJournal, event: MouseEvent) {
   const rect = button.getBoundingClientRect();
   
   // Position to the right of the button, or to the left if not enough space
-  const popoverWidth = 288; // w-72 = 18rem = 288px
-  const popoverHeight = 130; // Approximate height with smaller padding
+  const popoverWidth = 256; // w-64 = 16rem = 256px
+  const popoverHeight = 100; // Approximate height with smaller padding
   const margin = 8;
   
   const spaceOnRight = window.innerWidth - rect.right;
@@ -1275,7 +1979,7 @@ async function saveNoteFromPopover() {
     closeNotePopover();
   } catch (error) {
     console.error('Failed to save note:', error);
-    alert('Failed to save note');
+    showMessage('Error', 'Failed to save note. Please try again.', 'error');
   }
 }
 
@@ -1298,25 +2002,91 @@ function getSubaccountsForAccount(accountCode: string) {
   return availableSubaccounts.value.filter(s => s.account_code === accountCode);
 }
 
-function openCategorizeModal(journal: OfflineJournal) {
+async function openCategorizeModal(journal: OfflineJournal) {
   categorizeJournal.value = journal;
-  categorizeForm.value = {
-    debitAccount: '',
-    debitSubaccount: '',
-    creditAccount: '',
-    creditSubaccount: '',
-  };
+  
+  // Ensure accounts and subaccounts are loaded
+  if (availableAccounts.value.length === 0 || availableSubaccounts.value.length === 0) {
+    await loadAccountsAndSubaccounts();
+  }
+  
+  // Check if already categorized - if so, pre-populate the form
+  if (journal.account !== 'UNCLASSIFIED') {
+    // Find the paired entry to get both sides of the transaction
+    const paired = journals.value.find(j => 
+      j.ID !== journal.ID &&
+      ((journal.transaction_group_id && j.transaction_group_id === journal.transaction_group_id) ||
+       (j.date === journal.date && j.description === journal.description)) &&
+      ((j.debit > 0 && journal.credit > 0) || (j.credit > 0 && journal.debit > 0))
+    );
+    
+    console.log('Pre-populating form for categorized transaction:', {
+      journal_account: journal.account,
+      journal_subaccount: journal.sub_account,
+      paired_account: paired?.account,
+      paired_subaccount: paired?.sub_account,
+      available_subaccounts: availableSubaccounts.value.length,
+    });
+    
+    // Determine which is debit and which is credit
+    if (journal.debit > 0) {
+      // Current journal is debit
+      categorizeForm.value = {
+        debitAccount: journal.account,
+        debitSubaccount: journal.sub_account || '',
+        creditAccount: paired?.account || '',
+        creditSubaccount: paired?.sub_account || '',
+      };
+    } else {
+      // Current journal is credit
+      categorizeForm.value = {
+        debitAccount: paired?.account || '',
+        debitSubaccount: paired?.sub_account || '',
+        creditAccount: journal.account,
+        creditSubaccount: journal.sub_account || '',
+      };
+    }
+    
+    console.log('Form populated with:', categorizeForm.value);
+  } else {
+    // Reset form for new categorization
+    categorizeForm.value = {
+      debitAccount: '',
+      debitSubaccount: '',
+      creditAccount: '',
+      creditSubaccount: '',
+    };
+  }
+  
+  // Fetch suggested categorizations based on description
+  try {
+    suggestedCategorizations.value = await getSuggestedCategorizations(journal.description, 5);
+  } catch (error) {
+    console.error('Failed to fetch suggested categorizations:', error);
+    suggestedCategorizations.value = [];
+  }
+  
   categorizeModalOpen.value = true;
 }
 
 function closeCategorizeModal() {
   categorizeModalOpen.value = false;
   categorizeJournal.value = null;
+  suggestedCategorizations.value = [];
+}
+
+function applySuggestedCategorization(suggestion: SuggestedCategorization) {
+  categorizeForm.value = {
+    debitAccount: suggestion.from_account,
+    debitSubaccount: suggestion.from_sub_account,
+    creditAccount: suggestion.to_account,
+    creditSubaccount: suggestion.to_sub_account,
+  };
 }
 
 async function saveCategorization() {
   if (!categorizeJournal.value || !pairedEntry.value) {
-    alert('Could not find paired transaction entry');
+    showMessage('Pairing Error', 'Could not find paired transaction entry. Please ensure both debit and credit entries exist.', 'error');
     return;
   }
   
@@ -1332,13 +2102,86 @@ async function saveCategorization() {
       from_subaccount: categorizeForm.value.debitSubaccount,
       to_account: categorizeForm.value.creditAccount,
       to_subaccount: categorizeForm.value.creditSubaccount,
+      transaction_group_id: categorizeJournal.value.transaction_group_id, // Include for precise matching
     });
 
     closeCategorizeModal();
     await fetchData();
   } catch (error) {
     console.error('Failed to categorize transaction:', error);
-    alert('Failed to categorize transaction');
+    const errorMsg = (error as any).response?.data || (error as any).message || 'Unknown error occurred';
+    showMessage('Categorization Failed', `Failed to categorize transaction:\n${errorMsg}`, 'error');
+  }
+}
+
+// Message modal helper
+function showMessage(title: string, message: string, type: 'success' | 'error' | 'info' = 'info') {
+  messageModalContent.value = { title, message, type };
+  messageModalOpen.value = true;
+}
+
+// Bulk categorization functions
+function openBulkCategorizeModal() {
+  bulkCategorizeForm.value = {
+    debitAccount: '',
+    debitSubaccount: '',
+    creditAccount: '',
+    creditSubaccount: '',
+  };
+  bulkCategorizeModalOpen.value = true;
+}
+
+function closeBulkCategorizeModal() {
+  bulkCategorizeModalOpen.value = false;
+}
+
+async function saveBulkCategorization() {
+  const toCateg = selectedJournalsForBulkCategorize.value;
+  if (toCateg.length === 0) {
+    showMessage('No Entries Selected', 'No unclassified entries selected for bulk categorization.', 'error');
+    return;
+  }
+  
+  // Check if entries are balanced
+  if (!bulkCategorizeBalance.value.isBalanced) {
+    const message = `Cannot categorize: entries are unbalanced.\n\nTotal Debits: ${formatCurrency(bulkCategorizeBalance.value.totalDebits)}\nTotal Credits: ${formatCurrency(bulkCategorizeBalance.value.totalCredits)}\nDifference: ${formatCurrency(Math.abs(bulkCategorizeBalance.value.difference))}`;
+    showMessage('Unbalanced Entries', message, 'error');
+    return;
+  }
+  
+  let successCount = 0;
+  let failCount = 0;
+  
+  for (const journal of toCateg) {
+    try {
+      const dateOnly = journal.date.split('T')[0];
+      
+      await categorizeCSVTransaction({
+        date: dateOnly,
+        description: journal.description,
+        from_account: bulkCategorizeForm.value.debitAccount,
+        from_subaccount: bulkCategorizeForm.value.debitSubaccount,
+        to_account: bulkCategorizeForm.value.creditAccount,
+        to_subaccount: bulkCategorizeForm.value.creditSubaccount,
+        transaction_group_id: journal.transaction_group_id, // Use transaction group ID for precise matching
+      });
+      
+      successCount++;
+    } catch (error) {
+      console.error('Failed to categorize transaction:', journal.description, error);
+      failCount++;
+    }
+  }
+  
+  closeBulkCategorizeModal();
+  clearSelection();
+  await fetchData();
+  
+  if (failCount > 0) {
+    const message = `${successCount} transaction${successCount !== 1 ? 's' : ''} categorized successfully.\n${failCount} transaction${failCount !== 1 ? 's' : ''} failed.`;
+    showMessage('Bulk Categorization Complete', message, 'info');
+  } else {
+    showMessage('Success', `Successfully categorized ${successCount} transaction${successCount !== 1 ? 's' : ''}.`, 'success');
   }
 }
 
@@ -1374,7 +2217,8 @@ async function saveEdit() {
     await fetchData();
   } catch (error) {
     console.error('Failed to save edit:', error);
-    alert('Failed to save changes');
+    const errorMsg = (error as any).response?.data || (error as any).message || 'Unknown error occurred';
+    showMessage('Save Failed', `Failed to save changes:\n${errorMsg}`, 'error');
   }
 }
 
@@ -1384,7 +2228,8 @@ async function deleteOfflineJournal(id: number) {
     await fetchData();
   } catch (error) {
     console.error('Failed to delete entry:', error);
-    alert('Failed to delete entry');
+    const errorMsg = (error as any).response?.data || (error as any).message || 'Unknown error occurred';
+    showMessage('Delete Failed', `Failed to delete entry:\n${errorMsg}`, 'error');
   }
 }
 
@@ -1399,7 +2244,8 @@ async function updateStatus(id: number, status: string) {
     await fetchData();
   } catch (error) {
     console.error('Failed to update status:', error);
-    alert('Failed to update status: ' + (error as any).message);
+    const errorMsg = (error as any).response?.data || (error as any).message || 'Unknown error occurred';
+    showMessage('Status Update Failed', `Failed to update status:\n${errorMsg}`, 'error');
   }
 }
 
@@ -1415,7 +2261,8 @@ async function bulkUpdate(status: string) {
     await fetchData();
   } catch (error) {
     console.error('Failed to bulk update:', error);
-    alert('Failed to bulk update: ' + (error as any).message);
+    const errorMsg = (error as any).response?.data || (error as any).message || 'Unknown error occurred';
+    showMessage('Bulk Update Failed', `Failed to bulk update:\n${errorMsg}`, 'error');
   }
 }
 
@@ -1452,7 +2299,8 @@ async function confirmPostToGL() {
     await fetchData();
   } catch (error) {
     console.error('Failed to post to GL:', error);
-    alert('Failed to post to GL: ' + (error as any).message);
+    const errorMsg = (error as any).response?.data || (error as any).message || 'Unknown error occurred';
+    showMessage('Post to GL Failed', `Failed to post to General Ledger:\n${errorMsg}`, 'error');
   }
 }
 
@@ -1486,9 +2334,84 @@ function isSelected(id: number): boolean {
   return selectedJournals.value.includes(id);
 }
 
+// Sorting function
+function toggleSort(column: string) {
+  if (sortColumn.value === column) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortColumn.value = column;
+    sortDirection.value = 'asc';
+  }
+}
+
 // Computed
 const filteredJournals = computed(() => {
-  return journals.value;
+  const sorted = [...journals.value];
+  
+  // Sort by selected column with secondary sort to keep transaction pairs together
+  sorted.sort((a, b) => {
+    let aVal: any;
+    let bVal: any;
+    
+    switch (sortColumn.value) {
+      case 'date':
+        aVal = new Date(a.date).getTime();
+        bVal = new Date(b.date).getTime();
+        break;
+      case 'account':
+        aVal = a.account.toLowerCase();
+        bVal = b.account.toLowerCase();
+        break;
+      case 'description':
+        aVal = a.description.toLowerCase();
+        bVal = b.description.toLowerCase();
+        break;
+      case 'debit':
+        aVal = a.debit;
+        bVal = b.debit;
+        break;
+      case 'credit':
+        aVal = a.credit;
+        bVal = b.credit;
+        break;
+      case 'status':
+        aVal = a.status;
+        bVal = b.status;
+        break;
+      default:
+        return 0;
+    }
+    
+    // Primary sort by selected column
+    if (aVal < bVal) return sortDirection.value === 'asc' ? -1 : 1;
+    if (aVal > bVal) return sortDirection.value === 'asc' ? 1 : -1;
+    
+    // Secondary sort: keep transaction pairs together
+    // If primary values are equal, sort by TransactionGroupID or description to group pairs
+    if (a.transaction_group_id && b.transaction_group_id) {
+      // Both have transaction group IDs - sort by that
+      if (a.transaction_group_id < b.transaction_group_id) return -1;
+      if (a.transaction_group_id > b.transaction_group_id) return 1;
+      
+      // Within same transaction, put debit before credit
+      if (a.debit > 0 && b.credit > 0) return -1;
+      if (a.credit > 0 && b.debit > 0) return 1;
+    } else {
+      // Fall back to description for legacy entries without transaction_group_id
+      const aDesc = a.description.toLowerCase();
+      const bDesc = b.description.toLowerCase();
+      if (aDesc < bDesc) return -1;
+      if (aDesc > bDesc) return 1;
+      
+      // Within same description, put debit before credit
+      if (a.debit > 0 && b.credit > 0) return -1;
+      if (a.credit > 0 && b.debit > 0) return 1;
+    }
+    
+    return 0;
+  });
+  
+  return sorted;
 });
 
 const stats = computed(() => {
@@ -1522,6 +2445,35 @@ const hasSelectedDuplicateOrExcludedEntries = computed(() => {
     const journal = journals.value.find(j => j.ID === id);
     return journal && (journal.status === 'duplicate' || journal.status === 'excluded');
   });
+});
+
+// Check if any selected entries are unclassified (can be bulk categorized)
+const hasSelectedUnclassifiedEntries = computed(() => {
+  return selectedJournals.value.some(id => {
+    const journal = journals.value.find(j => j.ID === id);
+    return journal && journal.account === 'UNCLASSIFIED';
+  });
+});
+
+// Get only the UNCLASSIFIED selected journals for bulk categorization
+const selectedJournalsForBulkCategorize = computed(() => {
+  return selectedJournals.value
+    .map(id => journals.value.find(j => j.ID === id))
+    .filter(j => j && j.account === 'UNCLASSIFIED') as OfflineJournal[];
+});
+
+// Check if the selected bulk categorize entries are balanced
+const bulkCategorizeBalance = computed(() => {
+  const entries = selectedJournalsForBulkCategorize.value;
+  const totalDebits = entries.reduce((sum, j) => sum + j.debit, 0);
+  const totalCredits = entries.reduce((sum, j) => sum + j.credit, 0);
+  
+  return {
+    totalDebits,
+    totalCredits,
+    isBalanced: Math.abs(totalDebits - totalCredits) < 100, // Within $1 for rounding
+    difference: totalDebits - totalCredits
+  };
 });
 
 // Account summary - aggregate by account

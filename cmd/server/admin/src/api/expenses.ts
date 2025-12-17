@@ -18,6 +18,7 @@ export interface Expense {
   expense_account_code?: string;
   subaccount_code?: string;
   category_id: number;
+  is_reimbursable?: boolean;
   project?: any;
   submitter?: any;
   approver?: any;
