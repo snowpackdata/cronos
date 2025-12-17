@@ -43,7 +43,9 @@ node_modules/
 # Build artifacts
 admin/dist/
 portal/dist/
-static/
+static/*
+!static/admin/.gitkeep
+!static/portal/.gitkeep
 
 # Air tmp directory
 tmp/

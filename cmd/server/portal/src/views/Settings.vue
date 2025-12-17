@@ -145,9 +145,9 @@ async function fetchAccountData() {
     
     // Placeholder data - replace with actual API response
     // account.value = {
-    //   legalName: 'Snowpack Data Inc.',
-    //   contactEmail: 'contact@snowpack.ai',
-    //   website: 'https://snowpack.ai',
+    //   legalName: 'Cronos Inc.',
+    //   contactEmail: 'contact@cronos.com',
+    //   website: 'https://cronos.com',
     //   address: '123 Glacier Lane, Summitville, CO 80202',
     //   clients: [
     //     { id: 'client1', name: 'Example Client A', email: 'clienta@example.com' },

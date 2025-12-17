@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -378,6 +379,32 @@ func (a *App) ApproveTransactionPairHandler(w http.ResponseWriter, r *http.Reque
 		"message": "Transaction approved and booked successfully",
 		"booked":  booked,
 	})
+}
+
+// GetSuggestedCategorizationsHandler returns suggested categorizations based on fuzzy matching
+func (a *App) GetSuggestedCategorizationsHandler(w http.ResponseWriter, r *http.Request) {
+	description := r.URL.Query().Get("description")
+	if description == "" {
+		http.Error(w, "Description is required", http.StatusBadRequest)
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 5 // Default to 5 suggestions
+	if limitStr != "" {
+		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
+		}
+	}
+
+	suggestions, err := a.cronosApp.GetSuggestedCategorizations(description, limit)
+	if err != nil {
+		http.Error(w, "Failed to get suggestions: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(suggestions)
 }
 
 // Helper functions

@@ -314,6 +314,7 @@ func main() {
 	adminApi.HandleFunc("/cronos/offline-journals/transactions", a.GetOfflineJournalTransactionsHandler).Methods("GET")
 	adminApi.HandleFunc("/cronos/offline-journals/categorize", a.CategorizeCSVTransactionHandler).Methods("POST")
 	adminApi.HandleFunc("/cronos/offline-journals/approve-transaction", a.ApproveTransactionPairHandler).Methods("POST")
+	adminApi.HandleFunc("/cronos/offline-journals/suggest-categorization", a.GetSuggestedCategorizationsHandler).Methods("GET")
 	adminApi.HandleFunc("/cronos/offline-journals", a.OfflineJournalsListHandler).Methods("GET")
 	adminApi.HandleFunc("/cronos/offline-journals/{id:[0-9]+}", a.UpdateOfflineJournalStatusHandler).Methods("PUT")
 	adminApi.HandleFunc("/cronos/offline-journals/{id:[0-9]+}/edit", a.EditOfflineJournalHandler).Methods("PUT")

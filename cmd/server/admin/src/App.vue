@@ -12,7 +12,7 @@
             </button>
           </div>
           <div class="flex-shrink-0 flex items-center px-4">
-            <span class="text-xl font-bold text-white border-b-2 border-sage pb-1">Snowpack Data</span>
+            <span class="text-xl font-bold text-white border-b-2 border-sage pb-1">Cronos</span>
           </div>
           <div class="mt-5 flex flex-1 flex-col overflow-y-auto px-4">
             <nav class="flex-1 space-y-1">
@@ -144,7 +144,7 @@
 
         <!-- Mobile title -->
         <div class="lg:hidden flex-1 text-center">
-          <span class="text-xl font-bold text-white">Snowpack Data</span>
+          <span class="text-xl font-bold text-white">Cronos</span>
         </div>
 
         <div class="hidden lg:flex lg:flex-1 gap-x-4 self-stretch lg:gap-x-6">
@@ -278,7 +278,7 @@ const pageTitle = computed(() => {
 
 // Set document title when route changes
 watch(() => route.name, () => {
-  document.title = `Snowpack Data Cronos - ${pageTitle.value}`;
+  document.title = `Cronos - ${pageTitle.value}`;
 }, { immediate: true });
 
 // Simple function to test the authentication token
