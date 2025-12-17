@@ -30,7 +30,7 @@ sendgrid.env
 *.json
 !package.json
 !package-lock.json
-!tsconfig.json
+!tsconfig*.json
 !jsconfig.json
 .gcp-client-auth
 *-key.json
