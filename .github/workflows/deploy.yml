@@ -87,19 +87,11 @@ jobs:
         working-directory: ./server
         run: |
           echo "Cleaning up unnecessary files for deployment..."
-          # Remove node_modules (Vue apps are already built and embedded)
-          rm -rf admin/node_modules
-          rm -rf portal/node_modules
-          # Remove Vue source files (only need static/admin and static/portal)
-          rm -rf admin/src
-          rm -rf admin/public
-          rm -rf portal/src
-          rm -rf portal/public
-          # Remove package files and configs
-          rm -f admin/package*.json admin/tsconfig.json admin/vite.config.ts admin/tailwind.config.js
-          rm -f portal/package*.json portal/tsconfig.json portal/vite.config.ts portal/tailwind.config.js
+          # Remove entire admin and portal folders (Vue apps are already built and embedded in Go binary)
+          rm -rf admin
+          rm -rf portal
           # Remove development files
-          rm -f .air.toml .envrc Makefile LOCAL_DEVELOPMENT.md QUICK_REFERENCE.md
+          rm -rf tmp
           echo "Cleanup complete!"
           
       # List all files to verify build
@@ -128,6 +120,7 @@ jobs:
             GCP_PROJECT=${{ secrets.GCP_PROJECT }}
             GCS_BUCKET=${{ secrets.GCS_BUCKET }}
             GIT_HASH=${{ env.GIT_HASH }}
+            HUBSPOT_API_KEY=${{ secrets.HUBSPOT_API_KEY }}
             JWT_SECRET=${{ secrets.JWT_SECRET }}
             SLACK_WEBHOOK_URL=${{ secrets.SLACK_WEBHOOK_URL }}
             ENVIRONMENT=production
