@@ -1,0 +1,50 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Air tmp directory
+tmp/
+
+# Node modules
+admin/node_modules/
+portal/node_modules/
+
+# Build artifacts
+admin/dist/
+portal/dist/
+static/
+
+# Log files
+*.log
+
+# Environment files
+.env
+.env.*
+.envrc
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# SQLite databases (for local dev)
+*.db
+
+# OS
+.DS_Store
+

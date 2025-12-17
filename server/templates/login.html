@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html class="h-full bg-gradient-to-b from-blue to-gray-gray-dark">
+<head>
+    <title>Snowpack Data</title>
+    <!-- Bootstrap Files from CDN -->
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Snowpack Data is an analytics consulting company based in California" />
+    <meta name="author" content="Snowpack Data LLC" />
+    <title>Snowpack Data</title>
+    <!-- Favicon-->
+    <link rel="shortcut icon" type="icon" href="branding/favicon/favicon.ico">
+
+    <!-- Tailwind CSS -->
+    <link href="/assets/css/outputs.css?v={{ . }}" rel="stylesheet" />
+
+    <!--  Montserrat font from Google Fonts-->
+    <link href="https://fonts.googleapis.com/css?family=Montserrat:400,700" rel="stylesheet" type="text/css" />
+
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-TRLQYPPXKE"></script>
+
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-TRLQYPPXKE');
+    </script>
+</head>
+
+<body class="h-full">
+<div class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
+  <div class="sm:mx-auto sm:w-full sm:max-w-sm">
+    <a href="/">
+    <img class="mx-auto h-10 w-auto" src="/branding/logo/logo-text-header-small.png" alt="Snowpack Data">
+    <h2 class="mt-10 text-center text-2xl/9 font-bold tracking-tight text-white">Sign in to your account</h2>
+    </a>
+  </div>
+
+  <div class="mt-10 sm:mx-auto sm:w-full sm:max-w-sm">
+    <form class="space-y-6" action="#" method="POST">
+      <div>
+        <label for="email" class="block text-sm/6 font-medium text-white">Email address</label>
+        <div class="mt-2">
+          <input id="email" name="email" type="email" autocomplete="email" required class="block w-full rounded-md border-0 bg-white/5 py-1.5 text-white shadow-sm ring-1 ring-inset ring-white/10 focus:ring-2 focus:ring-inset focus:ring-indigo-500 sm:text-sm/6">
+        </div>
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between">
+          <label for="password" class="block text-sm/6 font-medium text-white">Password</label>
+          <div class="text-sm">
+<!--            <a href="#" class="font-semibold text-white hover:text-indigo-300">Forgot password?</a>-->
+          </div>
+        </div>
+        <div class="mt-2">
+          <input id="password" name="password" type="password" autocomplete="current-password" required class="block w-full rounded-md border-0 bg-white/5 py-1.5 text-white shadow-sm ring-1 ring-inset ring-white/10 focus:ring-2 focus:ring-inset focus:ring-indigo-500 sm:text-sm/6">
+        </div>
+      </div>
+
+      <div>
+        <button id="loginSubmit" type="submit" class="flex w-full bg-white justify-center rounded-md bg-indigo-500 px-3 py-1.5 text-sm/6 font-semibold text-black shadow-sm hover:bg-yellow focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500">Sign in</button>
+      </div>
+    </form>
+<!--    Add an alert box here when the login fails-->
+      <div>
+            <p id="loginError" class="text-center text-md-center pt-1 text-yellow"></p>
+      </div>
+
+
+    <p class="mt-10 text-center text-sm/6 text-gray-gray-light">
+      Not yet a Client?
+      <a href="/contact" class="font-semibold text-gray-gray-light hover:text-yellow">Reach out to us to get access to internal roadmaps, documentation and in depth case studies</a>
+    </p>
+  </div>
+</div>
+</body>
+<!-- Vendor JS Files -->
+<script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+
+<!-- Template Main JS File -->
+<script src="/assets/js/login.js?v={{ . }}"></script>
+<!-- Portfolio Modals-->
+
+</html>
