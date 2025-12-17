@@ -77,12 +77,32 @@ jobs:
         run: |
           gcloud components update
           gcloud components install app-engine-go
+      
+      # Clean up unnecessary files before deployment
+      - name: Clean up source files (keep only built assets)
+        working-directory: ./server
+        run: |
+          echo "Cleaning up unnecessary files for deployment..."
+          # Remove node_modules (Vue apps are already built and embedded)
+          rm -rf admin/node_modules
+          rm -rf portal/node_modules
+          # Remove Vue source files (only need static/admin and static/portal)
+          rm -rf admin/src
+          rm -rf admin/public
+          rm -rf portal/src
+          rm -rf portal/public
+          # Remove package files and configs
+          rm -f admin/package*.json admin/tsconfig.json admin/vite.config.ts admin/tailwind.config.js
+          rm -f portal/package*.json portal/tsconfig.json portal/vite.config.ts portal/tailwind.config.js
+          # Remove development files
+          rm -f .air.toml .envrc Makefile LOCAL_DEVELOPMENT.md QUICK_REFERENCE.md
+          echo "Cleanup complete!"
           
       # List all files to verify build
       - name: List remaining files
         working-directory: ./server
         run: |
-          echo "Total file count:"
+          echo "Total file count after cleanup:"
           find . -type f | wc -l
           echo "Top-level directories:"
           ls -la
