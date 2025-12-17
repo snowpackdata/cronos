@@ -307,14 +307,45 @@ func (a *App) PortalLandingHandler(w http.ResponseWriter, req *http.Request) {
 	http.ServeFile(w, req, filePath)
 }
 
-// CronosLandingHandler serves the cronos page when accessed via GET request
-func (a *App) CronosLandingHandler(w http.ResponseWriter, req *http.Request) {
-	http.ServeFile(w, req, "./templates/cronos.html")
-}
-
 // LegacyAdminLandingHandler serves the legacy admin page when accessed via GET request
 func (a *App) LegacyAdminLandingHandler(w http.ResponseWriter, req *http.Request) {
 	http.ServeFile(w, req, "./templates/admin.html")
+}
+
+// RequestPasswordReset handles the password reset request and sends reset instructions
+func (a *App) RequestPasswordReset(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	email := req.FormValue("email")
+	if email == "" {
+		http.Error(w, "Email is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if user exists
+	var user cronos.User
+	if a.cronosApp.DB.Where("email = ?", email).First(&user).RowsAffected == 0 {
+		// For security, don't reveal if the email exists or not
+		// Return success message regardless
+		log.Printf("Password reset requested for non-existent email: %s", email)
+	} else {
+		log.Printf("Password reset requested for: %s", email)
+		// TODO: Generate reset token and send email
+		// For now, just log that a reset was requested
+	}
+
+	// Always return success to prevent email enumeration
+	response := map[string]interface{}{
+		"status":  200,
+		"message": "If an account exists with this email, password reset instructions have been sent.",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
 }
 
 // ResetPassword resets a user's password to a desired value

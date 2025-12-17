@@ -14,15 +14,41 @@ How it works:
 - For internal billing and payment purposes, the entry is still attributed to the original creator
 - Both the original creator and impersonated user can view the entry in their respective dashboards
 
+## Quick Start
+
+### Local Development (Fastest Way)
+
+```bash
+cd server
+make run-local
+```
+
+Visit `http://localhost:8080` and login with:
+- **Staff**: `dev@example.com` / `devpassword`
+- **Client**: `client@example.com` / `password`
+
+### See All Available Commands
+
+```bash
+cd server
+make help
+```
+
+### Full Documentation
+
+- **Local Development Guide**: [`server/LOCAL_DEVELOPMENT.md`](server/LOCAL_DEVELOPMENT.md) - Complete local setup
+- **Deployment Guide**: [`DEPLOYMENT.md`](DEPLOYMENT.md) - Production deployment to App Engine
+- **Setup Summary**: [`SETUP_SUMMARY.md`](SETUP_SUMMARY.md) - What's been configured
+
 ## Installation
 
 ### Prerequisites
 - Go 1.21 or higher
-- Node.js and npm (for admin and portal UIs)
+- Node.js 20+ and npm (for admin and portal UIs)
 - Google Cloud SDK (for deployment)
-- Cloud SQL Proxy (for development with Cloud SQL)
+- Cloud SQL Proxy (optional, for development with Cloud SQL)
 
-### Local Development Setup
+### Quick Setup
 
 1. Clone this repository
 2. Navigate to the server directory:
@@ -30,53 +56,55 @@ How it works:
 cd server
 ```
 
-3. Set up environment variables. For local development with SQLite:
+3. Install all dependencies:
 ```bash
-export ENVIRONMENT=local
+make install
 ```
 
-For development with Cloud SQL:
+4. Start the server:
 ```bash
-export ENVIRONMENT=development
-export CLOUD_SQL_USERNAME=<username>
-export CLOUD_SQL_PASSWORD=<password>
-export CLOUD_SQL_CONNECTION_NAME=<project:region:instance>
-export CLOUD_SQL_DATABASE_NAME=<database>
-export SENDGRID_API_KEY=<key>
-export GCS_BUCKET=<bucket>
+make run-local
 ```
 
-4. Start the development server with hot reloading:
+This will:
+- Build the Vue.js admin and portal interfaces
+- Start the Go backend on port 8080
+- Initialize SQLite database with seed data
+
+5. Access the application:
+- Landing Page: http://localhost:8080/
+- Login: http://localhost:8080/login
+- Admin Interface: http://localhost:8080/admin/
+- Portal Interface: http://localhost:8080/portal/
+
+### Development Modes
+
+**Quick start (SQLite):**
+```bash
+make run-local
+```
+
+**Hot reload development (best for active coding):**
 ```bash
 make run-dev-hot
 ```
 
-This will:
-- Start the Vue.js dev servers for admin and portal interfaces on ports 5173 and 5174
-- Start the Go backend with hot reloading on port 8080
-- Initialize SQLite database with seed data
-
-5. Access the application:
-- Admin Interface: http://localhost:5173/admin/
-- Portal Interface: http://localhost:5174/portal/
-- Backend API: http://localhost:8080
-
-### Running with Compiled UIs
-
-To run with production-like compiled assets:
+**All available commands:**
 ```bash
-make run-dev
+make help
 ```
 
 ### Development Credentials
 
 When running in local mode, the following test accounts are created:
-- Dev User: dev@example.com / devpassword
-- Client User: client@example.com / password
+- **Staff User**: `dev@example.com` / `devpassword` (Admin access)
+- **Client User**: `client@example.com` / `password` (Portal access)
 
 ## Deployment
 
-### Deploy to Google App Engine
+Deployment to Google App Engine is automated via GitHub Actions. See [`DEPLOYMENT.md`](DEPLOYMENT.md) for complete instructions.
+
+### Manual Deployment
 
 Ensure you have the Google Cloud SDK installed and configured:
 

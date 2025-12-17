@@ -95,7 +95,13 @@ func main() {
 		log.Println("Initializing in PRODUCTION mode")
 		cronosApp.InitializeCloud(dbURI)
 	} else if os.Getenv("ENVIRONMENT") == "development" {
-		log.Println("Initializing in DEVELOPMENT mode - snowpack-data.com emails will bypass JWT validation")
+		log.Println("Initializing in DEVELOPMENT mode")
+		dbPort := os.Getenv("DB_PORT")
+		if dbPort == "" {
+			dbPort = "5432"
+		}
+		log.Printf("Connecting to Cloud SQL via proxy at localhost:%s", dbPort)
+		log.Printf("Database: %s, User: %s", databaseName, user)
 		cronosApp.InitializeLocal(user, password, dbHost, databaseName)
 	} else {
 		log.Println("Initializing in LOCAL mode with SQLite")
@@ -350,6 +356,11 @@ func main() {
 	portalApi.HandleFunc("/assets/{assetId:[0-9]+}/refresh-url", a.PortalRefreshAssetURLHandler).Methods("POST")
 	portalApi.HandleFunc("/assets/{id:[0-9]+}/download", a.AssetDownloadHandler).Methods("GET")
 
+	// Public landing and error pages
+	r.HandleFunc("/", a.CronosLandingHandler).Methods("GET")
+	r.HandleFunc("/400", a.BadRequestHandler).Methods("GET")
+	r.HandleFunc("/404", a.NotFoundHandler).Methods("GET")
+
 	// SPA Entry Points
 	r.HandleFunc("/admin/{any:.*}", a.AdminLandingHandler).Methods("GET")
 	r.HandleFunc("/portal/{any:.*}", a.PortalLandingHandler).Methods("GET")
@@ -360,6 +371,10 @@ func main() {
 	r.HandleFunc("/register", a.RegistrationLandingHandler).Methods("GET")
 	r.HandleFunc("/register_user", a.RegisterUser).Methods("POST")
 	r.HandleFunc("/verify_email", a.VerifyEmail).Methods("POST")
+
+	// Password reset endpoints
+	r.HandleFunc("/password-reset", a.PasswordResetLandingHandler).Methods("GET")
+	r.HandleFunc("/request_password_reset", a.RequestPasswordReset).Methods("POST")
 	r.HandleFunc("/reset_password", a.ResetPassword).Methods("POST")
 	r.HandleFunc("/surveys/new", a.SurveyUpsert).Methods("POST")
 	r.HandleFunc("/surveys/{id:[0-9]+}/response", a.SurveyResponse).Methods("POST")
@@ -423,4 +438,3 @@ func main() {
 	log.Println("shutting down")
 	os.Exit(0)
 }
-

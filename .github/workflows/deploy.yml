@@ -1,0 +1,112 @@
+name: Deploy Cronos to Google App Engine
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      GOPRIVATE: github.com/snowpackdata/cronos
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.21
+          
+      # Setup Node.js for both Vue admin and portal
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'server/admin/package-lock.json'
+          
+      # Build Vue Admin Project
+      - name: Install npm dependencies for Vue Admin
+        working-directory: ./server/admin
+        run: npm ci
+        
+      - name: Build Vue Admin
+        working-directory: ./server/admin
+        run: npm run build
+        
+      - name: Install npm dependencies for Vue Portal
+        working-directory: ./server/portal
+        run: npm ci
+        
+      - name: Build Vue Portal
+        working-directory: ./server/portal
+        run: npm run build
+        
+      # Ensure static directories exist
+      - name: Ensure static directories
+        working-directory: ./server
+        run: mkdir -p ./static/css
+        
+      # Build the Go application
+      - name: Go Get
+        working-directory: ./server
+        run: go get .
+        
+      - name: Build
+        working-directory: ./server
+        run: go build -v ./...
+        
+      # Create environment variable of current Git hash
+      - name: Generate Commit Hash
+        id: commit-hash
+        run: echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        
+      - name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v1'
+        with:
+          credentials_json: '${{ secrets.GCP_SERVICE_CREDENTIALS }}'
+      
+      # Install app-engine-go component
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v1'
+        
+      - name: 'Install App Engine Go component'
+        run: |
+          gcloud components update
+          gcloud components install app-engine-go
+          
+      # List all files to verify build
+      - name: List remaining files
+        working-directory: ./server
+        run: |
+          echo "Total file count:"
+          find . -type f | wc -l
+          echo "Top-level directories:"
+          ls -la
+          
+      - name: 'Deploy to GAE'
+        uses: 'google-github-actions/deploy-appengine@v2'
+        with:
+          project_id: '${{ secrets.GCP_PROJECT }}'
+          working_directory: './server'
+          build_env_vars: |-
+              GIT_HASH=${{ env.GIT_HASH }}
+          env_vars: |-
+            SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
+            CLOUD_SQL_CONNECTION_NAME=${{ secrets.CLOUD_SQL_CONNECTION_NAME }}
+            CLOUD_SQL_USERNAME=${{ secrets.CLOUD_SQL_USERNAME }}
+            CLOUD_SQL_PASSWORD=${{ secrets.CLOUD_SQL_PASSWORD }}
+            CLOUD_SQL_DATABASE_NAME=${{ secrets.CLOUD_SQL_DATABASE_NAME }}
+            GCP_PROJECT=${{ secrets.GCP_PROJECT }}
+            GCS_BUCKET=${{ secrets.GCS_BUCKET }}
+            GIT_HASH=${{ env.GIT_HASH }}
+            HUBSPOT_API_KEY=${{ secrets.HUBSPOT_API_KEY }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            SLACK_WEBHOOK_URL=${{ secrets.SLACK_WEBHOOK_URL }}
+            ENVIRONMENT=production
+            GOOGLE_REDIRECT_URL=${{ secrets.GOOGLE_REDIRECT_URL }}
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}

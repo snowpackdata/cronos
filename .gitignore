@@ -21,3 +21,16 @@
 # Go workspace file
 go.work
 sendgrid.env
+
+# IDE
+.vscode/
+.idea/
+
+# Sensitive credentials
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!jsconfig.json
+.gcp-client-auth
+*-key.json

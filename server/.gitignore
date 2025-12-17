@@ -27,6 +27,7 @@ portal/node_modules/
 # Build artifacts
 admin/dist/
 portal/dist/
+static/
 
 # Log files
 *.log
@@ -34,6 +35,7 @@ portal/dist/
 # Environment files
 .env
 .env.*
+.envrc
 !.env.example
 
 # IDE
