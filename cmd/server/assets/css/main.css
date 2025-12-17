@@ -1,0 +1,295 @@
+@import "tailwindcss";
+
+:root {
+  --default-font-family: Montserrat, sans-serif;
+}
+
+@layer base {
+  @theme {
+    --color-teal: #226d87;
+    --color-blue: #021c51;
+    --color-blue-light-blue: #ced9e1;
+    --color-blue-dark-blue: #0a192f;
+    --color-blue-500: #2196f3;
+    --color-blue-dark: #021c51;
+    --color-blue-light: #ced9e1;
+    --color-blue-gray: #22262a;
+    --color-pink: #be5bda;
+    --color-orange: #ff7849;
+    --color-green: #58837e;
+    --color-green-light-green: #b5e7a0;
+    --color-green-100: #dcfce7;
+    --color-green-600: #16a34a;
+    --color-gray: #d6d7d9;
+    --color-gray-gray-light: #eeeff1;
+    --color-gray-gray-dark: #22262a;
+    --color-gray-100: #f3f4f6;
+    --color-gray-400: #9ca3af;
+    --color-gray-500: #6b7280;
+    --color-gray-800: #1F2937;
+    --color-gray-900: #111827;
+    --color-neutral: #f4f5f7;
+    --color-neutral-50: #f9fafb;
+    --color-neutral-600: #6b7280;
+    --color-neutral-950: #1a202c;
+    --color-white: #ffffff;
+    --color-yellow: #f7d070;
+    --color-black: #000000;
+    --color-red: #9f0d0d;
+    --color-red-600: #dc2626;
+    --color-red-700: #b91c1c;
+    --color-sky-600: #0284c7;
+    --color-sky-700: #0369a1;
+    --color-sky-800: #075985;
+    --color-sky-900: #0c4a6e;
+    --color-sky-950: #082f49;
+    --color-green-success: #47d67c;
+    --color-green-success-light: #e5f3ec;
+    --color-green-success-dark: #186335;
+    --color-red-error: #f44336;
+    --color-red-error-light: #ffebee;
+    --color-red-error-dark: #b71c1c;
+    --color-whitesmoke: #f5f5f5;
+  }
+}
+
+html { scroll-behavior: smooth; }
+
+h1.blog-title {
+    text-align:center;
+    font-size: 2.5rem;
+    font-family: 'Raleway', "Roboto Slab", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    color: #00143D;
+    font-weight: 900;
+    margin-left: 3vw;
+    margin-right: 3vw;
+
+}
+h2.blog-subtitle  {
+    font-size: 1.2rem;
+    font-weight: 300;
+    font-family: "Barlow", "Roboto Slab", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    margin-left: 3vw;
+    margin-right: 3vw;
+}
+
+.blog-details {
+    font-size: 1rem;
+    font-style: italic;
+    font-weight: 400;
+    font-family: "Barlow", "Roboto Slab", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+}
+
+/*Blog page represents the outer whitesmoke background container that contains the blog content*/
+.blog-page {
+    padding-top: 10vh;
+    padding-bottom: 15vh;
+    background-color: white;
+    border-radius: 10px;
+    padding-left: 2vw;
+    padding-right: 2vw;
+
+}
+
+
+/*blog body describes the inner html styling that is injected into the blog page*/
+.blog-body {
+    margin-left:5vw;
+    margin-right:5vw;
+}
+
+.blog-body h2 {
+    font-size: 18pt;
+    margin-top:1vh;
+    margin-bottom:1vh;
+}
+.blog-body p {
+    font-size:12pt;
+    word-wrap: break-word;
+}
+
+
+.blog-header {
+    font-size: 24pt;
+    padding:2%;
+    text-align:center;
+}
+
+.blog-body img {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    border-radius: 10px;
+    margin-top: 2%;
+    margin-bottom: 2%;
+}
+
+.fig-title {
+    font-size: 9pt;
+    font-style: italic;
+    text-align: center;
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    margin-bottom: 2%;
+    width: 75%;
+}
+
+/*This section defines all of the formatting that is used to render the blog content on page*/
+.blog-body {
+    font-family: "Raleway" , "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    line-height: 1.5;
+    h2 {
+        font-size: 18pt;
+        font-weight: 600;
+        margin-bottom: 1vh;
+
+    }
+    h3 {
+        font-size: 14pt;
+        font-weight: 600;
+        margin-bottom: 1vh;
+    }
+    h4 {
+        font-size: 12pt;
+        font-weight: 600;
+        margin-bottom: 1vh;
+        font-style: oblique;
+    }
+    code {
+        font-size: 12pt;
+        background-color: #eeeff1;
+        color: rgb(192, 54, 88);
+        border-radius: 4px;
+        padding: 2px;
+    }
+    a {
+        color: #007bff;
+        text-decoration: none;
+        background-color: transparent;
+    }
+    p {
+        font-size: 12pt;
+        margin-bottom: 1vh;
+    }
+    i {
+        font-size: 12pt;
+    }
+
+    .center {
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
+        width: 50%;
+    }
+
+    .caption {
+        font-size: .95em;
+        font-style: italic;
+        text-align: center;
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
+        margin-bottom: 2%;
+        width: 51%;
+    }
+
+    ol {
+        font-size: initial;
+        margin-left: 5%;
+
+    }
+    ol>li {
+        margin-bottom: 1vh;
+        list-style-type: disc;
+    }
+    ul {
+        font-size: initial;
+        margin-left: 5%;
+    }
+    ul>li {
+        margin-bottom: 1vh;
+        list-style-type: circle;
+    }
+
+    a.footnote {
+        text-decoration: none;
+        background-color: rgba(187, 238, 254, 0.99);
+        color: rgba(5, 42, 58, 0.99);
+        padding-left: 2px;
+        padding-right: 2px;
+        margin-right: 2px;
+        -webkit-transition: all 2s ease;
+        -moz-transition: all 2s ease;
+        -o-transition: all 2s ease;
+        transition: all 2s ease;
+    }
+
+    a.footnote span {
+        z-index: -1;
+        opacity: 0;
+        position: fixed;
+        left: 15px;
+        bottom: 40px;
+        margin-left: 0px;
+        margin-right: 18px;
+        padding: 14px 20px;
+        border-radius: 4px;
+        box-shadow: 5px 5px 8px #CCC;
+        border: 1px solid #aab6dd;
+        background-color: rgba(187, 238, 254, 0.99);
+        -webkit-transition: all 2s ease;
+        -moz-transition: all 2s ease;
+        -o-transition: all 2s ease;
+        transition: all 2s ease;
+    }
+
+    a.footnote:hover span {
+        z-index: 9;
+        opacity: 1;
+        -webkit-transition: all 2s ease;
+        -moz-transition: all 2s ease;
+        -o-transition: all 2s ease;
+        transition: all 2s ease;
+    }
+
+    pre {
+        background-color: #f8f9fa;
+        padding: 12px;
+        border-radius: 2px;
+        font-size: 10pt;
+        overflow-x: auto;
+        white-space: pre;
+        margin: 0;
+
+    }
+    code {
+        color: #d63384;
+    }
+    hr {
+        border: 0;
+        height: 1px;
+        background: #333;
+        background-image: linear-gradient(to right, #ccc, #333, #ccc);
+        margin-top: 2%;
+        margin-bottom: 2%;
+    }
+    .info-section {
+        background-color: #d6e2ea;
+        padding-left: 2%;
+        padding-right: 2%;
+        padding-top: 1%;
+        padding-bottom: 1%;
+        margin-bottom: 2%;
+        border-radius: 10px;
+    }
+}
+
+/*SERVICES PAGE*/
+.active {
+    padding: 10px;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    background-color: #5A8781;
+    color: white;
+}

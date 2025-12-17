@@ -1,0 +1,17 @@
+{
+  "scripts": {
+    "tailwindcss:watch": "npx @tailwindcss/cli -i ./assets/css/main.css -o ./assets/css/outputs.css --watch",
+    "tailwindcss:build": "npx @tailwindcss/cli -i ./assets/css/main.css -o ./assets/css/outputs.css --minify",
+    "dev": "npm run tailwind:watch"
+  },
+  "dependencies": {
+    "@tailwindcss/cli": "^4.0.9",
+    "@tailwindcss/forms": "^0.5.9"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.9",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^4.0.9"
+  }
+}

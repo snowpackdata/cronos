@@ -41,6 +41,14 @@ jobs:
         working-directory: cmd/server/portal
         run: npm run build
         
+      # Build Tailwind CSS for landing pages
+      - name: Install npm dependencies for Tailwind
+        working-directory: cmd/server
+        run: npm ci
+      - name: Build Tailwind CSS
+        working-directory: cmd/server
+        run: npm run tailwindcss:build
+        
       # Ensure static directories exist
       - name: Ensure static directories
         working-directory: cmd/server

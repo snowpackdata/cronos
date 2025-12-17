@@ -28,6 +28,9 @@ var portalAssets embed.FS
 //go:embed templates
 var templates embed.FS
 
+//go:embed assets
+var publicAssets embed.FS
+
 // App holds our information for accessing cronos application and methods across modules
 type App struct {
 	cronosApp *cronos.App
@@ -142,6 +145,10 @@ func main() {
 
 	portalStatic := r.PathPrefix("/portal/assets/").Subrouter()
 	portalStatic.PathPrefix("/").Handler(http.StripPrefix("/portal/assets/", createFileServer(portalAssets, "static/portal/assets")))
+
+	// Static file server for public assets (CSS, images for landing pages)
+	publicStatic := r.PathPrefix("/assets/").Subrouter()
+	publicStatic.PathPrefix("/").Handler(http.StripPrefix("/assets/", createFileServer(publicAssets, "assets")))
 
 	// Fallback handler for admin assets
 	r.PathPrefix("/admin/assets/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
