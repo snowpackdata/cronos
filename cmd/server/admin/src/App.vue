@@ -256,9 +256,20 @@ const logout = () => {
   
   // Redirect to login (no subdomain)
   const currentProtocol = window.location.protocol;
+  const currentHost = window.location.hostname;
   const currentPort = window.location.port;
   const portPart = currentPort ? `:${currentPort}` : '';
-  window.location.href = `${currentProtocol}//localhost${portPart}/login`;
+  
+  let loginHost;
+  if (currentHost === 'localhost' || currentHost === '127.0.0.1' || currentHost.includes('.localhost')) {
+    // Local development
+    loginHost = 'localhost';
+  } else {
+    // Production - redirect to cronosplatform.com
+    loginHost = 'cronosplatform.com';
+  }
+  
+  window.location.href = `${currentProtocol}//${loginHost}${portPart}/login`;
 };
 
 // Define admin navigation structure with mix of direct links and expandable sections
