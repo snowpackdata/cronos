@@ -446,21 +446,21 @@ func (a *App) SendInvoice(invoiceID uint) error {
 	if invoice.State != InvoiceStateApproved.String() {
 		return InvalidPriorState
 	}
-	
+
 	// Check if dates were previously set (from earlier PDF generation)
 	hadPreviousDates := !invoice.SentAt.IsZero()
 	previousSentAt := invoice.SentAt
-	
+
 	invoice.State = InvoiceStateSent.String()
 	invoice.SentAt = time.Now()
 	// Set the due date based on invoice date (e.g., net 30)
 	invoice.DueAt = invoice.SentAt.AddDate(0, 0, 30) // Default to 30 days
-	
+
 	// Log if we're updating stale dates (PDF will be regenerated)
 	if hadPreviousDates {
 		daysDiff := int(invoice.SentAt.Sub(previousSentAt).Hours() / 24)
 		if daysDiff > 0 {
-			log.Printf("Invoice %d had previous sent date from %s (%d days ago), updating to current date and will regenerate PDF", 
+			log.Printf("Invoice %d had previous sent date from %s (%d days ago), updating to current date and will regenerate PDF",
 				invoiceID, previousSentAt.Format("2006-01-02"), daysDiff)
 		}
 	}
@@ -850,7 +850,17 @@ func (a *App) AssociateEntry(entry *Entry, projectID uint) error {
 // SaveInvoiceToGCS saves the invoice to GCS
 func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 	ctx := context.Background()
-	
+
+	// Get tenant's bucket name
+	var tenant Tenant
+	if err := a.DB.First(&tenant, invoice.TenantID).Error; err != nil {
+		return fmt.Errorf("failed to get tenant for invoice: %w", err)
+	}
+	bucketName := tenant.BucketName
+	if bucketName == "" {
+		return fmt.Errorf("tenant %d has no bucket configured", invoice.TenantID)
+	}
+
 	// Auto-set sent/due dates if not already set (for PDF generation before sending)
 	// This ensures the PDF always has proper dates displayed
 	datesWereEmpty := invoice.SentAt.IsZero()
@@ -866,15 +876,15 @@ func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 		}
 		log.Printf("Auto-set sent_at and due_at for invoice ID %d (PDF generation)", invoice.ID)
 	}
-	
+
 	// Generate the invoice
 	// The output must be stored as a list of bytes in-memory becasue of the readonly filesystem in GAE
 	pdfBytes := a.GenerateInvoicePDF(invoice)
 	// Save the invoice to GCS
-	client := a.InitializeStorageClient(a.Project, a.Bucket)
+	client := a.InitializeStorageClient(a.Project, bucketName)
 
 	// Create a bucket handle
-	bucket := client.Bucket(a.Bucket)
+	bucket := client.Bucket(bucketName)
 	// Create a new object and write its contents to the bucket
 	filename := GenerateSecureFilename(invoice.GetInvoiceFilename()) + ".pdf"
 	objectName := "invoices/" + filename
@@ -891,7 +901,7 @@ func (a *App) SaveInvoiceToGCS(invoice *Invoice) error {
 	}
 
 	// save the public invoice URL to the database
-	invoice.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
+	invoice.GCSFile = "https://storage.googleapis.com/" + bucketName + "/" + objectName
 	a.DB.Save(&invoice)
 	return nil
 }

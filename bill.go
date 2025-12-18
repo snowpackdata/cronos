@@ -1,22 +1,35 @@
 package cronos
 
 import (
-	"cloud.google.com/go/storage"
 	"context"
+	"fmt"
 	"log"
+
+	"cloud.google.com/go/storage"
 )
 
 // SaveBillToGCS saves the invoice to GCS
 func (a *App) SaveBillToGCS(bill *Bill) error {
 	ctx := context.Background()
+
+	// Get tenant's bucket name
+	var tenant Tenant
+	if err := a.DB.First(&tenant, bill.TenantID).Error; err != nil {
+		return fmt.Errorf("failed to get tenant for bill: %w", err)
+	}
+	bucketName := tenant.BucketName
+	if bucketName == "" {
+		return fmt.Errorf("tenant %d has no bucket configured", bill.TenantID)
+	}
+
 	// Generate the invoice
 	// The output must be stored as a list of bytes in-memory because of the readonly filesystem in GAE
 	pdfBytes := a.GenerateBillPDF(bill)
 	// Save the invoice to GCS
-	client := a.InitializeStorageClient(a.Project, a.Bucket)
+	client := a.InitializeStorageClient(a.Project, bucketName)
 
 	// Create a bucket handle
-	bucket := client.Bucket(a.Bucket)
+	bucket := client.Bucket(bucketName)
 	// Create a new object and write its contents to the bucket
 	filename := bill.GetBillFilename() + ".pdf"
 	objectName := "bills/" + filename
@@ -38,7 +51,7 @@ func (a *App) SaveBillToGCS(bill *Bill) error {
 		log.Fatalf("Failed to update object: %v", err)
 	}
 	// save the public invoice URL to the database
-	bill.GCSFile = "https://storage.googleapis.com/" + a.Bucket + "/" + objectName
+	bill.GCSFile = "https://storage.googleapis.com/" + bucketName + "/" + objectName
 	a.DB.Save(&bill)
 	return nil
 }

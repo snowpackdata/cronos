@@ -114,6 +114,56 @@ func (a *App) InitializeStorageClient(projectID, bucketName string) *storage.Cli
 	return storageClient
 }
 
+// CreateTenantBucket creates a new GCS bucket for a tenant with appropriate settings
+func (a *App) CreateTenantBucket(tenantSlug string) (string, error) {
+	ctx := context.Background()
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to create storage client: %w", err)
+	}
+	defer storageClient.Close()
+
+	// Generate bucket name from tenant slug (GCS bucket names must be globally unique)
+	// Format: cronos-{slug} or use project prefix if available
+	projectID := os.Getenv("GCP_PROJECT")
+	bucketName := fmt.Sprintf("cronos-%s-%s", projectID, tenantSlug)
+
+	// GCS bucket names have restrictions: lowercase, numbers, hyphens, 3-63 chars
+	bucketName = strings.ToLower(bucketName)
+	bucketName = strings.ReplaceAll(bucketName, "_", "-")
+
+	// Ensure bucket name length is within limits
+	if len(bucketName) > 63 {
+		bucketName = bucketName[:63]
+	}
+
+	bucket := storageClient.Bucket(bucketName)
+
+	// Check if bucket already exists
+	_, err = bucket.Attrs(ctx)
+	if err == nil {
+		// Bucket already exists
+		log.Printf("Bucket %s already exists", bucketName)
+		return bucketName, nil
+	}
+
+	// Create the bucket with appropriate settings
+	bucketAttrs := &storage.BucketAttrs{
+		Location:     "US", // or get from env var for region
+		StorageClass: "STANDARD",
+		UniformBucketLevelAccess: storage.UniformBucketLevelAccess{
+			Enabled: true, // Enable uniform access for better security
+		},
+	}
+
+	if err := bucket.Create(ctx, projectID, bucketAttrs); err != nil {
+		return "", fmt.Errorf("failed to create bucket %s: %w", bucketName, err)
+	}
+
+	log.Printf("Created bucket: %s", bucketName)
+	return bucketName, nil
+}
+
 // MigrateTenants migrates only the Tenant and GoogleAuth tables (fast, targeted migration)
 func (a *App) MigrateTenants() error {
 	log.Println("Running targeted Tenant and GoogleAuth migration...")
@@ -229,4 +279,16 @@ func GetTenantIDFromContext(ctx context.Context) uint {
 		return 0
 	}
 	return tenant.ID
+}
+
+// GetTenantBucketFromContext extracts the tenant's GCS bucket name from context
+func GetTenantBucketFromContext(ctx context.Context) string {
+	type contextKey string
+	const TenantContextKey contextKey = "tenant"
+
+	tenant, ok := ctx.Value(TenantContextKey).(*Tenant)
+	if !ok || tenant == nil {
+		return ""
+	}
+	return tenant.BucketName
 }

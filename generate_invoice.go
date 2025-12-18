@@ -52,6 +52,54 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 		a.DB.Where("id = ?", *invoice.ProjectID).First(&project)
 	}
 
+	// Get the tenant's owner account for "From" information
+	var ownerAccount Account
+	a.DB.Preload("LogoAsset").Where("tenant_id = ? AND type = ?", invoice.TenantID, AccountTypeInternal.String()).First(&ownerAccount)
+
+	// Use owner account details or fall back to defaults
+	fromName := defaultFromName
+	fromAddress := defaultFromAddress
+	fromContact := defaultContact
+	var logoPath string // No default logo
+
+	if ownerAccount.ID != 0 {
+		if ownerAccount.LegalName != "" {
+			fromName = ownerAccount.LegalName
+		} else if ownerAccount.Name != "" {
+			fromName = ownerAccount.Name
+		}
+		if ownerAccount.Address != "" {
+			fromAddress = ownerAccount.Address
+		}
+		if ownerAccount.Email != "" {
+			fromContact = ownerAccount.Email
+		}
+		// Check if custom logo exists
+		if ownerAccount.LogoAsset != nil && ownerAccount.LogoAsset.GCSObjectPath != nil {
+			// Download logo from GCS to temp file
+			ctx := context.Background()
+			storageClient := a.InitializeStorageClient(a.Project, *ownerAccount.LogoAsset.BucketName)
+			bucket := storageClient.Bucket(*ownerAccount.LogoAsset.BucketName)
+
+			rc, err := bucket.Object(*ownerAccount.LogoAsset.GCSObjectPath).NewReader(ctx)
+			if err == nil {
+				defer rc.Close()
+
+				// Create temp file
+				tmpFile, err := os.CreateTemp("", "logo-*"+filepath.Ext(*ownerAccount.LogoAsset.GCSObjectPath))
+				if err == nil {
+					defer os.Remove(tmpFile.Name())
+					defer tmpFile.Close()
+
+					// Copy logo to temp file
+					if _, err := io.Copy(tmpFile, rc); err == nil {
+						logoPath = tmpFile.Name()
+					}
+				}
+			}
+		}
+	}
+
 	InvoiceNumber := strconv.Itoa(time.Now().Year()) + "00" + strconv.Itoa(int(invoice.ID))
 
 	// Initialize the PDF document with set margins and add a page that we can work with
@@ -61,13 +109,34 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	pageW, _ := pdf.GetPageSize()
 	safeAreaW := pageW - 2*marginX
 
-	// Build the header
-	pdf.ImageOptions("./branding/logo/logo-large-light.png", 10, 0, 30, 30, false, gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}, 0, "")
+	// Build the header - add logo only if custom logo exists
+	if logoPath != "" {
+		ext := strings.ToLower(filepath.Ext(logoPath))
+		if ext == ".svg" {
+			// Parse SVG file
+			svgBasic, err := gofpdf.SVGBasicFileParse(logoPath)
+			if err == nil {
+				// Calculate scale to fit in 30x30 box
+				scale := 30.0 / svgBasic.Wd
+				if svgBasic.Ht*scale > 30.0 {
+					scale = 30.0 / svgBasic.Ht
+				}
+				pdf.SVGBasicWrite(&svgBasic, scale)
+			}
+		} else {
+			// Determine image type from file extension for raster images
+			imageType := "PNG"
+			if ext == ".jpg" || ext == ".jpeg" {
+				imageType = "JPG"
+			}
+			pdf.ImageOptions(logoPath, 10, 0, 30, 30, false, gofpdf.ImageOptions{ImageType: imageType, ReadDpi: true}, 0, "")
+		}
+	}
 	pdf.SetFont(defaultFont, "B", 16)
 	_, lineHeight := pdf.GetFontSize()
 	currentY := pdf.GetY() + lineHeight + gapY
 	pdf.SetXY(marginX, currentY)
-	pdf.Cell(headerWidth, headerHeight, defaultFromName)
+	pdf.Cell(headerWidth, headerHeight, fromName)
 
 	leftY := pdf.GetY() + lineHeight + gapY
 
@@ -90,13 +159,13 @@ func (a *App) GenerateInvoicePDF(invoice *Invoice) []byte {
 	lineBreak := lineHeight + float64(1)
 
 	// Left hand info
-	splittedFromAddress := breakAddress(defaultFromAddress)
+	splittedFromAddress := breakAddress(fromAddress)
 	for _, add := range splittedFromAddress {
 		pdf.Cell(safeAreaW/2, lineHeight, add)
 		pdf.Ln(lineBreak)
 	}
 	pdf.SetFontStyle("I")
-	pdf.Cell(safeAreaW/2, lineHeight, defaultContact)
+	pdf.Cell(safeAreaW/2, lineHeight, fromContact)
 	pdf.Ln(lineBreak)
 	pdf.Ln(lineBreak)
 	pdf.Ln(lineBreak)

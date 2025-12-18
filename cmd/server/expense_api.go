@@ -234,10 +234,10 @@ func (a *App) CreateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 			contentType = header.Header.Get("Content-Type")
 		}
 
-		// Upload to GCS
-		bucketName := a.cronosApp.Bucket
+		// Upload to GCS - use tenant's bucket
+		bucketName := tenant.BucketName
 		if bucketName == "" {
-			respondWithError(w, http.StatusInternalServerError, "GCS bucket not configured")
+			respondWithError(w, http.StatusInternalServerError, "Tenant bucket not configured")
 			return
 		}
 
@@ -513,10 +513,10 @@ func (a *App) UpdateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 			// Detect content type
 			contentType := http.DetectContentType(fileBytes)
 
-			// Upload to GCS
-			bucketName := a.cronosApp.Bucket
+			// Upload to GCS - use tenant's bucket
+			bucketName := tenant.BucketName
 			if bucketName == "" {
-				log.Println("Bucket name not configured")
+				log.Println("Tenant bucket not configured")
 				respondWithError(w, http.StatusInternalServerError, "Storage not configured")
 				return
 			}

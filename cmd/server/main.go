@@ -116,7 +116,7 @@ func main() {
 		log.Printf("Connecting to Cloud SQL via proxy at localhost:%s", dbPort)
 		log.Printf("Database: %s, User: %s", databaseName, user)
 		cronosApp.InitializeLocal(user, password, dbHost, databaseName)
-		// cronosApp.MigrateModel(&cronos.User{}) // Fast targeted migration for Tenant model only
+		// cronosApp.MigrateModel(&cronos.Account{}) // Fast targeted migration for Tenant model only
 	} else {
 		log.Println("Initializing in LOCAL mode with SQLite")
 		cronosApp.InitializeSQLite()

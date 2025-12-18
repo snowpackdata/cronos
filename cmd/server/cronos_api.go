@@ -205,9 +205,9 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 			// Headshot provided - upload to GCS
 			defer file.Close()
 
-			bucketName := a.cronosApp.Bucket
+			bucketName := tenant.BucketName
 			if bucketName == "" {
-				log.Printf("Warning: GCS bucket not configured - skipping headshot upload")
+				log.Printf("Warning: Tenant bucket not configured - skipping headshot upload")
 			} else {
 				// Read file into memory
 				fileBytes, err := io.ReadAll(file)
@@ -1063,7 +1063,7 @@ func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
 	var account cronos.Account
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Assets").First(&account, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Assets").Preload("LogoAsset").First(&account, vars["id"])
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(&account)
@@ -1103,6 +1103,47 @@ func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
 			singleInvoice, _ := strconv.ParseBool(r.FormValue("projects_single_invoice"))
 			account.ProjectsSingleInvoice = singleInvoice
 		}
+
+		// Handle logo upload
+		if err := r.ParseMultipartForm(10 << 20); err == nil { // 10MB limit
+			file, header, err := r.FormFile("logo")
+			if err == nil && file != nil {
+				defer file.Close()
+
+				// Read file bytes
+				fileBytes, err := io.ReadAll(file)
+				if err == nil {
+					// Upload to GCS - use tenant's bucket
+					bucketName := tenant.BucketName
+					fileExt := filepath.Ext(header.Filename)
+					timestamp := time.Now().Unix()
+					objectName := fmt.Sprintf("assets/logos/account-%d-%d%s", account.ID, timestamp, fileExt)
+					contentType := header.Header.Get("Content-Type")
+
+					if err := a.cronosApp.UploadObject(r.Context(), bucketName, objectName, bytes.NewReader(fileBytes), contentType); err == nil {
+						// Create asset record
+						size := int64(len(fileBytes))
+						uploadStatus := "completed"
+						logoAsset := cronos.Asset{
+							TenantID:      tenant.ID,
+							AccountID:     &account.ID,
+							Name:          header.Filename,
+							AssetType:     contentType,
+							BucketName:    &bucketName,
+							ContentType:   &contentType,
+							Size:          &size,
+							UploadStatus:  &uploadStatus,
+							GCSObjectPath: &objectName,
+						}
+
+						if err := a.cronosApp.DB.Create(&logoAsset).Error; err == nil {
+							account.LogoAssetID = &logoAsset.ID
+						}
+					}
+				}
+			}
+		}
+
 		a.cronosApp.DB.Save(&account)
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		_ = json.NewEncoder(w).Encode(&account)
@@ -2682,11 +2723,11 @@ func (a *App) ProjectAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 			size := int64(len(fileBytes))
 			asset.Size = &size
 
-			// GCS Upload Logic
-			bucketName := a.cronosApp.Bucket
+			// GCS Upload Logic - use tenant's bucket
+			bucketName := tenant.BucketName
 			if bucketName == "" {
-				log.Println("ProjectAssetsCreateHandler: GCS Bucket is not configured in cronos.App.Bucket")
-				respondWithError(w, http.StatusInternalServerError, "GCS bucket configuration is missing for file upload")
+				log.Println("ProjectAssetsCreateHandler: Tenant bucket is not configured")
+				respondWithError(w, http.StatusInternalServerError, "Tenant bucket configuration is missing for file upload")
 				return
 			}
 
@@ -3159,10 +3200,10 @@ func (a *App) AccountAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 			size := int64(len(fileBytes))
 			asset.Size = &size
 
-			bucketName := a.cronosApp.Bucket
+			bucketName := tenant.BucketName
 			if bucketName == "" {
-				log.Println("AccountAssetsCreateHandler: GCS Bucket is not configured.")
-				respondWithError(w, http.StatusInternalServerError, "GCS bucket configuration is missing")
+				log.Println("AccountAssetsCreateHandler: Tenant bucket is not configured.")
+				respondWithError(w, http.StatusInternalServerError, "Tenant bucket configuration is missing")
 				return
 			}
 			objectName := fmt.Sprintf("assets/accounts/%d/%s_%s", accountID, time.Now().Format("20060102150405"), header.Filename)

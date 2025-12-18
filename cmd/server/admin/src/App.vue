@@ -65,8 +65,17 @@
                   </div>
                 </li>
               </ul>
-              <!-- Logout button at bottom of mobile sidebar -->
-              <div class="mt-auto pt-4 border-t border-gray-700">
+              <!-- Settings and Logout at bottom of mobile sidebar -->
+              <div class="mt-auto pt-4 border-t border-gray-700 space-y-1">
+                <router-link
+                  v-if="isAdmin"
+                  to="/settings"
+                  class="flex items-center gap-x-2 px-2 py-2 text-xs font-medium text-gray-400 hover:bg-gray-800 hover:text-white rounded-md transition-all duration-200"
+                  :class="{ 'bg-gray-800 text-white': $route.path === '/settings' }"
+                >
+                  <i class="fas fa-cog h-4 w-4 shrink-0"></i>
+                  <span>Settings</span>
+                </router-link>
                 <button
                   @click="logout"
                   class="w-full flex items-center gap-x-2 px-2 py-2 text-xs font-medium text-gray-400 hover:bg-red-600 hover:text-white rounded-md transition-all duration-200"
@@ -138,8 +147,17 @@
               </div>
             </li>
           </ul>
-          <!-- Logout button at bottom of sidebar -->
-          <div class="mt-auto pt-4 border-t border-gray-700">
+          <!-- Settings and Logout at bottom of sidebar -->
+          <div class="mt-auto pt-4 border-t border-gray-700 space-y-1">
+            <router-link
+              v-if="isAdmin"
+              to="/settings"
+              class="flex items-center gap-x-2 px-2 py-2 text-xs font-medium text-gray-400 hover:bg-gray-800 hover:text-white rounded-md transition-all duration-200"
+              :class="{ 'bg-gray-800 text-white': $route.path === '/settings' }"
+            >
+              <i class="fas fa-cog h-4 w-4 shrink-0"></i>
+              <span>Settings</span>
+            </router-link>
             <button
               @click="logout"
               class="w-full flex items-center gap-x-2 px-2 py-2 text-xs font-medium text-gray-400 hover:bg-red-600 hover:text-white rounded-md transition-all duration-200"
@@ -299,7 +317,6 @@ const adminNavigationSections = [
   { name: 'Billing Codes', path: '/billing-codes', icon: 'fa-barcode' },
   { name: 'Rates', path: '/rates', icon: 'fa-percent' },
       { name: 'Expenses', path: '/expense-config', icon: 'fa-tags' },
-      { name: 'Settings', path: '/settings', icon: 'fa-cog' },
     ]
   },
   {
@@ -319,6 +336,19 @@ const staffNavigationSections = [
   { name: 'Timesheet', path: '/timesheet', icon: 'fa-clock' },
   { name: 'Expenses', path: '/expenses', icon: 'fa-receipt' }
 ];
+
+// Computed property to check if user is admin
+const isAdmin = computed(() => {
+  const token = localStorage.getItem('snowpack_token');
+  if (!token) return false;
+
+  try {
+    const decodedToken = jwtDecode<DecodedToken>(token);
+    return decodedToken.Role === 'ADMIN';
+  } catch (error) {
+    return false;
+  }
+});
 
 // Computed navigation sections based on user role
 // Watch route.path to trigger re-evaluation after router stores token

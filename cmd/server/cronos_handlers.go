@@ -141,13 +141,22 @@ func (a *App) RegisterTenant(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	// Create GCS bucket for this tenant
+	bucketName, err := a.cronosApp.CreateTenantBucket(tenantSlug)
+	if err != nil {
+		log.Printf("RegisterTenant Error: Failed to create bucket: %v", err)
+		http.Error(w, "Failed to create storage bucket", http.StatusInternalServerError)
+		return
+	}
+
 	// Create the tenant
 	tenant := cronos.Tenant{
-		Name:   tenantName,
-		Slug:   tenantSlug,
-		Domain: tenantDomain,
-		Plan:   "trial",
-		Status: "active",
+		Name:       tenantName,
+		Slug:       tenantSlug,
+		Domain:     tenantDomain,
+		BucketName: bucketName,
+		Plan:       "trial",
+		Status:     "active",
 	}
 
 	if err := a.cronosApp.DB.Create(&tenant).Error; err != nil {
@@ -156,7 +165,7 @@ func (a *App) RegisterTenant(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Printf("RegisterTenant: Created tenant %s (ID: %d)", tenant.Name, tenant.ID)
+	log.Printf("RegisterTenant: Created tenant %s (ID: %d) with bucket %s", tenant.Name, tenant.ID, bucketName)
 
 	// Hash the admin password (leave empty for Google OAuth users)
 	var passwordHash string
@@ -172,17 +181,22 @@ func (a *App) RegisterTenant(w http.ResponseWriter, req *http.Request) {
 	// If adminPassword is empty, passwordHash remains empty string
 	// This indicates a Google-only user
 
-	// Create internal account for the tenant
-	internalAccount := cronos.Account{
-		Name:     "Internal",
-		Type:     cronos.AccountTypeInternal.String(),
-		TenantID: tenant.ID,
+	// Create owner account representing the tenant's company
+	// This is the account that holds company details (legal name, address, etc.)
+	ownerAccount := cronos.Account{
+		Name:      tenantName,
+		LegalName: tenantName, // Can be updated later with LLC, Inc., etc.
+		Type:      cronos.AccountTypeInternal.String(),
+		Email:     adminEmail, // Use admin email as initial contact
+		TenantID:  tenant.ID,
 	}
-	if err := a.cronosApp.DB.Create(&internalAccount).Error; err != nil {
-		log.Printf("RegisterTenant Error: Failed to create internal account: %v", err)
-		http.Error(w, "Failed to create internal account", http.StatusInternalServerError)
+	if err := a.cronosApp.DB.Create(&ownerAccount).Error; err != nil {
+		log.Printf("RegisterTenant Error: Failed to create owner account: %v", err)
+		http.Error(w, "Failed to create owner account", http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("RegisterTenant: Created owner account %s (ID: %d)", ownerAccount.Name, ownerAccount.ID)
 
 	// Create the first admin user
 	adminUser := cronos.User{
@@ -190,7 +204,7 @@ func (a *App) RegisterTenant(w http.ResponseWriter, req *http.Request) {
 		Password:  passwordHash, // Empty string if Google-only user
 		Role:      cronos.UserRoleAdmin.String(),
 		TenantID:  tenant.ID,
-		AccountID: internalAccount.ID,
+		AccountID: ownerAccount.ID,
 	}
 
 	if err := a.cronosApp.DB.Create(&adminUser).Error; err != nil {
@@ -221,7 +235,7 @@ func (a *App) RegisterTenant(w http.ResponseWriter, req *http.Request) {
 		issuer = "localhost"
 	}
 
-	tokenString, err := generateTokenString(adminUser, true, internalAccount.ID, issuer, tenant.ID)
+	tokenString, err := generateTokenString(adminUser, true, ownerAccount.ID, issuer, tenant.ID)
 	if err != nil {
 		log.Printf("RegisterTenant Error: Failed to generate token: %v", err)
 		http.Error(w, "Error generating authentication token", http.StatusInternalServerError)

@@ -294,6 +294,7 @@ type Tenant struct {
 	Slug        string         `gorm:"uniqueIndex;size:63;not null" json:"slug"`
 	Name        string         `gorm:"size:255;not null" json:"name"`
 	Domain      string         `gorm:"uniqueIndex;size:255" json:"domain"` // Email domain for Google OAuth (e.g., snowpackdata.com)
+	BucketName  string         `gorm:"size:255" json:"bucket_name"`        // GCS bucket name for this tenant's data
 	Plan        string         `gorm:"default:'trial'" json:"plan"`
 	Status      string         `gorm:"default:'active'" json:"status"`
 	TrialEndsAt *time.Time     `json:"trial_ends_at,omitempty"`
@@ -304,16 +305,16 @@ type Tenant struct {
 type User struct {
 	// User is the generic user object for anyone accessing the application
 	gorm.Model
-	TenantID            uint       `gorm:"not null;index:idx_users_tenant_email,priority:1" json:"tenant_id"`
-	Tenant              Tenant     `gorm:"foreignKey:TenantID" json:"-"`
-	Email               string     `gorm:"uniqueIndex:idx_users_tenant_email,priority:2;size:255" json:"email"`
-	Password            string     `json:"-"`
-	IsAdmin             bool       `json:"is_admin"`
-	Role                string     `json:"role"`
-	AccountID           uint       `json:"account_id"`
-	GoogleAccessToken   string     `json:"-"` // OAuth2 access token from Google login
-	GoogleRefreshToken  string     `json:"-"` // OAuth2 refresh token from Google login
-	GoogleTokenExpiry   *time.Time `json:"-"` // When the access token expires
+	TenantID           uint       `gorm:"not null;index:idx_users_tenant_email,priority:1" json:"tenant_id"`
+	Tenant             Tenant     `gorm:"foreignKey:TenantID" json:"-"`
+	Email              string     `gorm:"uniqueIndex:idx_users_tenant_email,priority:2;size:255" json:"email"`
+	Password           string     `json:"-"`
+	IsAdmin            bool       `json:"is_admin"`
+	Role               string     `json:"role"`
+	AccountID          uint       `json:"account_id"`
+	GoogleAccessToken  string     `json:"-"` // OAuth2 access token from Google login
+	GoogleRefreshToken string     `json:"-"` // OAuth2 refresh token from Google login
+	GoogleTokenExpiry  *time.Time `json:"-"` // When the access token expires
 }
 
 type Employee struct {
@@ -417,6 +418,8 @@ type Account struct {
 	Address               string    `json:"address"`
 	Email                 string    `json:"email"`
 	Website               string    `json:"website"`
+	LogoAssetID           *uint     `json:"logo_asset_id"`
+	LogoAsset             *Asset    `gorm:"foreignKey:LogoAssetID" json:"logo_asset,omitempty"`
 	Clients               []User    `json:"clients"`
 	Projects              []Project `json:"projects"`
 	Invoices              []Invoice `json:"invoices"`
