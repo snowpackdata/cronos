@@ -116,6 +116,7 @@ func main() {
 		log.Printf("Connecting to Cloud SQL via proxy at localhost:%s", dbPort)
 		log.Printf("Database: %s, User: %s", databaseName, user)
 		cronosApp.InitializeLocal(user, password, dbHost, databaseName)
+		// cronosApp.MigrateModel(&cronos.User{}) // Fast targeted migration for Tenant model only
 	} else {
 		log.Println("Initializing in LOCAL mode with SQLite")
 		cronosApp.InitializeSQLite()
@@ -220,10 +221,15 @@ func main() {
 		http.ServeContent(w, r, stat.Name(), stat.ModTime(), file.(io.ReadSeeker))
 	})
 
-	// Admin API routes - require valid token AND IsStaff == true
+	// Admin API routes - require tenant, valid token AND IsStaff == true
 	adminApi := r.PathPrefix("/api").Subrouter()
+	adminApi.Use(TenantMiddleware(&cronosApp)) // Apply tenant middleware first
 	adminApi.Use(JwtVerify)
 	adminApi.Use(RequireStaff)
+
+	// Tenant information endpoint
+	adminApi.HandleFunc("/tenant", a.GetTenantHandler).Methods("GET")
+	adminApi.HandleFunc("/tenant", a.UpdateTenantHandler).Methods("PUT")
 
 	// Invoice routes
 	adminApi.HandleFunc("/invoices/draft", a.DraftInvoiceListHandler).Methods("GET")
@@ -394,12 +400,18 @@ func main() {
 	r.HandleFunc("/register_user", a.RegisterUser).Methods("POST")
 	r.HandleFunc("/verify_email", a.VerifyEmail).Methods("POST")
 
+	// Tenant registration (hidden link, not publicly advertised)
+	r.HandleFunc("/new-organization", a.TenantRegistrationLandingHandler).Methods("GET")
+	r.HandleFunc("/register_tenant", a.RegisterTenant).Methods("POST")
+
+	// Google OAuth login endpoints (separate from calendar OAuth)
+	r.HandleFunc("/auth/google/login", a.GoogleLoginHandler).Methods("GET")
+	r.HandleFunc("/auth/google/login/callback", a.GoogleLoginCallbackHandler).Methods("GET")
+
 	// Password reset endpoints
 	r.HandleFunc("/password-reset", a.PasswordResetLandingHandler).Methods("GET")
 	r.HandleFunc("/request_password_reset", a.RequestPasswordReset).Methods("POST")
 	r.HandleFunc("/reset_password", a.ResetPassword).Methods("POST")
-	r.HandleFunc("/surveys/new", a.SurveyUpsert).Methods("POST")
-	r.HandleFunc("/surveys/{id:[0-9]+}/response", a.SurveyResponse).Methods("POST")
 
 	// Token refresh endpoint
 	r.HandleFunc("/api/refresh_token", a.RefreshTokenHandler).Methods("POST")

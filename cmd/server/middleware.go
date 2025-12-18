@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	jwt "github.com/golang-jwt/jwt/v5"
+	"github.com/snowpackdata/cronos"
 )
 
 // AppContextKey is used as the key for storing and retrieving the App from the context
@@ -29,6 +30,7 @@ func (a *App) AppContextMiddleware(next http.Handler) http.Handler {
 // Claims is a non-persistent object that is used to store the JWT token and associated information
 type Claims struct {
 	UserID           uint
+	TenantID         uint
 	AccountID        uint
 	Email            string
 	IsStaff          bool
@@ -37,18 +39,30 @@ type Claims struct {
 }
 
 func (c Claims) GetExpirationTime() (*jwt.NumericDate, error) {
+	if c.RegisteredClaims == nil {
+		return nil, nil
+	}
 	return c.RegisteredClaims.ExpiresAt, nil
 }
 
 func (c Claims) GetIssuedAt() (*jwt.NumericDate, error) {
+	if c.RegisteredClaims == nil {
+		return nil, nil
+	}
 	return c.RegisteredClaims.IssuedAt, nil
 }
 
 func (c Claims) GetNotBefore() (*jwt.NumericDate, error) {
+	if c.RegisteredClaims == nil {
+		return nil, nil
+	}
 	return c.RegisteredClaims.NotBefore, nil
 }
 
 func (c Claims) GetIssuer() (string, error) {
+	if c.RegisteredClaims == nil {
+		return "", nil
+	}
 	return c.RegisteredClaims.Issuer, nil
 }
 
@@ -118,10 +132,16 @@ func ParseTokenAndSetUserContext(next http.Handler) http.Handler {
 			return []byte(JWTSecret), nil
 		})
 
-		if err == nil && token.Valid && IsValidIssuer(tclaims.RegisteredClaims.Issuer) {
-			log.Printf("ParseTokenAndSetUserContext: Token valid. UserID: %d, AccountID: %d, Email: %s, IsStaff: %v, Role: %s",
-				tclaims.UserID, tclaims.AccountID, tclaims.Email, tclaims.IsStaff, tclaims.Role)
+		issuer := ""
+		if tclaims.RegisteredClaims != nil {
+			issuer = tclaims.RegisteredClaims.Issuer
+		}
+
+		if err == nil && token.Valid && IsValidIssuer(issuer) {
+			log.Printf("ParseTokenAndSetUserContext: Token valid. UserID: %d, TenantID: %d, AccountID: %d, Email: %s, IsStaff: %v, Role: %s",
+				tclaims.UserID, tclaims.TenantID, tclaims.AccountID, tclaims.Email, tclaims.IsStaff, tclaims.Role)
 			ctx := context.WithValue(r.Context(), "user_id", tclaims.UserID)
+			ctx = context.WithValue(ctx, "TenantId", tclaims.TenantID)
 			ctx = context.WithValue(ctx, "account_id", tclaims.AccountID)
 			ctx = context.WithValue(ctx, "user_email", tclaims.Email)
 			ctx = context.WithValue(ctx, "is_staff", tclaims.IsStaff)
@@ -134,8 +154,8 @@ func ParseTokenAndSetUserContext(next http.Handler) http.Handler {
 			log.Printf("ParseTokenAndSetUserContext: Token parsing error: %v", err)
 		} else if !token.Valid {
 			log.Printf("ParseTokenAndSetUserContext: Token marked invalid.")
-		} else if !IsValidIssuer(tclaims.RegisteredClaims.Issuer) {
-			log.Printf("ParseTokenAndSetUserContext: Invalid issuer: %s", tclaims.RegisteredClaims.Issuer)
+		} else if !IsValidIssuer(issuer) {
+			log.Printf("ParseTokenAndSetUserContext: Invalid issuer: %s", issuer)
 		}
 
 		log.Println("ParseTokenAndSetUserContext: Token invalid or not present, proceeding without setting user context.")
@@ -230,7 +250,12 @@ func JwtVerify(next http.Handler) http.Handler {
 			return []byte(JWTSecret), nil
 		})
 
-		if err != nil || !token.Valid || !IsValidIssuer(tclaims.RegisteredClaims.Issuer) {
+		apiIssuer := ""
+		if tclaims.RegisteredClaims != nil {
+			apiIssuer = tclaims.RegisteredClaims.Issuer
+		}
+
+		if err != nil || !token.Valid || !IsValidIssuer(apiIssuer) {
 			// Specific logic for local dev token to bypass full validation IF it's the DevToken
 			// This part also needs to be aware that DevToken is currently disabled in main.go
 			if isLocalEnv && appInstance != nil && tokenString == appInstance.DevToken {
@@ -283,4 +308,85 @@ func JwtVerify(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, "user_role", tclaims.Role)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// TenantContextKey is used to store tenant in context
+type TenantContextKey string
+
+const TenantKey TenantContextKey = "tenant"
+
+// TenantMiddleware extracts subdomain and loads tenant from database
+func TenantMiddleware(app *cronos.App) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			slug := extractSubdomain(r.Host)
+
+			// Handle reserved/invalid subdomains - allow empty for login page
+			if slug == "" || slug == "www" || slug == "app" {
+				// Allow through for login pages, they'll redirect to tenant subdomain
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			reserved := map[string]bool{
+				"api": true, "admin": true, "www": true,
+				"mail": true, "ftp": true, "app": true,
+			}
+			if reserved[slug] {
+				http.Error(w, "Invalid tenant", http.StatusBadRequest)
+				return
+			}
+
+			// Load tenant from database
+			var tenant cronos.Tenant
+			if err := app.DB.Where("slug = ? AND status = ?", slug, "active").First(&tenant).Error; err != nil {
+				log.Printf("TenantMiddleware: Tenant not found for slug '%s': %v", slug, err)
+				http.Error(w, "Tenant not found", http.StatusNotFound)
+				return
+			}
+
+			log.Printf("TenantMiddleware: Loaded tenant: %s (ID: %d)", tenant.Name, tenant.ID)
+
+			// Add tenant to context
+			ctx := context.WithValue(r.Context(), TenantKey, &tenant)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// extractSubdomain extracts the subdomain from a host string
+func extractSubdomain(host string) string {
+	// Remove port if present
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	parts := strings.Split(host, ".")
+
+	// Development: acme.localhost
+	if len(parts) == 2 && parts[1] == "localhost" {
+		return parts[0]
+	}
+
+	// Production: acme.cronosplatform.com (3+ parts)
+	if len(parts) >= 3 {
+		return parts[0]
+	}
+
+	return ""
+}
+
+// GetTenant retrieves tenant from context
+func GetTenant(ctx context.Context) *cronos.Tenant {
+	tenant, _ := ctx.Value(TenantKey).(*cronos.Tenant)
+	return tenant
+}
+
+// MustGetTenant retrieves tenant or panics (use in handlers where tenant is guaranteed)
+func MustGetTenant(ctx context.Context) *cronos.Tenant {
+	tenant := GetTenant(ctx)
+	if tenant == nil {
+		panic("tenant not found in context - middleware misconfigured")
+	}
+	return tenant
 }

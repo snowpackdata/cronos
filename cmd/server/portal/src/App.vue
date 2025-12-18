@@ -103,8 +103,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
+import { useTenant } from './composables/useTenant';
+import { getToken } from './api/index';
 // import { useRoute } from 'vue-router'; // Not using dynamic title yet
+
+// Load tenant information
+const { loadTenant } = useTenant();
 
 // Portal Navigation Items (Update icons as needed)
 const navigationItems = [
@@ -117,7 +122,15 @@ const navigationItems = [
 // State for mobile sidebar
 const sidebarOpen = ref(false);
 
-// Note: Excluded route watching for title and auth checking from admin App.vue for simplicity
+// Load tenant on mount if authenticated
+onMounted(async () => {
+  const token = getToken();
+  if (token) {
+    await loadTenant();
+  }
+});
+
+// Note: Excluded route watching for title from admin App.vue for simplicity
 
 </script>
 

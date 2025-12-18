@@ -21,6 +21,7 @@ import (
 
 // GetExpensesHandler returns expenses filtered by status and/or project
 func (a *App) GetExpensesHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	userIDVal := r.Context().Value("user_id")
 	userID, ok := userIDVal.(uint)
 	if !ok || userID == 0 {
@@ -35,9 +36,9 @@ func (a *App) GetExpensesHandler(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	projectIDStr := r.URL.Query().Get("project_id")
 
-	// Find the employee record for this user
+	// Find the employee record for this user (within tenant)
 	var employee cronos.Employee
-	if err := a.cronosApp.DB.Where("user_id = ?", userID).First(&employee).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userID).First(&employee).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Employee record not found for this user")
 		} else {
@@ -46,7 +47,7 @@ func (a *App) GetExpensesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := a.cronosApp.DB.Preload("Project").Preload("Submitter.HeadshotAsset").Preload("Approver").Preload("Receipt")
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Project").Preload("Submitter.HeadshotAsset").Preload("Approver").Preload("Receipt")
 
 	// If staff, show all expenses; otherwise only show user's own expenses
 	if !isStaff {
@@ -82,6 +83,7 @@ func (a *App) GetExpensesHandler(w http.ResponseWriter, r *http.Request) {
 
 // CreateExpenseHandler creates a new expense with optional receipt upload
 func (a *App) CreateExpenseHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	userIDVal := r.Context().Value("user_id")
 	userID, ok := userIDVal.(uint)
 	if !ok || userID == 0 {
@@ -89,9 +91,9 @@ func (a *App) CreateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the employee record for this user
+	// Find the employee record for this user (within tenant)
 	var employee cronos.Employee
-	if err := a.cronosApp.DB.Where("user_id = ?", userID).First(&employee).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userID).First(&employee).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Employee record not found for this user")
 		} else {
@@ -251,6 +253,7 @@ func (a *App) CreateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 			UploadStatus:  &uploadStatus,
 		}
 
+		asset.TenantID = tenant.ID
 		if err := a.cronosApp.DB.Create(&asset).Error; err != nil {
 			respondWithError(w, http.StatusInternalServerError, "Failed to create asset record")
 			return
@@ -272,6 +275,7 @@ func (a *App) CreateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		CategoryID:  uint(categoryID),
 	}
 
+	expense.TenantID = tenant.ID
 	if err := a.cronosApp.DB.Create(&expense).Error; err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to create expense")
 		return
@@ -302,6 +306,7 @@ func (a *App) CreateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateExpenseHandler updates an expense
 func (a *App) UpdateExpenseHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := strconv.ParseUint(idStr, 10, 64)
@@ -317,16 +322,16 @@ func (a *App) UpdateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the employee record
+	// Find the employee record (within tenant)
 	var employee cronos.Employee
-	if err := a.cronosApp.DB.Where("user_id = ?", userID).First(&employee).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userID).First(&employee).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Employee record not found")
 		return
 	}
 
-	// Find the expense
+	// Find the expense (within tenant)
 	var expense cronos.Expense
-	if err := a.cronosApp.DB.First(&expense, uint(id)).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&expense, uint(id)).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Expense not found")
 		} else {
@@ -568,6 +573,7 @@ func (a *App) UpdateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 
 // SubmitExpenseHandler submits an expense for approval
 func (a *App) SubmitExpenseHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := strconv.ParseUint(idStr, 10, 64)
@@ -583,16 +589,16 @@ func (a *App) SubmitExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the employee record
+	// Find the employee record (within tenant)
 	var employee cronos.Employee
-	if err := a.cronosApp.DB.Where("user_id = ?", userID).First(&employee).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userID).First(&employee).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Employee record not found")
 		return
 	}
 
-	// Find the expense
+	// Find the expense (within tenant)
 	var expense cronos.Expense
-	if err := a.cronosApp.DB.First(&expense, uint(id)).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&expense, uint(id)).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Expense not found")
 		return
 	}
@@ -615,8 +621,8 @@ func (a *App) SubmitExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload with associations
-	if err := a.cronosApp.DB.
+	// Reload with associations (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Preload("Project").
 		Preload("Submitter.HeadshotAsset").
 		Preload("Receipt").
@@ -632,6 +638,7 @@ func (a *App) SubmitExpenseHandler(w http.ResponseWriter, r *http.Request) {
 
 // ApproveExpenseHandler approves an expense (admin only)
 func (a *App) ApproveExpenseHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := strconv.ParseUint(idStr, 10, 64)
@@ -647,9 +654,9 @@ func (a *App) ApproveExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the employee record
+	// Find the employee record (within tenant)
 	var employee cronos.Employee
-	if err := a.cronosApp.DB.Where("user_id = ?", userID).First(&employee).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userID).First(&employee).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Employee record not found")
 		return
 	}
@@ -661,9 +668,9 @@ func (a *App) ApproveExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload the expense with all associations to return to frontend
+	// Reload the expense with all associations to return to frontend (within tenant)
 	var expense cronos.Expense
-	if err := a.cronosApp.DB.
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Preload("Project").
 		Preload("Submitter").
 		Preload("Approver").
@@ -680,6 +687,7 @@ func (a *App) ApproveExpenseHandler(w http.ResponseWriter, r *http.Request) {
 
 // RejectExpenseHandler rejects an expense (admin only)
 func (a *App) RejectExpenseHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := strconv.ParseUint(idStr, 10, 64)
@@ -723,9 +731,9 @@ func (a *App) RejectExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload the expense with all associations to return to frontend
+	// Reload the expense with all associations to return to frontend (within tenant)
 	var expense cronos.Expense
-	if err := a.cronosApp.DB.
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Preload("Project").
 		Preload("Submitter").
 		Preload("Approver").
@@ -742,6 +750,7 @@ func (a *App) RejectExpenseHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteExpenseHandler deletes a draft expense
 func (a *App) DeleteExpenseHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := strconv.ParseUint(idStr, 10, 64)
@@ -757,16 +766,16 @@ func (a *App) DeleteExpenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the employee record
+	// Find the employee record (within tenant)
 	var employee cronos.Employee
-	if err := a.cronosApp.DB.Where("user_id = ?", userID).First(&employee).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userID).First(&employee).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Employee record not found")
 		return
 	}
 
-	// Find the expense
+	// Find the expense (within tenant)
 	var expense cronos.Expense
-	if err := a.cronosApp.DB.First(&expense, uint(id)).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&expense, uint(id)).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Expense not found")
 		} else {
@@ -797,6 +806,7 @@ func (a *App) DeleteExpenseHandler(w http.ResponseWriter, r *http.Request) {
 
 // RefreshExpenseReceiptURLHandler refreshes the signed URL for an expense receipt
 func (a *App) RefreshExpenseReceiptURLHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	assetIDStr := vars["assetId"]
 	assetID, err := strconv.ParseUint(assetIDStr, 10, 64)
@@ -806,7 +816,7 @@ func (a *App) RefreshExpenseReceiptURLHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	var asset cronos.Asset
-	if err := a.cronosApp.DB.First(&asset, uint(assetID)).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&asset, uint(assetID)).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Asset not found")
 		return
 	}

@@ -119,16 +119,14 @@ apiClient.interceptors.response.use(
   }
 );
 
-// Import a
+// Helper function to get token from localStorage
+export const getToken = (): string | null => {
+  return localStorage.getItem('snowpack_token');
+};
+
+// Import portal service
 import * as portalService from './portalService';
 
 export const portalAPI = {
   ...portalService,
-};
-
-// Optional: Export the apiClient if it needs to be used directly elsewhere,
-// otherwise, components can just use the portalAPI object.
-// export default apiClient; // Removed default export in favor of named export for clarity
-
-// If you want to keep the default export, you can do it like this:
-// export default apiClient; 
+}; 

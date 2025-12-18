@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/snowpackdata/cronos"
@@ -42,12 +43,33 @@ func getGoogleOAuthConfig(redirectURL string) *oauth2.Config {
 }
 
 // getRedirectURLFromRequest constructs the redirect URL from the current request
+// Strips subdomain to use the main domain for OAuth callbacks
 func getRedirectURLFromRequest(r *http.Request) string {
 	scheme := "https"
 	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
 		scheme = "http"
 	}
-	return fmt.Sprintf("%s://%s/api/google/auth/callback", scheme, r.Host)
+
+	host := r.Host
+
+	// Strip port if present to process domain
+	hostWithoutPort := host
+	port := ""
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		hostWithoutPort = host[:idx]
+		port = host[idx:]
+	}
+
+	// Strip subdomain if present (e.g., snowpack.localhost -> localhost)
+	parts := strings.Split(hostWithoutPort, ".")
+	if len(parts) > 1 {
+		// If we have subdomain.domain or subdomain.domain.tld, strip the first part
+		hostWithoutPort = strings.Join(parts[1:], ".")
+	}
+
+	host = hostWithoutPort + port
+
+	return fmt.Sprintf("%s://%s/api/google/auth/callback", scheme, host)
 }
 
 // GoogleAuthURLHandler generates and returns the OAuth URL for user authorization
@@ -115,7 +137,7 @@ func (a *App) GoogleAuthCallbackHandler(w http.ResponseWriter, r *http.Request) 
 			UserID:       userID,
 			AccessToken:  token.AccessToken,
 			RefreshToken: token.RefreshToken,
-			TokenExpiry:  token.Expiry,
+			ExpiresAt:    token.Expiry,
 		}
 		a.cronosApp.DB.Create(&googleAuth)
 	} else {
@@ -124,7 +146,7 @@ func (a *App) GoogleAuthCallbackHandler(w http.ResponseWriter, r *http.Request) 
 		if token.RefreshToken != "" {
 			googleAuth.RefreshToken = token.RefreshToken
 		}
-		googleAuth.TokenExpiry = token.Expiry
+		googleAuth.ExpiresAt = token.Expiry
 		a.cronosApp.DB.Save(&googleAuth)
 	}
 
@@ -165,7 +187,7 @@ func (a *App) GoogleAuthStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	if connected {
 		// Check if token is expired and needs refresh
-		needsReauth = time.Now().After(googleAuth.TokenExpiry)
+		needsReauth = time.Now().After(googleAuth.ExpiresAt)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -195,6 +217,47 @@ func (a *App) GoogleAuthDisconnectHandler(w http.ResponseWriter, r *http.Request
 
 // getCalendarService creates an authenticated Google Calendar service
 func (a *App) getCalendarService(userID interface{}) (*calendar.Service, error) {
+	// First, try to get tokens from User record (from Google Login)
+	var user cronos.User
+	if err := a.cronosApp.DB.First(&user, userID).Error; err == nil && user.GoogleAccessToken != "" {
+		// Use tokens from User record
+		config := getGoogleOAuthConfig("")
+		token := &oauth2.Token{
+			AccessToken:  user.GoogleAccessToken,
+			RefreshToken: user.GoogleRefreshToken,
+			Expiry:       *user.GoogleTokenExpiry,
+		}
+
+		// Create token source that handles automatic refresh
+		tokenSource := config.TokenSource(context.Background(), token)
+
+		// Get potentially refreshed token
+		newToken, err := tokenSource.Token()
+		if err != nil {
+			return nil, fmt.Errorf("failed to refresh token: %v", err)
+		}
+
+		// Update token in User record if it was refreshed
+		if newToken.AccessToken != token.AccessToken {
+			user.GoogleAccessToken = newToken.AccessToken
+			if newToken.RefreshToken != "" {
+				user.GoogleRefreshToken = newToken.RefreshToken
+			}
+			user.GoogleTokenExpiry = &newToken.Expiry
+			a.cronosApp.DB.Save(&user)
+		}
+
+		// Create calendar service
+		ctx := context.Background()
+		service, err := calendar.NewService(ctx, option.WithTokenSource(tokenSource))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create calendar service: %v", err)
+		}
+
+		return service, nil
+	}
+
+	// Fall back to GoogleAuth table (legacy calendar-specific OAuth)
 	var googleAuth cronos.GoogleAuth
 	result := a.cronosApp.DB.Where("user_id = ?", userID).First(&googleAuth)
 	if result.Error != nil {
@@ -206,7 +269,7 @@ func (a *App) getCalendarService(userID interface{}) (*calendar.Service, error) 
 	token := &oauth2.Token{
 		AccessToken:  googleAuth.AccessToken,
 		RefreshToken: googleAuth.RefreshToken,
-		Expiry:       googleAuth.TokenExpiry,
+		Expiry:       googleAuth.ExpiresAt,
 	}
 
 	// Create token source that handles automatic refresh
@@ -224,7 +287,7 @@ func (a *App) getCalendarService(userID interface{}) (*calendar.Service, error) 
 		if newToken.RefreshToken != "" {
 			googleAuth.RefreshToken = newToken.RefreshToken
 		}
-		googleAuth.TokenExpiry = newToken.Expiry
+		googleAuth.ExpiresAt = newToken.Expiry
 		a.cronosApp.DB.Save(&googleAuth)
 	}
 

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Register Organization | Cronos</title>
+  <meta name="description" content="Create a new organization on Cronos Platform" />
+  <link rel="icon" href="/branding/logo/favicon.ico" />
+  <link rel="stylesheet" href="/assets/css/outputs.css" />
+  <style>
+    body {
+      background: linear-gradient(to bottom, #021c51, #22262a);
+      min-height: 100vh;
+    }
+    .error-message {
+      color: #ef4444;
+      font-size: 0.875rem;
+      margin-top: 0.5rem;
+      padding: 0.5rem;
+      background-color: #fee;
+      border-radius: 0.375rem;
+      display: none;
+    }
+    .error-message.visible {
+      display: block;
+    }
+  </style>
+</head>
+<body class="h-full">
+<div class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
+  <div class="sm:mx-auto sm:w-full sm:max-w-md">
+    <img class="mx-auto h-20 w-auto" src="/branding/logo/cronos_header_dark_bg.svg" alt="Cronos">
+    <h2 class="mt-10 text-center text-2xl/9 font-bold tracking-tight text-white">Create a new organization</h2>
+    <p class="mt-2 text-center text-sm text-gray-300">
+      Set up your Cronos workspace for your team
+    </p>
+  </div>
+
+  <div class="mt-10 sm:mx-auto sm:w-full sm:max-w-md">
+    <div class="bg-white px-6 py-8 shadow-xl sm:rounded-lg sm:px-10">
+      
+      <!-- Google Sign In Button -->
+      <div class="mb-6">
+        <a href="/auth/google/login?registration=true"
+           class="flex w-full items-center justify-center gap-3 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-100 focus-visible:ring-transparent">
+          <svg class="h-5 w-5" aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12.0003 4.75C13.7703 4.75 15.3553 5.36002 16.6053 6.54998L20.0303 3.125C17.9502 1.19 15.2353 0 12.0003 0C7.31028 0 3.25527 2.69 1.28027 6.60998L5.27028 9.70498C6.21525 6.86002 8.87028 4.75 12.0003 4.75Z" fill="#EA4335"/>
+            <path d="M23.49 12.275C23.49 11.49 23.415 10.73 23.3 10H12V14.51H18.47C18.18 15.99 17.34 17.25 16.08 18.1L19.945 21.1C22.2 19.01 23.49 15.92 23.49 12.275Z" fill="#4285F4"/>
+            <path d="M5.26498 14.2949C5.02498 13.5699 4.88501 12.7999 4.88501 11.9999C4.88501 11.1999 5.01998 10.4299 5.26498 9.7049L1.275 6.60986C0.46 8.22986 0 10.0599 0 11.9999C0 13.9399 0.46 15.7699 1.28 17.3899L5.26498 14.2949Z" fill="#FBBC05"/>
+            <path d="M12.0004 24.0001C15.2404 24.0001 17.9654 22.935 19.9454 21.095L16.0804 18.095C15.0054 18.82 13.6204 19.245 12.0004 19.245C8.8704 19.245 6.21537 17.135 5.2654 14.29L1.27539 17.385C3.25539 21.31 7.3104 24.0001 12.0004 24.0001Z" fill="#34A853"/>
+          </svg>
+          <span class="text-sm font-semibold leading-6">Sign in with Google to auto-fill</span>
+        </a>
+        
+        <div class="relative mt-6">
+          <div class="absolute inset-0 flex items-center" aria-hidden="true">
+            <div class="w-full border-t border-gray-300"></div>
+          </div>
+          <div class="relative flex justify-center text-sm font-medium leading-6">
+            <span class="bg-white px-6 text-gray-500">Or continue manually</span>
+          </div>
+        </div>
+      </div>
+
+      <form id="registrationForm" class="space-y-6">
+        <div id="errorContainer" class="error-message"></div>
+
+        <!-- Organization Details -->
+        <div class="space-y-6">
+          <h3 class="text-lg font-medium text-gray-900 border-b border-gray-200 pb-2">Organization Details</h3>
+          
+          <div>
+            <label for="tenant_name" class="block text-sm/6 font-medium text-gray-700">
+              Organization Name <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2">
+              <input id="tenant_name" name="tenant_name" type="text" required
+                     class="block w-full rounded-md border-gray-300 px-3 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6"
+                     placeholder="Acme Consulting">
+            </div>
+          </div>
+
+          <div>
+            <label for="tenant_slug" class="block text-sm/6 font-medium text-gray-700">
+              Subdomain <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2">
+              <div class="flex rounded-md shadow-sm ring-1 ring-inset ring-gray-300 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sage">
+                <input type="text" name="tenant_slug" id="tenant_slug" required
+                       class="block flex-1 border-0 bg-transparent px-3 py-1.5 text-gray-900 placeholder:text-gray-400 focus:ring-0 sm:text-sm/6"
+                       placeholder="acme">
+                <span class="flex select-none items-center pr-3 text-gray-500 sm:text-sm">.cronosplatform.com</span>
+              </div>
+              <p class="mt-1 text-xs text-gray-500">This will be your unique URL: subdomain.cronosplatform.com</p>
+            </div>
+          </div>
+
+          <div>
+            <label for="tenant_domain" class="block text-sm/6 font-medium text-gray-700">
+              Email Domain <span class="text-gray-500 text-xs">(Optional)</span>
+            </label>
+            <div class="mt-2">
+              <input id="tenant_domain" name="tenant_domain" type="text"
+                     class="block w-full rounded-md border-gray-300 px-3 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6"
+                     placeholder="acme.com">
+              <p class="mt-1 text-xs text-gray-500">For Google OAuth login (e.g., example.com)</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Admin User Details -->
+        <div class="space-y-6 pt-6">
+          <h3 class="text-lg font-medium text-gray-900 border-b border-gray-200 pb-2">Admin User</h3>
+          
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="admin_first_name" class="block text-sm/6 font-medium text-gray-700">
+                First Name
+              </label>
+              <div class="mt-2">
+                <input id="admin_first_name" name="admin_first_name" type="text"
+                       class="block w-full rounded-md border-gray-300 px-3 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6"
+                       placeholder="John">
+              </div>
+            </div>
+
+            <div>
+              <label for="admin_last_name" class="block text-sm/6 font-medium text-gray-700">
+                Last Name
+              </label>
+              <div class="mt-2">
+                <input id="admin_last_name" name="admin_last_name" type="text"
+                       class="block w-full rounded-md border-gray-300 px-3 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6"
+                       placeholder="Doe">
+              </div>
+            </div>
+          </div>
+
+          <div id="email-field">
+            <label for="admin_email" class="block text-sm/6 font-medium text-gray-700">
+              Email Address <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2">
+              <input id="admin_email" name="admin_email" type="email" required
+                     class="block w-full rounded-md border-gray-300 px-3 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6"
+                     placeholder="john@acme.com">
+            </div>
+          </div>
+
+          <div id="password-field">
+            <label for="admin_password" class="block text-sm/6 font-medium text-gray-700">
+              Password <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2">
+              <input id="admin_password" name="admin_password" type="password" required
+                     class="block w-full rounded-md border-gray-300 px-3 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6">
+              <p class="mt-1 text-xs text-gray-500">Minimum 8 characters</p>
+            </div>
+          </div>
+
+          <div id="google-oauth-info" class="rounded-md bg-green-50 border border-green-200 p-4" style="display: none;">
+            <div class="flex">
+              <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-green-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                </svg>
+              </div>
+              <div class="ml-3">
+                <p class="text-sm text-gray-900">
+                  Signed in with Google as <span id="google-email-display" class="font-medium"></span>
+                </p>
+                <p class="mt-1 text-xs text-gray-600">
+                  You'll use Google to log in. No password needed.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <button type="submit" id="submitBtn"
+                  class="flex w-full justify-center rounded-md bg-sage px-3 py-2.5 text-base font-semibold text-white shadow-sm hover:bg-sage-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sage transition-colors">
+            Create Organization
+          </button>
+        </div>
+      </form>
+
+      <p class="mt-6 text-center text-sm text-gray-600">
+        Already have an organization?
+        <a href="/login" class="font-semibold text-sage hover:text-sage-dark">Sign in</a>
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+// Pre-fill form from URL parameters (from Google OAuth)
+let cameFromGoogleOAuth = false;
+
+window.addEventListener('DOMContentLoaded', () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const email = urlParams.get('email');
+  const firstName = urlParams.get('first_name');
+  const lastName = urlParams.get('last_name');
+  const domain = urlParams.get('domain');
+  
+  if (email) {
+    document.getElementById('admin_email').value = email;
+    cameFromGoogleOAuth = true;
+  }
+  if (firstName) {
+    document.getElementById('admin_first_name').value = firstName;
+  }
+  if (lastName) {
+    document.getElementById('admin_last_name').value = lastName;
+  }
+  if (domain) {
+    document.getElementById('tenant_domain').value = domain;
+    // Auto-generate a slug from the domain
+    const suggestedSlug = domain.split('.')[0];
+    document.getElementById('tenant_slug').value = suggestedSlug;
+  }
+  
+  // If came from Google OAuth, hide email/password fields and show info message
+  if (cameFromGoogleOAuth) {
+    const emailField = document.getElementById('email-field');
+    const passwordField = document.getElementById('password-field');
+    const googleInfo = document.getElementById('google-oauth-info');
+    const googleEmailDisplay = document.getElementById('google-email-display');
+    const emailInput = document.getElementById('admin_email');
+    const passwordInput = document.getElementById('admin_password');
+    
+    emailField.style.display = 'none';
+    passwordField.style.display = 'none';
+    googleInfo.style.display = 'block';
+    googleEmailDisplay.textContent = email;
+    
+    // Remove required attribute AND remove from form validation
+    emailInput.required = false;
+    passwordInput.required = false;
+    emailInput.removeAttribute('required');
+    passwordInput.removeAttribute('required');
+  }
+  
+  // Clean URL of parameters after pre-filling
+  if (email || firstName || lastName || domain) {
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+});
+
+document.getElementById('registrationForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  
+  const submitBtn = document.getElementById('submitBtn');
+  const errorContainer = document.getElementById('errorContainer');
+  const formData = new FormData(this);
+  
+  // Validate password length (only if not from Google OAuth)
+  if (!cameFromGoogleOAuth) {
+    const password = formData.get('admin_password');
+    if (!password || password.length < 8) {
+      errorContainer.textContent = 'Password must be at least 8 characters';
+      errorContainer.classList.add('visible');
+      return;
+    }
+  }
+  
+  // Validate slug format (lowercase alphanumeric and hyphens only)
+  const slug = formData.get('tenant_slug');
+  if (!/^[a-z0-9-]+$/.test(slug)) {
+    errorContainer.textContent = 'Subdomain can only contain lowercase letters, numbers, and hyphens';
+    errorContainer.classList.add('visible');
+    return;
+  }
+  
+  errorContainer.classList.remove('visible');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Creating...';
+  
+  try {
+    const response = await fetch('/register_tenant', {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to create organization');
+    }
+    
+    const data = await response.json();
+    
+    if (data.success && data.redirect) {
+      // Redirect to the new tenant's admin panel with token
+      window.location.href = data.redirect;
+    } else {
+      throw new Error('Unexpected response from server');
+    }
+  } catch (error) {
+    console.error('Registration error:', error);
+    errorContainer.textContent = error.message || 'Failed to create organization. Please try again.';
+    errorContainer.classList.add('visible');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Create Organization';
+  }
+});
+
+// Auto-lowercase slug as user types
+document.getElementById('tenant_slug').addEventListener('input', function(e) {
+  this.value = this.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+});
+</script>
+</body>
+</html>

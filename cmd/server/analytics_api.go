@@ -10,6 +10,7 @@ import (
 )
 
 func (a *App) PortalDraftEntriesHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Get the account ID from middleware
 	accountIDVal := r.Context().Value("account_id") // Use the correct context key
 	accountID, ok := accountIDVal.(uint)
@@ -30,9 +31,9 @@ func (a *App) PortalDraftEntriesHandler(w http.ResponseWriter, r *http.Request) 
 	for _, project := range projects {
 		projectIDs = append(projectIDs, project.ID)
 	}
-	// Retrieve all draft entries for the projects on this account
+	// Retrieve all draft entries for the projects on this account (within tenant)
 	var entries []cronos.Entry
-	if err := a.cronosApp.DB.Preload("Project").Preload("Employee").Where("state = ? AND project_id IN (?)", cronos.EntryStateDraft, projectIDs).Order("project_id desc, start desc").Find(&entries).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Project").Preload("Employee").Where("state = ? AND project_id IN (?)", cronos.EntryStateDraft, projectIDs).Order("project_id desc, start desc").Find(&entries).Error; err != nil {
 		log.Printf("Error: PortalDraftEntries - Failed to retrieve draft entries: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve draft entries.")
 		return
@@ -77,6 +78,7 @@ type ProjectBudgetStatus struct {
 }
 
 func (a *App) PortalProjectBudgetsHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	accountIDVal := r.Context().Value("account_id")
 	accountID, ok := accountIDVal.(uint)
 	if !ok || accountID == 0 {
@@ -86,7 +88,7 @@ func (a *App) PortalProjectBudgetsHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	var projects []cronos.Project
-	if err := a.cronosApp.DB.Where("account_id = ?", accountID).Find(&projects).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("account_id = ?", accountID).Find(&projects).Error; err != nil {
 		log.Printf("Error: PortalProjectBudgets - Failed to retrieve projects for account ID %d: %v", accountID, err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve projects.")
 		return
@@ -110,7 +112,7 @@ func (a *App) PortalProjectBudgetsHandler(w http.ResponseWriter, r *http.Request
 		}
 
 		var entries []cronos.Entry
-		if err := a.cronosApp.DB.Where("project_id = ? AND state != ? AND deleted_at IS NULL", project.ID, cronos.EntryStateVoid.String()).
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("project_id = ? AND state != ? AND deleted_at IS NULL", project.ID, cronos.EntryStateVoid.String()).
 			Find(&entries).Error; err != nil {
 			log.Printf("Error fetching entries for project ID %d: %v", project.ID, err)
 			results = append(results, status) // Append with mostly zero values
@@ -293,6 +295,7 @@ const numWeeksForSummary = 12
 
 // PortalWeeklyHoursSummaryHandler serves weekly billed vs target hours.
 func (a *App) PortalWeeklyHoursSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	accountIDVal := r.Context().Value("account_id")
 	accountID, ok := accountIDVal.(uint)
 	if !ok || accountID == 0 {
@@ -302,7 +305,7 @@ func (a *App) PortalWeeklyHoursSummaryHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	var projects []cronos.Project
-	if err := a.cronosApp.DB.Where("account_id = ?", accountID).Find(&projects).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("account_id = ?", accountID).Find(&projects).Error; err != nil {
 		log.Printf("Error: PortalWeeklyHoursSummary - Failed to retrieve projects for account ID %d: %v", accountID, err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve projects.")
 		return
@@ -339,7 +342,7 @@ func (a *App) PortalWeeklyHoursSummaryHandler(w http.ResponseWriter, r *http.Req
 
 		var totalBilledHoursThisWeek float64
 		var entries []cronos.Entry
-		if err := a.cronosApp.DB.Where(
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where(
 			"project_id IN (?) AND state != ? AND deleted_at IS NULL AND start >= ? AND start < ?",
 			projectIDs, cronos.EntryStateVoid.String(), weekStart, weekEnd,
 		).Find(&entries).Error; err != nil {
@@ -361,7 +364,7 @@ func (a *App) PortalWeeklyHoursSummaryHandler(w http.ResponseWriter, r *http.Req
 		// Note: weekEnd for query should be the actual end of Sunday for assignments that might end on Sunday.
 		actualWeekEnd := weekEnd.Add(-time.Nanosecond) // End of Sunday for precise overlap query
 
-		if err := a.cronosApp.DB.Where(
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where(
 			"project_id IN (?) AND start_date <= ? AND end_date >= ? AND deleted_at IS NULL",
 			projectIDs, actualWeekEnd, weekStart,
 		).Find(&assignments).Error; err != nil {
@@ -398,6 +401,7 @@ type AssignmentWithUtilization struct {
 
 // CapacityDataHandler fetches staffing assignments for capacity management view with utilization data
 func (a *App) CapacityDataHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var assignments []cronos.StaffingAssignment
 
 	// Fetch all staffing assignments with employee and project preloaded (but NOT entries)
@@ -420,7 +424,7 @@ func (a *App) CapacityDataHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var weeklyHours []WeeklyHours
-	// Use raw SQL for optimal performance - aggregate hours by week for each assignment
+	// Use raw SQL for optimal performance - aggregate hours by week for each assignment (within tenant)
 	// Note: We calculate week start as Sunday to match frontend logic
 	err := a.cronosApp.DB.Raw(`
 		SELECT 
@@ -430,9 +434,10 @@ func (a *App) CapacityDataHandler(w http.ResponseWriter, r *http.Request) {
 		FROM entries
 		WHERE staffing_assignment_id IS NOT NULL
 		  AND deleted_at IS NULL
+		  AND tenant_id = ?
 		GROUP BY staffing_assignment_id, week_start
 		ORDER BY staffing_assignment_id, week_start
-	`).Scan(&weeklyHours).Error
+	`, tenant.ID).Scan(&weeklyHours).Error
 
 	if err != nil {
 		log.Printf("Error fetching weekly hours: %v", err)
@@ -510,6 +515,7 @@ func (a *App) CapacityDataHandler(w http.ResponseWriter, r *http.Request) {
 
 // CapacityDetailHandler fetches detailed time entries for a specific assignment and week
 func (a *App) CapacityDetailHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	assignmentID := r.URL.Query().Get("assignment_id")
 	weekStart := r.URL.Query().Get("week_start")
 
@@ -528,9 +534,9 @@ func (a *App) CapacityDetailHandler(w http.ResponseWriter, r *http.Request) {
 	// Calculate week end (7 days later)
 	weekEndDate := weekStartDate.AddDate(0, 0, 7)
 
-	// Fetch entries for this assignment within the week
+	// Fetch entries for this assignment within the week (within tenant)
 	var entries []cronos.Entry
-	if err := a.cronosApp.DB.
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Where("staffing_assignment_id = ? AND start >= ? AND start < ? AND deleted_at IS NULL", assignmentID, weekStartDate, weekEndDate).
 		Order("start ASC").
 		Find(&entries).Error; err != nil {
@@ -562,6 +568,7 @@ func (a *App) CapacityDetailHandler(w http.ResponseWriter, r *http.Request) {
 
 // PortalCapacityDataHandler fetches capacity data filtered by the client's account
 func (a *App) PortalCapacityDataHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Get account ID from context (set by JwtVerify middleware)
 	accountIDVal := r.Context().Value("account_id")
 	accountID, ok := accountIDVal.(uint)
@@ -594,7 +601,7 @@ func (a *App) PortalCapacityDataHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var weeklyHours []WeeklyHours
-	// Use raw SQL for optimal performance - aggregate hours by week for assignments in this account
+	// Use raw SQL for optimal performance - aggregate hours by week for assignments in this account (within tenant)
 	// Note: We calculate week start as Sunday to match frontend logic
 	err := a.cronosApp.DB.Raw(`
 		SELECT 
@@ -608,9 +615,12 @@ func (a *App) PortalCapacityDataHandler(w http.ResponseWriter, r *http.Request) 
 		  AND e.deleted_at IS NULL
 		  AND sa.deleted_at IS NULL
 		  AND p.account_id = ?
+		  AND e.tenant_id = ?
+		  AND sa.tenant_id = ?
+		  AND p.tenant_id = ?
 		GROUP BY e.staffing_assignment_id, week_start
 		ORDER BY e.staffing_assignment_id, week_start
-	`, accountID).Scan(&weeklyHours).Error
+	`, accountID, tenant.ID, tenant.ID, tenant.ID).Scan(&weeklyHours).Error
 
 	if err != nil {
 		log.Printf("Error fetching weekly hours for account %d: %v", accountID, err)

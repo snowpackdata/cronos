@@ -15,7 +15,7 @@
             <span class="text-xl font-bold text-white border-b-2 border-sage pb-1">Cronos</span>
           </div>
           <div class="mt-5 flex flex-1 flex-col overflow-y-auto px-4">
-            <nav class="flex-1 space-y-1">
+            <nav class="flex flex-1 flex-col">
               <ul role="list" class="flex flex-1 flex-col gap-y-1">
                 <li v-for="item in navigationSections" :key="item.name">
                   <!-- Direct link (no sub-items) -->
@@ -65,6 +65,16 @@
                   </div>
                 </li>
               </ul>
+              <!-- Logout button at bottom of mobile sidebar -->
+              <div class="mt-auto pt-4 border-t border-gray-700">
+                <button
+                  @click="logout"
+                  class="w-full flex items-center gap-x-2 px-2 py-2 text-xs font-medium text-gray-400 hover:bg-red-600 hover:text-white rounded-md transition-all duration-200"
+                >
+                  <i class="fas fa-sign-out-alt h-4 w-4 shrink-0"></i>
+                  <span>Logout</span>
+                </button>
+              </div>
             </nav>
           </div>
         </div>
@@ -76,7 +86,7 @@
       <!-- Sidebar component, for desktop -->
       <div class="flex grow flex-col gap-y-5 overflow-y-auto bg-gray-900 shadow-xl px-6 pb-4">
         <div class="flex h-16 shrink-0 items-center">
-          <span class="text-xl font-bold text-white border-b-2 border-sage pb-1">Snowpack Data</span>
+          <span class="text-xl font-bold text-white border-b-2 border-sage pb-1">Cronos</span>
         </div>
         <nav class="flex flex-1 flex-col">
           <ul role="list" class="flex flex-1 flex-col gap-y-1">
@@ -128,11 +138,22 @@
               </div>
             </li>
           </ul>
+          <!-- Logout button at bottom of sidebar -->
+          <div class="mt-auto pt-4 border-t border-gray-700">
+            <button
+              @click="logout"
+              class="w-full flex items-center gap-x-2 px-2 py-2 text-xs font-medium text-gray-400 hover:bg-red-600 hover:text-white rounded-md transition-all duration-200"
+            >
+              <i class="fas fa-sign-out-alt h-4 w-4 shrink-0"></i>
+              <span>Logout</span>
+            </button>
+          </div>
         </nav>
       </div>
     </div>
 
     <div class="lg:pl-64">
+      <!-- Top navbar - Mobile only (no logout button) -->
       <div class="flex h-16 shrink-0 items-center gap-x-4 border-b border-gray bg-gray-800 px-4 shadow-md sm:gap-x-6 sm:px-6 lg:hidden">
         <button type="button" class="-m-2.5 p-2.5 text-gray-400 hover:text-white lg:hidden" @click.prevent="sidebarOpen = true">
           <span class="sr-only">Open sidebar</span>
@@ -146,13 +167,6 @@
         <div class="lg:hidden flex-1 text-center">
           <span class="text-xl font-bold text-white">Cronos</span>
         </div>
-
-        <div class="hidden lg:flex lg:flex-1 gap-x-4 self-stretch lg:gap-x-6">
-          <div class="flex items-center gap-x-4 lg:gap-x-6">
-            <!-- Separator -->
-            <div class="h-6 w-px bg-gray-700" aria-hidden="true" />
-          </div>
-        </div>
       </div>
 
       <main class="py-10 bg-gray-50 min-h-screen lg:py-0 lg:pt-6 lg:min-h-[100vh]">
@@ -165,9 +179,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { jwtDecode } from 'jwt-decode';
+import { useTenant } from './composables/useTenant';
+import { getToken } from './api/apiUtils';
 
 // Add TypeScript declaration for import.meta.env
 declare interface ImportMeta {
@@ -191,6 +207,59 @@ interface DecodedToken {
 }
 
 const route = useRoute();
+
+// Load tenant information
+const { loadTenant } = useTenant();
+
+// Handle token from URL query parameter (from login redirect)
+const handleTokenFromURL = () => {
+  const token = route.query.token as string;
+  
+  if (token) {
+    console.log('Token found in URL, storing and cleaning...');
+    
+    // Store token in localStorage
+    localStorage.setItem('snowpack_token', token);
+    
+    // Also store in cookie for server-side access
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + 30);
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const domainParam = isLocalhost ? '' : `; domain=${window.location.hostname}`;
+    const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `x-access-token=${token}; expires=${expiryDate.toUTCString()}; path=/${domainParam}${secure}; SameSite=Lax`;
+    
+    // Remove token from URL - use window.history for immediate effect
+    const cleanUrl = window.location.pathname + window.location.hash;
+    window.history.replaceState({}, '', cleanUrl);
+    
+    console.log('Token stored and URL cleaned');
+  }
+};
+
+// Load tenant on mount if authenticated
+onMounted(async () => {
+  handleTokenFromURL();
+  const token = getToken();
+  if (token) {
+    await loadTenant();
+  }
+});
+
+// Logout function
+const logout = () => {
+  // Clear localStorage
+  localStorage.removeItem('snowpack_token');
+  
+  // Clear cookie
+  document.cookie = 'x-access-token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+  
+  // Redirect to login (no subdomain)
+  const currentProtocol = window.location.protocol;
+  const currentPort = window.location.port;
+  const portPart = currentPort ? `:${currentPort}` : '';
+  window.location.href = `${currentProtocol}//localhost${portPart}/login`;
+};
 
 // Define admin navigation structure with mix of direct links and expandable sections
 const adminNavigationSections = [
@@ -219,6 +288,7 @@ const adminNavigationSections = [
   { name: 'Billing Codes', path: '/billing-codes', icon: 'fa-barcode' },
   { name: 'Rates', path: '/rates', icon: 'fa-percent' },
       { name: 'Expenses', path: '/expense-config', icon: 'fa-tags' },
+      { name: 'Settings', path: '/settings', icon: 'fa-cog' },
     ]
   },
   {
@@ -240,7 +310,11 @@ const staffNavigationSections = [
 ];
 
 // Computed navigation sections based on user role
+// Watch route.path to trigger re-evaluation after router stores token
 const navigationSections = computed(() => {
+  // Access route.path to make this reactive to navigation
+  route.path;
+  
   const token = localStorage.getItem('snowpack_token');
   if (!token) return staffNavigationSections;
 

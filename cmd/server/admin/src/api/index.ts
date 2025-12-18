@@ -170,3 +170,11 @@ export {
 export {
   fetchStaff, fetchStaffById, createStaff, updateStaff, deleteStaff
 } from './staff';
+
+// Re-export tenant functions
+export {
+  fetchTenant, updateTenant
+} from './tenant';
+
+// Export alias for backwards compatibility
+export { fetchTenant as getTenant } from './tenant';

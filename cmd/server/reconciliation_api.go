@@ -15,6 +15,7 @@ import (
 // SearchExpensesForReconciliationHandler searches for expenses that could match an offline journal transaction
 // GET /api/reconciliation/expenses/search?query=google&amount=7873
 func (a *App) SearchExpensesForReconciliationHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Parse query parameters
 	searchQuery := r.URL.Query().Get("query")
 	dateStr := r.URL.Query().Get("date")
@@ -27,7 +28,7 @@ func (a *App) SearchExpensesForReconciliationHandler(w http.ResponseWriter, r *h
 	}
 
 	var expenses []cronos.Expense
-	query := a.cronosApp.DB.
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Preload("Project").
 		Preload("Submitter").
 		Preload("Category").
@@ -76,6 +77,7 @@ func (a *App) SearchExpensesForReconciliationHandler(w http.ResponseWriter, r *h
 // POST /api/reconciliation/expenses/{id}/reconcile
 // Body: { "offline_journal_id": 123 }
 func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Get user ID from context
 	userIDVal := r.Context().Value("user_id")
 	userID, ok := userIDVal.(uint)
@@ -108,9 +110,9 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 		return
 	}
 
-	// Fetch expense
+	// Fetch expense (within tenant)
 	var expense cronos.Expense
-	if err := a.cronosApp.DB.First(&expense, expenseID).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&expense, expenseID).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Expense not found")
 		return
 	}
@@ -125,9 +127,9 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 		return
 	}
 
-	// Fetch offline journal
+	// Fetch offline journal (within tenant)
 	var offlineJournal cronos.OfflineJournal
-	if err := a.cronosApp.DB.First(&offlineJournal, reqBody.OfflineJournalID).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&offlineJournal, reqBody.OfflineJournalID).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Offline journal entry not found")
 		return
 	}
@@ -161,8 +163,8 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 	// The offlineJournal we received is the CR side (payment account)
 	// Look for the DR side (expense account) that was created during categorization
 	if offlineJournal.Credit > 0 {
-		// This is a credit entry, look for matching debit entry
-		err := a.cronosApp.DB.Where("date = ? AND debit = ? AND credit = 0 AND status = ?",
+		// This is a credit entry, look for matching debit entry (within tenant)
+		err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("date = ? AND debit = ? AND credit = 0 AND status = ?",
 			offlineJournal.Date, offlineJournal.Credit, "approved").
 			First(&matchingDREntry).Error
 
@@ -187,15 +189,15 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 	offlineJournal.ReconciledBy = &employee.ID
 	offlineJournal.Status = "posted" // Mark as posted (clearing entries will be created below)
 
-	// Save expense
-	if err := a.cronosApp.DB.Save(&expense).Error; err != nil {
+	// Save expense (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Save(&expense).Error; err != nil {
 		log.Printf("Failed to save expense reconciliation: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to reconcile expense")
 		return
 	}
 
-	// Save CR side (payment account)
-	if err := a.cronosApp.DB.Save(&offlineJournal).Error; err != nil {
+	// Save CR side (payment account) (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Save(&offlineJournal).Error; err != nil {
 		log.Printf("Failed to save offline journal reconciliation: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to reconcile transaction")
 		return
@@ -208,7 +210,7 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 		matchingDREntry.ReconciledAt = &now
 		matchingDREntry.ReconciledBy = &employee.ID
 
-		if err := a.cronosApp.DB.Save(&matchingDREntry).Error; err != nil {
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Save(&matchingDREntry).Error; err != nil {
 			log.Printf("Failed to mark DR side as posted: %v", err)
 			// Don't fail the whole reconciliation for this
 		} else {
@@ -234,6 +236,7 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 		Memo:       fmt.Sprintf("Cleared expense payment via reconciliation: %s (tx date: %s)", expense.Description, offlineJournal.Date.Format("2006-01-02")),
 		Debit:      journalAmount,
 		Credit:     0,
+		TenantID:   tenant.ID,
 	}
 	if err := a.cronosApp.DB.Create(&clearingDR).Error; err != nil {
 		log.Printf("Failed to book clearing DR: %v", err)
@@ -247,6 +250,7 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 		Memo:       fmt.Sprintf("Cleared expense payment via reconciliation: %s (tx date: %s)", expense.Description, offlineJournal.Date.Format("2006-01-02")),
 		Debit:      0,
 		Credit:     journalAmount,
+		TenantID:   tenant.ID,
 	}
 	if err := a.cronosApp.DB.Create(&clearingCR).Error; err != nil {
 		log.Printf("Failed to book clearing CR: %v", err)
@@ -272,6 +276,7 @@ func (a *App) ReconcileExpenseWithOfflineJournalHandler(w http.ResponseWriter, r
 // UnreconcileTransactionHandler removes reconciliation link
 // POST /api/reconciliation/offline-journals/{id}/unreconcile
 func (a *App) UnreconcileTransactionHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Get user ID from context
 	userIDVal := r.Context().Value("user_id")
 	userID, ok := userIDVal.(uint)
@@ -288,9 +293,9 @@ func (a *App) UnreconcileTransactionHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Fetch offline journal with reconciled expense
+	// Fetch offline journal with reconciled expense (within tenant)
 	var offlineJournal cronos.OfflineJournal
-	if err := a.cronosApp.DB.Preload("ReconciledExpense").First(&offlineJournal, journalID).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("ReconciledExpense").First(&offlineJournal, journalID).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Offline journal entry not found")
 		return
 	}
@@ -304,8 +309,8 @@ func (a *App) UnreconcileTransactionHandler(w http.ResponseWriter, r *http.Reque
 	// Clear reconciliation on both sides
 	expenseID := *offlineJournal.ReconciledExpenseID
 
-	// Update expense
-	if err := a.cronosApp.DB.Model(&cronos.Expense{}).
+	// Update expense (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.Expense{}).
 		Where("id = ?", expenseID).
 		Updates(map[string]interface{}{
 			"reconciled_offline_journal_id": nil,
@@ -317,13 +322,13 @@ func (a *App) UnreconcileTransactionHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Update offline journal
+	// Update offline journal (within tenant)
 	offlineJournal.ReconciledExpenseID = nil
 	offlineJournal.ReconciledAt = nil
 	offlineJournal.ReconciledBy = nil
 	offlineJournal.Status = "pending_review" // Reset to pending review
 
-	if err := a.cronosApp.DB.Save(&offlineJournal).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Save(&offlineJournal).Error; err != nil {
 		log.Printf("Failed to clear offline journal reconciliation: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to unreconcile")
 		return

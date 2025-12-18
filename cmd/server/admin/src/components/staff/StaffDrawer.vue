@@ -116,20 +116,53 @@
 
                   <div class="mt-4">
                     <label for="email" class="block text-sm font-medium leading-6 text-gray-900">
-                      Email Address <span class="text-sm text-gray-500">(Optional)</span>
+                      Email Address <span class="text-red-500">*</span>
                     </label>
                     <input
                       type="email"
                       name="email"
                       id="email"
                       v-model="formData.email"
+                      required
                       :disabled="false"
                       class="mt-2 block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm sm:leading-6 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
                       placeholder="john.doe@example.com"
                     />
                     <p class="mt-1 text-sm text-gray-500">
-                      {{ isEditing ? 'Updates the user account email address' : 'If not provided, will auto-generate from first/last name' }}
+                      {{ isEditing ? 'Updates the user account email address' : 'User will log in with this email address' }}
                     </p>
+                  </div>
+
+                  <div v-if="!isEditing" class="mt-4">
+                    <label for="user_role" class="block text-sm font-medium leading-6 text-gray-900">
+                      User Role <span class="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="user_role"
+                      id="user_role"
+                      v-model="formData.user_role"
+                      required
+                      class="mt-2 block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm sm:leading-6"
+                    >
+                      <option value="STAFF">Staff (Can log time and expenses)</option>
+                      <option value="ADMIN">Admin (Full access to all features)</option>
+                    </select>
+                    <p class="mt-1 text-sm text-gray-500">System access level for this user</p>
+                  </div>
+
+                  <div v-if="!isEditing" class="mt-4">
+                    <label for="password" class="block text-sm font-medium leading-6 text-gray-900">
+                      Initial Password <span class="text-sm text-gray-500">(Optional)</span>
+                    </label>
+                    <input
+                      type="password"
+                      name="password"
+                      id="password"
+                      v-model="formData.password"
+                      class="mt-2 block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm sm:leading-6"
+                      placeholder="Leave blank for default: ChangeMe123!"
+                    />
+                    <p class="mt-1 text-sm text-gray-500">If not provided, default password is "ChangeMe123!" - user should change on first login</p>
                   </div>
 
                   <div class="mt-4">
@@ -435,7 +468,7 @@ const emit = defineEmits<{
 }>();
 
 // Form data
-const formData = ref<Partial<Staff & { is_owner: boolean }>>({
+const formData = ref<Partial<Staff & { is_owner: boolean; user_role?: string; password?: string }>>({
   first_name: '',
   last_name: '',
   title: '',
@@ -453,7 +486,9 @@ const formData = ref<Partial<Staff & { is_owner: boolean }>>({
   is_variable_hourly: true,
   is_fixed_hourly: false,
   hourly_rate: 0,
-  entry_pay_eligible_state: 'ENTRY_STATE_PAID'
+  entry_pay_eligible_state: 'ENTRY_STATE_PAID',
+  user_role: 'STAFF',  // Default to STAFF role
+  password: ''  // Optional initial password
 });
 
 // Headshot handling
