@@ -234,10 +234,12 @@ func (a *App) CreateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 			contentType = header.Header.Get("Content-Type")
 		}
 
-		// Upload to GCS - use tenant's bucket
-		bucketName := tenant.BucketName
-		if bucketName == "" {
-			respondWithError(w, http.StatusInternalServerError, "Tenant bucket not configured")
+		// Expense receipts are private - use private bucket
+		isPublic := false
+		bucketName, err := a.cronosApp.GetTenantBucketForAsset(tenant.Slug, isPublic)
+		if err != nil {
+			log.Printf("Error getting bucket for expense receipt: %v", err)
+			respondWithError(w, http.StatusInternalServerError, "Failed to get storage bucket")
 			return
 		}
 
@@ -513,11 +515,12 @@ func (a *App) UpdateExpenseHandler(w http.ResponseWriter, r *http.Request) {
 			// Detect content type
 			contentType := http.DetectContentType(fileBytes)
 
-			// Upload to GCS - use tenant's bucket
-			bucketName := tenant.BucketName
-			if bucketName == "" {
-				log.Println("Tenant bucket not configured")
-				respondWithError(w, http.StatusInternalServerError, "Storage not configured")
+			// Expense receipts are private - use private bucket
+			isPublic := false
+			bucketName, err := a.cronosApp.GetTenantBucketForAsset(tenant.Slug, isPublic)
+			if err != nil {
+				log.Printf("Error getting bucket for expense receipt: %v", err)
+				respondWithError(w, http.StatusInternalServerError, "Failed to get storage bucket")
 				return
 			}
 

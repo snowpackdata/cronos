@@ -124,9 +124,9 @@ func (a *App) CreateTenantBucket(tenantSlug string) (string, error) {
 	defer storageClient.Close()
 
 	// Generate bucket name from tenant slug (GCS bucket names must be globally unique)
-	// Format: cronos-{slug} or use project prefix if available
-	projectID := os.Getenv("GCP_PROJECT")
-	bucketName := fmt.Sprintf("cronos-%s-%s", projectID, tenantSlug)
+	// Format: cronos-{slug} - simple and doesn't expose project details
+	// This is the PRIVATE bucket for sensitive files (receipts, invoices, etc.)
+	bucketName := fmt.Sprintf("cronos-%s", tenantSlug)
 
 	// GCS bucket names have restrictions: lowercase, numbers, hyphens, 3-63 chars
 	bucketName = strings.ToLower(bucketName)
@@ -142,7 +142,7 @@ func (a *App) CreateTenantBucket(tenantSlug string) (string, error) {
 	// Check if bucket already exists
 	_, err = bucket.Attrs(ctx)
 	if err == nil {
-		// Bucket already exists
+		// Bucket already exists - this is the private bucket, keep it private
 		log.Printf("Bucket %s already exists", bucketName)
 		return bucketName, nil
 	}
@@ -156,11 +156,96 @@ func (a *App) CreateTenantBucket(tenantSlug string) (string, error) {
 		},
 	}
 
+	projectID := os.Getenv("GCP_PROJECT")
 	if err := bucket.Create(ctx, projectID, bucketAttrs); err != nil {
 		return "", fmt.Errorf("failed to create bucket %s: %w", bucketName, err)
 	}
 
-	log.Printf("Created bucket: %s", bucketName)
+	log.Printf("Created private bucket: %s", bucketName)
+	return bucketName, nil
+}
+
+// GetTenantBucketForAsset returns the appropriate bucket name based on whether asset is public
+// Public assets go to cronos-{slug}-public, private assets go to cronos-{slug}
+func (a *App) GetTenantBucketForAsset(tenantSlug string, isPublic bool) (string, error) {
+	if isPublic {
+		return a.CreateTenantPublicBucket(tenantSlug)
+	}
+	return a.CreateTenantBucket(tenantSlug)
+}
+
+// CreateTenantPublicBucket creates or ensures existence of a public bucket for a tenant
+// Used for assets that need to be publicly accessible (logos, etc.)
+func (a *App) CreateTenantPublicBucket(tenantSlug string) (string, error) {
+	ctx := context.Background()
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to create storage client: %w", err)
+	}
+	defer storageClient.Close()
+
+	// Public bucket name format: cronos-{slug}-public
+	bucketName := fmt.Sprintf("cronos-%s-public", tenantSlug)
+
+	// GCS bucket names have restrictions: lowercase, numbers, hyphens, 3-63 chars
+	bucketName = strings.ToLower(bucketName)
+	bucketName = strings.ReplaceAll(bucketName, "_", "-")
+
+	// Ensure bucket name length is within limits
+	if len(bucketName) > 63 {
+		bucketName = bucketName[:63]
+	}
+
+	bucket := storageClient.Bucket(bucketName)
+
+	// Check if bucket already exists
+	_, err = bucket.Attrs(ctx)
+	if err == nil {
+		// Bucket already exists - ensure it's publicly readable
+		log.Printf("Public bucket %s already exists", bucketName)
+		policy, err := bucket.IAM().Policy(ctx)
+		if err != nil {
+			log.Printf("Warning: Failed to get bucket IAM policy: %v", err)
+		} else {
+			// Grant allUsers the storage.objectViewer role if not already granted
+			policy.Add("allUsers", "roles/storage.objectViewer")
+			if err := bucket.IAM().SetPolicy(ctx, policy); err != nil {
+				log.Printf("Warning: Failed to make public bucket publicly readable: %v", err)
+			} else {
+				log.Printf("Ensured public bucket %s is publicly readable", bucketName)
+			}
+		}
+		return bucketName, nil
+	}
+
+	// Create the bucket with appropriate settings
+	bucketAttrs := &storage.BucketAttrs{
+		Location:     "US",
+		StorageClass: "STANDARD",
+		UniformBucketLevelAccess: storage.UniformBucketLevelAccess{
+			Enabled: true,
+		},
+	}
+
+	projectID := os.Getenv("GCP_PROJECT")
+	if err := bucket.Create(ctx, projectID, bucketAttrs); err != nil {
+		return "", fmt.Errorf("failed to create public bucket %s: %w", bucketName, err)
+	}
+
+	// Make bucket publicly readable
+	policy, err := bucket.IAM().Policy(ctx)
+	if err != nil {
+		log.Printf("Warning: Failed to get bucket IAM policy: %v", err)
+	} else {
+		policy.Add("allUsers", "roles/storage.objectViewer")
+		if err := bucket.IAM().SetPolicy(ctx, policy); err != nil {
+			log.Printf("Warning: Failed to make public bucket publicly readable: %v", err)
+		} else {
+			log.Printf("Made public bucket %s publicly readable", bucketName)
+		}
+	}
+
+	log.Printf("Created public bucket: %s", bucketName)
 	return bucketName, nil
 }
 

@@ -101,6 +101,14 @@
             <div class="p-6">
               <div class="flex items-start justify-between mb-4">
                 <div class="flex items-start gap-x-3">
+                  <div v-if="account.logo_asset?.url" class="flex-shrink-0">
+                    <img :src="account.logo_asset.url" :alt="account.name + ' logo'" class="h-16 w-16 object-contain border border-gray-200 rounded p-2 bg-white">
+                  </div>
+                  <div v-else class="flex-shrink-0">
+                    <div class="h-16 w-16 flex items-center justify-center border border-gray-200 rounded bg-gray-50">
+                      <i class="fas fa-image text-gray-300 text-2xl"></i>
+                    </div>
+                  </div>
                   <div>
                     <div class="flex items-center gap-x-2">
                       <h3 class="text-xl font-semibold text-gray-900">{{ account.name }}</h3>
@@ -391,31 +399,75 @@ const closeAccountDrawer = () => {
 };
 
 // Save account
-const saveAccount = async (accountData) => {
+const saveAccount = async (payload) => {
+  console.log('SettingsView: saveAccount called with payload:', payload);
   try {
+    // Handle payload which now includes accountData and logoFile
+    const accountData = payload.accountData || payload;
+    const logoFile = payload.logoFile;
+    
+    console.log('SettingsView: accountData:', accountData);
+    console.log('SettingsView: logoFile:', logoFile);
+    
     // Ensure we're always saving an internal account
     accountData.type = 'ACCOUNT_TYPE_INTERNAL';
     
     if (accountData.id) {
-      // Create a copy of the account data with both id and ID properties
-      const accountToUpdate = {
-        ...accountData,
-        ID: accountData.id // Ensure ID property is set for API compatibility
-      };
-      await updateAccount(accountToUpdate); // Pass the full object instead of id, accountData
+      // Create FormData for multipart upload (needed for logo)
+      const formData = new FormData();
+      formData.append('name', accountData.name || '');
+      formData.append('type', accountData.type || 'ACCOUNT_TYPE_INTERNAL');
+      formData.append('legal_name', accountData.legal_name || '');
+      formData.append('email', accountData.email || '');
+      formData.append('website', accountData.website || '');
+      formData.append('address', accountData.address || '');
+      formData.append('billing_frequency', accountData.billing_frequency || '');
+      formData.append('budget_hours', accountData.budget_hours || 0);
+      formData.append('budget_dollars', accountData.budget_dollars || 0);
+      formData.append('projects_single_invoice', accountData.projects_single_invoice || false);
+      
+      // Add logo file if provided
+      if (logoFile) {
+        console.log('SettingsView: Adding logo file to FormData');
+        formData.append('logo', logoFile);
+      }
+      
+      // Send as multipart form data
+      const token = localStorage.getItem('snowpack_token');
+      console.log('SettingsView: Sending PUT request to /api/accounts/' + accountData.id);
+      const response = await fetch(`/api/accounts/${accountData.id}`, {
+        method: 'PUT',
+        headers: {
+          'x-access-token': token
+        },
+        body: formData
+      });
+      
+      console.log('SettingsView: Response status:', response.status);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('SettingsView: Error response:', errorText);
+        throw new Error('Failed to update account');
+      }
+      
+      const result = await response.json();
+      console.log('SettingsView: Response data:', result);
     } else {
       await createAccount(accountData);
     }
     
     // Refresh accounts
+    console.log('SettingsView: Refreshing accounts list');
     const updatedAccounts = await fetchAccounts();
     accounts.value = updatedAccounts;
     
-    // Close drawer
+    // Close drawer on success
     closeAccountDrawer();
   } catch (error) {
     console.error('Error saving account:', error);
-    alert('Failed to save account. Please try again.');
+    // Show error but don't close drawer
+    alert('Failed to save account: ' + error.message);
   }
 };
 

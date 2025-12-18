@@ -449,7 +449,7 @@ func (a *App) AccountsListHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := MustGetTenant(r.Context())
 	var accounts []cronos.Account
 	// Get accounts first, preloading projects as before.
-	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Projects").Preload("Assets").Order("name ASC").Find(&accounts).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Projects").Preload("Assets").Preload("LogoAsset").Order("name ASC").Find(&accounts).Error; err != nil {
 		log.Printf("Error fetching accounts: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve accounts")
 		return
@@ -505,7 +505,10 @@ func (a *App) AccountsListHandler(w http.ResponseWriter, r *http.Request) {
 					Email:  user.Email,
 					Status: "Pending Registration",
 				})
-				log.Printf("No Client profile found for User ID %d (email: %s) linked to Account ID %d. Marking as Pending Registration.", user.ID, user.Email, acc.ID)
+				// Only log for client accounts, not internal accounts where this is expected
+				if acc.Type == "ACCOUNT_TYPE_CLIENT" {
+					log.Printf("No Client profile found for User ID %d (email: %s) linked to Account ID %d. Marking as Pending Registration.", user.ID, user.Email, acc.ID)
+				}
 			} else {
 				// Other database error fetching client profile
 				log.Printf("Error fetching Client profile for User ID %d: %v", user.ID, err)
@@ -1069,7 +1072,17 @@ func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&account)
 		return
 	case r.Method == "PUT":
+		log.Printf("AccountHandler: PUT request received for account ID %s", vars["id"])
 		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&account, vars["id"])
+
+		// Parse multipart form FIRST before any FormValue calls
+		log.Printf("AccountHandler: About to parse multipart form")
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			log.Printf("Warning: Failed to parse multipart form: %v", err)
+		} else {
+			log.Printf("AccountHandler: Multipart form parsed successfully")
+		}
+
 		if r.FormValue("name") != "" {
 			account.Name = r.FormValue("name")
 		}
@@ -1105,46 +1118,78 @@ func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Handle logo upload
-		if err := r.ParseMultipartForm(10 << 20); err == nil { // 10MB limit
-			file, header, err := r.FormFile("logo")
-			if err == nil && file != nil {
-				defer file.Close()
+		log.Printf("AccountHandler: Checking for logo file in form")
+		file, header, err := r.FormFile("logo")
+		log.Printf("AccountHandler: FormFile result - file: %v, header: %v, err: %v", file != nil, header != nil, err)
+		if err == nil && file != nil {
+			defer file.Close()
+			log.Printf("Logo upload detected for account %d: %s", account.ID, header.Filename)
 
-				// Read file bytes
-				fileBytes, err := io.ReadAll(file)
-				if err == nil {
-					// Upload to GCS - use tenant's bucket
-					bucketName := tenant.BucketName
-					fileExt := filepath.Ext(header.Filename)
-					timestamp := time.Now().Unix()
-					objectName := fmt.Sprintf("assets/logos/account-%d-%d%s", account.ID, timestamp, fileExt)
-					contentType := header.Header.Get("Content-Type")
-
-					if err := a.cronosApp.UploadObject(r.Context(), bucketName, objectName, bytes.NewReader(fileBytes), contentType); err == nil {
-						// Create asset record
-						size := int64(len(fileBytes))
-						uploadStatus := "completed"
-						logoAsset := cronos.Asset{
-							TenantID:      tenant.ID,
-							AccountID:     &account.ID,
-							Name:          header.Filename,
-							AssetType:     contentType,
-							BucketName:    &bucketName,
-							ContentType:   &contentType,
-							Size:          &size,
-							UploadStatus:  &uploadStatus,
-							GCSObjectPath: &objectName,
-						}
-
-						if err := a.cronosApp.DB.Create(&logoAsset).Error; err == nil {
-							account.LogoAssetID = &logoAsset.ID
-						}
-					}
+			// Read file bytes
+			fileBytes, err := io.ReadAll(file)
+			if err == nil {
+				// Logos are public assets - use public bucket
+				isPublic := true
+				bucketName, err := a.cronosApp.GetTenantBucketForAsset(tenant.Slug, isPublic)
+				if err != nil {
+					log.Printf("Error getting bucket for logo upload: %v", err)
+					respondWithError(w, http.StatusInternalServerError, "Failed to get storage bucket")
+					return
 				}
+
+				fileExt := filepath.Ext(header.Filename)
+				timestamp := time.Now().Unix()
+				objectName := fmt.Sprintf("logos/account-%d-%d%s", account.ID, timestamp, fileExt)
+				contentType := header.Header.Get("Content-Type")
+
+				log.Printf("Uploading logo to GCS: bucket=%s, object=%s, isPublic=%v", bucketName, objectName, isPublic)
+				if err := a.cronosApp.UploadObject(r.Context(), bucketName, objectName, bytes.NewReader(fileBytes), contentType); err == nil {
+					// Create asset record with public URL
+					size := int64(len(fileBytes))
+					uploadStatus := "completed"
+					publicURL := fmt.Sprintf("https://storage.googleapis.com/%s/%s", bucketName, objectName)
+					logoAsset := cronos.Asset{
+						TenantID:      tenant.ID,
+						AccountID:     &account.ID,
+						Name:          header.Filename,
+						AssetType:     contentType,
+						Url:           publicURL,
+						IsPublic:      isPublic,
+						BucketName:    &bucketName,
+						ContentType:   &contentType,
+						Size:          &size,
+						UploadStatus:  &uploadStatus,
+						GCSObjectPath: &objectName,
+					}
+
+					if err := a.cronosApp.DB.Create(&logoAsset).Error; err == nil {
+						account.LogoAssetID = &logoAsset.ID
+						log.Printf("Logo asset created with ID %d, setting account.LogoAssetID", logoAsset.ID)
+					} else {
+						log.Printf("Error creating logo asset: %v", err)
+					}
+				} else {
+					log.Printf("Error uploading logo to GCS: %v", err)
+				}
+			} else {
+				log.Printf("Error reading logo file bytes: %v", err)
 			}
+		} else if err != nil && err != http.ErrMissingFile {
+			log.Printf("Error getting logo form file: %v", err)
 		}
 
-		a.cronosApp.DB.Save(&account)
+		if err := a.cronosApp.DB.Save(&account).Error; err != nil {
+			log.Printf("Error saving account: %v", err)
+			respondWithError(w, http.StatusInternalServerError, "Failed to save account")
+			return
+		}
+		log.Printf("Account %d saved successfully. LogoAssetID: %v", account.ID, account.LogoAssetID)
+
+		// Reload account with LogoAsset preloaded to include URL in response
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("LogoAsset").First(&account, account.ID).Error; err != nil {
+			log.Printf("Error reloading account: %v", err)
+		}
+
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		_ = json.NewEncoder(w).Encode(&account)
 		return
@@ -3489,7 +3534,7 @@ func (a *App) PortalAccountDetailsHandler(w http.ResponseWriter, r *http.Request
 			// For your specific request, the password check is primary.
 			// If password check determined "Pending", this state remains.
 			// If password check determined "Active" but no profile, it implies an active user yet to fill out details.
-			log.Printf("No Client profile found for User ID %d (email: %s). Status determined by password check.", user.ID, user.Email)
+			// This is normal for users who haven't completed their profile
 		} else {
 			// Log other DB errors but don't fail the whole request
 			log.Printf("Error fetching Client profile for User ID %d: %v", user.ID, err)

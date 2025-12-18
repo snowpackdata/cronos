@@ -129,6 +129,29 @@
                         </div>
                       </div>
 
+                      <!-- Logo Upload (Internal Accounts Only) -->
+                      <div v-if="account.type === 'ACCOUNT_TYPE_INTERNAL'" class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                        <div>
+                          <label for="account-logo" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Company Logo</label>
+                          <p class="text-xs text-gray-500 mt-1">For invoices and bills</p>
+                        </div>
+                        <div class="sm:col-span-2">
+                          <div v-if="account.logo_asset?.url" class="mb-3">
+                            <div class="text-xs text-gray-500 mb-2">Current logo:</div>
+                            <img :src="account.logo_asset.url" alt="Current logo" class="h-16 w-auto border border-gray-200 rounded p-2 bg-white">
+                          </div>
+                          <input 
+                            type="file" 
+                            id="account-logo" 
+                            name="account-logo"
+                            accept="image/png,image/jpeg,image/svg+xml"
+                            @change="handleLogoChange"
+                            class="block w-full text-sm text-gray-900 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-sage-50 file:text-sage-700 hover:file:bg-sage-100"
+                          />
+                          <p class="mt-1 text-xs text-gray-500">PNG, JPG, or SVG. Max 10MB.</p>
+                        </div>
+                      </div>
+
                       <!-- Billing Frequency -->
                       <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
                         <div>
@@ -288,8 +311,34 @@ const account = ref({
   billing_frequency: props.accountData?.billing_frequency || 'BILLING_TYPE_MONTHLY',
   budget_hours: props.accountData?.budget_hours || 0,
   budget_dollars: props.accountData?.budget_dollars || 0,
-  projects_single_invoice: props.accountData?.projects_single_invoice || false
+  projects_single_invoice: props.accountData?.projects_single_invoice || false,
+  logo_asset: props.accountData?.logo_asset || null
 });
+
+// Logo file handling
+const logoFile = ref(null);
+
+const handleLogoChange = (event) => {
+  const file = event.target.files[0];
+  if (file) {
+    // Validate file size (10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Logo file must be less than 10MB');
+      event.target.value = '';
+      return;
+    }
+    
+    // Validate file type
+    const validTypes = ['image/png', 'image/jpeg', 'image/svg+xml'];
+    if (!validTypes.includes(file.type)) {
+      alert('Logo must be PNG, JPG, or SVG');
+      event.target.value = '';
+      return;
+    }
+    
+    logoFile.value = file;
+  }
+};
 
 // Update account data when accountData prop changes
 watch(() => props.accountData, (newVal) => {
@@ -306,8 +355,11 @@ watch(() => props.accountData, (newVal) => {
       billing_frequency: newVal.billing_frequency || 'BILLING_TYPE_MONTHLY',
       budget_hours: newVal.budget_hours || 0,
       budget_dollars: newVal.budget_dollars || 0,
-      projects_single_invoice: newVal.projects_single_invoice || false
+      projects_single_invoice: newVal.projects_single_invoice || false,
+      logo_asset: newVal.logo_asset || null
     };
+    // Reset logo file when switching accounts
+    logoFile.value = null;
   }
 }, { deep: true });
 
@@ -319,10 +371,10 @@ const handleSubmit = () => {
     return;
   }
 
-  // Emit save event with account data
-  emit('save', account.value);
-  
-  // Close the drawer
-  handleClose();
+  console.log('AccountDrawer: Submitting form with account:', account.value);
+  console.log('AccountDrawer: Logo file:', logoFile.value);
+
+  // Emit save event with account data and logo file
+  emit('save', { accountData: account.value, logoFile: logoFile.value });
 };
 </script> 
