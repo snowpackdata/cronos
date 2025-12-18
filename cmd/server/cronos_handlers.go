@@ -27,12 +27,13 @@ var JWTSecret = func() string {
 }()
 
 // generateTokenString creates a new JWT for a given user.
-func generateTokenString(user cronos.User, isStaff bool, accountID uint, issuer string) (string, error) {
-	log.Printf("Generating token. UserID: %d, AccountID: %d, Email: %s, IsStaff: %v, Role: %s, Issuer: %s",
-		user.ID, accountID, user.Email, isStaff, user.Role, issuer)
+func generateTokenString(user cronos.User, isStaff bool, accountID uint, issuer string, tenantID uint) (string, error) {
+	log.Printf("Generating token. UserID: %d, TenantID: %d, AccountID: %d, Email: %s, IsStaff: %v, Role: %s, Issuer: %s",
+		user.ID, tenantID, accountID, user.Email, isStaff, user.Role, issuer)
 
 	claims := Claims{ // This refers to main.Claims from middleware.go
 		UserID:    user.ID,
+		TenantID:  tenantID,
 		AccountID: accountID,
 		Email:     user.Email,
 		IsStaff:   isStaff,
@@ -80,8 +81,176 @@ func (a *App) LoginLandingHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// TenantRegistrationLandingHandler serves the tenant registration page (hidden, non-public link)
+func (a *App) TenantRegistrationLandingHandler(w http.ResponseWriter, req *http.Request) {
+	tmpl, err := template.ParseFS(templates, "templates/tenant_registration.html")
+	if err != nil {
+		log.Printf("Error parsing tenant registration template: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	err = tmpl.Execute(w, nil)
+	if err != nil {
+		log.Printf("Error executing tenant registration template: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+// RegisterTenant creates a new tenant organization and its first admin user
+func (a *App) RegisterTenant(w http.ResponseWriter, req *http.Request) {
+	// Parse form data
+	tenantName := req.FormValue("tenant_name")
+	tenantSlug := req.FormValue("tenant_slug")
+	tenantDomain := req.FormValue("tenant_domain")
+	adminEmail := req.FormValue("admin_email")
+	adminPassword := req.FormValue("admin_password")
+	adminFirstName := req.FormValue("admin_first_name")
+	adminLastName := req.FormValue("admin_last_name")
+
+	// Validate required fields (password is optional for Google OAuth users)
+	if tenantName == "" || tenantSlug == "" || adminEmail == "" {
+		log.Printf("RegisterTenant Error: Missing required fields (tenant_name=%s, tenant_slug=%s, admin_email=%s)", tenantName, tenantSlug, adminEmail)
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	// If password is provided, validate minimum length
+	if adminPassword != "" && len(adminPassword) < 8 {
+		log.Printf("RegisterTenant Error: Password too short")
+		http.Error(w, "Password must be at least 8 characters", http.StatusBadRequest)
+		return
+	}
+
+	// Normalize slug to lowercase
+	tenantSlug = strings.ToLower(strings.TrimSpace(tenantSlug))
+
+	// Check if tenant slug already exists
+	var existingTenant cronos.Tenant
+	if err := a.cronosApp.DB.Where("slug = ?", tenantSlug).First(&existingTenant).Error; err == nil {
+		log.Printf("RegisterTenant Error: Tenant slug already exists: %s", tenantSlug)
+		http.Error(w, "Organization subdomain already exists", http.StatusConflict)
+		return
+	}
+
+	// Check if domain already exists (if provided)
+	if tenantDomain != "" {
+		if err := a.cronosApp.DB.Where("domain = ?", tenantDomain).First(&existingTenant).Error; err == nil {
+			log.Printf("RegisterTenant Error: Tenant domain already exists: %s", tenantDomain)
+			http.Error(w, "Organization domain already exists", http.StatusConflict)
+			return
+		}
+	}
+
+	// Create the tenant
+	tenant := cronos.Tenant{
+		Name:   tenantName,
+		Slug:   tenantSlug,
+		Domain: tenantDomain,
+		Plan:   "trial",
+		Status: "active",
+	}
+
+	if err := a.cronosApp.DB.Create(&tenant).Error; err != nil {
+		log.Printf("RegisterTenant Error: Failed to create tenant: %v", err)
+		http.Error(w, "Failed to create organization", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("RegisterTenant: Created tenant %s (ID: %d)", tenant.Name, tenant.ID)
+
+	// Hash the admin password (leave empty for Google OAuth users)
+	var passwordHash string
+	if adminPassword != "" {
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+		if err != nil {
+			log.Printf("RegisterTenant Error: Password hashing failed: %v", err)
+			http.Error(w, "Error processing request", http.StatusInternalServerError)
+			return
+		}
+		passwordHash = string(hashedPassword)
+	}
+	// If adminPassword is empty, passwordHash remains empty string
+	// This indicates a Google-only user
+
+	// Create internal account for the tenant
+	internalAccount := cronos.Account{
+		Name:     "Internal",
+		Type:     cronos.AccountTypeInternal.String(),
+		TenantID: tenant.ID,
+	}
+	if err := a.cronosApp.DB.Create(&internalAccount).Error; err != nil {
+		log.Printf("RegisterTenant Error: Failed to create internal account: %v", err)
+		http.Error(w, "Failed to create internal account", http.StatusInternalServerError)
+		return
+	}
+
+	// Create the first admin user
+	adminUser := cronos.User{
+		Email:     adminEmail,
+		Password:  passwordHash, // Empty string if Google-only user
+		Role:      cronos.UserRoleAdmin.String(),
+		TenantID:  tenant.ID,
+		AccountID: internalAccount.ID,
+	}
+
+	if err := a.cronosApp.DB.Create(&adminUser).Error; err != nil {
+		log.Printf("RegisterTenant Error: Failed to create admin user: %v", err)
+		http.Error(w, "Failed to create admin user", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("RegisterTenant: Created admin user %s (ID: %d)", adminUser.Email, adminUser.ID)
+
+	// Create employee record for the admin
+	employee := cronos.Employee{
+		UserID:    adminUser.ID,
+		TenantID:  tenant.ID,
+		FirstName: adminFirstName,
+		LastName:  adminLastName,
+		StartDate: time.Now(),
+	}
+
+	if err := a.cronosApp.DB.Create(&employee).Error; err != nil {
+		log.Printf("RegisterTenant Error: Failed to create employee record: %v", err)
+		// Non-fatal, continue
+	}
+
+	// Generate JWT token for the new admin
+	issuer := "snowpackdata.com"
+	if host := req.Host; strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") {
+		issuer = "localhost"
+	}
+
+	tokenString, err := generateTokenString(adminUser, true, internalAccount.ID, issuer, tenant.ID)
+	if err != nil {
+		log.Printf("RegisterTenant Error: Failed to generate token: %v", err)
+		http.Error(w, "Error generating authentication token", http.StatusInternalServerError)
+		return
+	}
+
+	// Return success with tenant info and redirect URL
+	response := map[string]interface{}{
+		"success":     true,
+		"tenant_slug": tenant.Slug,
+		"token":       tokenString,
+		"redirect":    "https://" + tenant.Slug + "." + strings.Replace(req.Host, "www.", "", 1) + "/admin/?token=" + tokenString,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // RegisterUser creates a new user in the database when accessed via POST request
 func (a *App) RegisterUser(w http.ResponseWriter, req *http.Request) {
+	// Extract tenant from subdomain
+	slug := extractSubdomain(req.Host)
+	var tenant cronos.Tenant
+	if err := a.cronosApp.DB.Where("slug = ? AND status = ?", slug, "active").First(&tenant).Error; err != nil {
+		log.Printf("RegisterUser Error: Tenant not found for slug '%s': %v", slug, err)
+		http.Error(w, "Invalid tenant", http.StatusBadRequest)
+		return
+	}
+
 	// Read email and password from the post request
 	formRole := req.FormValue("role")
 	formUserID, err := strconv.ParseUint(req.FormValue("user_id"), 10, 32)
@@ -98,16 +267,16 @@ func (a *App) RegisterUser(w http.ResponseWriter, req *http.Request) {
 	isStaff := false
 	switch formRole {
 	case cronos.UserRoleClient.String():
-		client := cronos.Client{UserID: uint(formUserID)}
-		if a.cronosApp.DB.Where("user_id = ?", formUserID).First(&client).RowsAffected == 0 {
+		client := cronos.Client{UserID: uint(formUserID), TenantID: tenant.ID}
+		if a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", formUserID).First(&client).RowsAffected == 0 {
 			a.cronosApp.DB.Create(&client)
 		}
 		client.FirstName = formFirstName
 		client.LastName = formLastName
 		a.cronosApp.DB.Save(&client)
 	case cronos.UserRoleStaff.String(), cronos.UserRoleAdmin.String():
-		employee := cronos.Employee{UserID: uint(formUserID)}
-		if a.cronosApp.DB.Where("user_id = ?", formUserID).First(&employee).RowsAffected == 0 {
+		employee := cronos.Employee{UserID: uint(formUserID), TenantID: tenant.ID}
+		if a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", formUserID).First(&employee).RowsAffected == 0 {
 			a.cronosApp.DB.Create(&employee)
 		}
 		employee.FirstName = formFirstName
@@ -121,7 +290,7 @@ func (a *App) RegisterUser(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var user cronos.User
-	if err := a.cronosApp.DB.Where("id = ?", formUserID).First(&user).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", formUserID).First(&user).Error; err != nil {
 		log.Println("RegisterUser Error: User not found after profile creation", err)
 		http.Error(w, "User not found", http.StatusInternalServerError)
 		return
@@ -157,7 +326,7 @@ func (a *App) RegisterUser(w http.ResponseWriter, req *http.Request) {
 		log.Println("RegisterUser Warning: User does not have an AccountID associated (AccountID is 0).")
 	}
 
-	tokenString, err := generateTokenString(user, isStaff, accountID, issuer)
+	tokenString, err := generateTokenString(user, isStaff, accountID, issuer, tenant.ID)
 	if err != nil {
 		log.Println("RegisterUser Error: Token generation failed", err)
 		http.Error(w, "Failed to generate authentication token", http.StatusInternalServerError)
@@ -173,12 +342,21 @@ func (a *App) RegisterUser(w http.ResponseWriter, req *http.Request) {
 }
 
 func (a *App) VerifyEmail(w http.ResponseWriter, req *http.Request) {
+	// Extract tenant from subdomain
+	slug := extractSubdomain(req.Host)
+	var tenant cronos.Tenant
+	if err := a.cronosApp.DB.Where("slug = ? AND status = ?", slug, "active").First(&tenant).Error; err != nil {
+		log.Printf("VerifyEmail Error: Tenant not found for slug '%s': %v", slug, err)
+		http.Error(w, "Invalid tenant", http.StatusBadRequest)
+		return
+	}
+
 	// Read email from the post request and check if the email exists as an account in
 	// our database. If so send a 200
 	// if not send a 300
 	formEmail := req.FormValue("email")
 	var user cronos.User
-	if a.cronosApp.DB.Where("email = ?", formEmail).First(&user).RowsAffected != 0 {
+	if a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("email = ?", formEmail).First(&user).RowsAffected != 0 {
 		response := map[string]interface{}{
 			"user_id": user.ID,
 			"role":    user.Role,
@@ -194,16 +372,34 @@ func (a *App) VerifyEmail(w http.ResponseWriter, req *http.Request) {
 }
 
 func (a *App) VerifyLogin(w http.ResponseWriter, req *http.Request) {
-	// Verify login checks a customers hashed password against the database to determine if
-	// they are verified. If they are, it generates a new JWT token and returns it to the
-	// customer.
-
 	formEmail := req.FormValue("email")
 	formPassword := req.FormValue("password")
 
+	// Extract domain from email to find tenant
+	parts := strings.Split(formEmail, "@")
+	if len(parts) != 2 {
+		var resp = map[string]interface{}{"status": 400, "message": "Invalid email format"}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+	domain := parts[1]
+
+	// Find tenant by domain
+	var tenant cronos.Tenant
+	if err := a.cronosApp.DB.Where("domain = ? AND status = ?", domain, "active").First(&tenant).Error; err != nil {
+		log.Printf("VerifyLogin Error: No tenant found for domain '%s': %v", domain, err)
+		var resp = map[string]interface{}{"status": 403, "message": "No organization found for your email domain. Please contact support."}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+
 	var user cronos.User
 
-	if a.cronosApp.DB.Where("email = ?", formEmail).First(&user).RowsAffected == 0 {
+	if a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("email = ?", formEmail).First(&user).RowsAffected == 0 {
 		var resp = map[string]interface{}{"status": 403, "message": "Invalid login credentials. Please try again"}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
@@ -243,14 +439,19 @@ func (a *App) VerifyLogin(w http.ResponseWriter, req *http.Request) {
 		log.Println("VerifyLogin Warning: User does not have an AccountID associated (AccountID is 0).")
 	}
 
-	tokenString, err := generateTokenString(user, isStaff, accountID, issuer)
+	tokenString, err := generateTokenString(user, isStaff, accountID, issuer, tenant.ID)
 	if err != nil {
 		log.Println("VerifyLogin Error: Token generation failed", err)
 		http.Error(w, "Failed to generate authentication token", http.StatusInternalServerError)
 		return
 	}
-	var resp = map[string]interface{}{"status": 200, "message": "logged in"}
-	resp["token"] = tokenString //Store the token in the response
+	var resp = map[string]interface{}{
+		"status":      200,
+		"message":     "logged in",
+		"token":       tokenString,
+		"tenant_slug": tenant.Slug,
+		"is_staff":    isStaff,
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
@@ -311,13 +512,21 @@ func (a *App) RequestPasswordReset(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Check if user exists
+	// Extract tenant from subdomain
+	slug := extractSubdomain(req.Host)
+	var tenant cronos.Tenant
+	if err := a.cronosApp.DB.Where("slug = ? AND status = ?", slug, "active").First(&tenant).Error; err != nil {
+		log.Printf("RequestPasswordReset Error: Tenant not found for slug '%s': %v", slug, err)
+		// Still return success to prevent tenant enumeration
+	}
+
+	// Check if user exists (within tenant)
 	var user cronos.User
-	if a.cronosApp.DB.Where("email = ?", email).First(&user).RowsAffected == 0 {
+	if tenant.ID != 0 && a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("email = ?", email).First(&user).RowsAffected == 0 {
 		// For security, don't reveal if the email exists or not
 		// Return success message regardless
 		log.Printf("Password reset requested for non-existent email: %s", email)
-	} else {
+	} else if tenant.ID != 0 {
 		log.Printf("Password reset requested for: %s", email)
 		// TODO: Generate reset token and send email
 		// For now, just log that a reset was requested
@@ -367,9 +576,18 @@ func (a *App) ResetPassword(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Find the user in the database
+	// Extract tenant from subdomain
+	slug := extractSubdomain(req.Host)
+	var tenant cronos.Tenant
+	if err := a.cronosApp.DB.Where("slug = ? AND status = ?", slug, "active").First(&tenant).Error; err != nil {
+		log.Printf("ResetPassword Error: Tenant not found for slug '%s': %v", slug, err)
+		http.Error(w, "Invalid tenant", http.StatusBadRequest)
+		return
+	}
+
+	// Find the user in the database (within tenant)
 	var user cronos.User
-	if a.cronosApp.DB.Where("email = ?", email).First(&user).RowsAffected == 0 {
+	if a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("email = ?", email).First(&user).RowsAffected == 0 {
 		log.Printf("Password reset attempted for non-existent user: %s", email)
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
@@ -441,9 +659,18 @@ func (a *App) RefreshTokenHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Get the user from the database to ensure they still exist and are active
+	// Extract tenant from subdomain
+	slug := extractSubdomain(req.Host)
+	var tenant cronos.Tenant
+	if err := a.cronosApp.DB.Where("slug = ? AND status = ?", slug, "active").First(&tenant).Error; err != nil {
+		log.Printf("RefreshTokenHandler Error: Tenant not found for slug '%s': %v", slug, err)
+		respondWithError(w, http.StatusUnauthorized, "Invalid tenant")
+		return
+	}
+
+	// Get the user from the database to ensure they still exist and are active (within tenant)
 	var user cronos.User
-	if err := a.cronosApp.DB.First(&user, tclaims.UserID).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&user, tclaims.UserID).Error; err != nil {
 		respondWithError(w, http.StatusUnauthorized, "User not found")
 		return
 	}
@@ -461,7 +688,7 @@ func (a *App) RefreshTokenHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Generate a new token
-	newTokenString, err := generateTokenString(user, isStaff, tclaims.AccountID, issuer)
+	newTokenString, err := generateTokenString(user, isStaff, tclaims.AccountID, issuer, tclaims.TenantID)
 	if err != nil {
 		log.Printf("RefreshTokenHandler Error: Failed to generate new token for user %d: %v", user.ID, err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to generate new token")
@@ -480,4 +707,79 @@ func (a *App) RefreshTokenHandler(w http.ResponseWriter, req *http.Request) {
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("RefreshTokenHandler Error: Failed to encode response: %v", err)
 	}
+}
+
+// GetTenantHandler returns current tenant information for frontend
+func (a *App) GetTenantHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
+
+	response := map[string]interface{}{
+		"id":       tenant.ID,
+		"slug":     tenant.Slug,
+		"name":     tenant.Name,
+		"domain":   tenant.Domain,
+		"plan":     tenant.Plan,
+		"branding": tenant.Branding,
+		"settings": tenant.Settings,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("GetTenantHandler Error: Failed to encode response: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+// UpdateTenantHandler updates tenant settings
+func (a *App) UpdateTenantHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
+
+	var updates struct {
+		Name     *string `json:"name"`
+		Slug     *string `json:"slug"`
+		Domain   *string `json:"domain"`
+		Settings *string `json:"settings"` // JSON string
+		Branding *string `json:"branding"` // JSON string
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Update fields if provided
+	if updates.Name != nil {
+		tenant.Name = *updates.Name
+	}
+	if updates.Slug != nil {
+		tenant.Slug = *updates.Slug
+	}
+	if updates.Domain != nil {
+		tenant.Domain = *updates.Domain
+	}
+	if updates.Settings != nil {
+		tenant.Settings = []byte(*updates.Settings)
+	}
+	if updates.Branding != nil {
+		tenant.Branding = []byte(*updates.Branding)
+	}
+
+	if err := a.cronosApp.DB.Save(tenant).Error; err != nil {
+		log.Printf("Error updating tenant: %v", err)
+		http.Error(w, "Failed to update tenant", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"id":       tenant.ID,
+		"slug":     tenant.Slug,
+		"name":     tenant.Name,
+		"domain":   tenant.Domain,
+		"plan":     tenant.Plan,
+		"branding": tenant.Branding,
+		"settings": tenant.Settings,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

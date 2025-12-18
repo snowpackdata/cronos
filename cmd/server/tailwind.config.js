@@ -1,8 +1,13 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ["./templates/**/*.{html, gohtml}", "./templates/*.{html, gohtml}", "./assets/**/*.js"],
+  content: ["./templates/**/*.{html,gohtml}", "./templates/*.{html,gohtml}", "./assets/**/*.js"],
   theme: {
     colors: {
+      'sage': {
+        DEFAULT: '#58837e',
+        'light': '#7ba199',
+        'dark': '#446961'
+      },
       'teal': '#226d87',
       'blue': {
         DEFAULT: '#021c51',

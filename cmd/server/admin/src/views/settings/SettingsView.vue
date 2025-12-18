@@ -5,10 +5,13 @@
       <nav class="flex overflow-x-auto py-4">
         <ul role="list" class="flex min-w-full flex-none gap-x-6 px-4 text-sm/6 font-semibold text-gray-600 sm:px-6 lg:px-8">
           <li>
-            <a href="#company-settings" class="text-sage">Company Settings</a>
+            <button @click="scrollToSection('organization-settings')" class="text-sage cursor-pointer hover:underline">Organization Settings</button>
           </li>
           <li>
-            <a href="#billing-defaults" class="text-gray-500 hover:text-sage">Billing Defaults</a>
+            <button @click="scrollToSection('company-settings')" class="text-gray-500 hover:text-sage cursor-pointer hover:underline">Company Settings</button>
+          </li>
+          <li>
+            <button @click="scrollToSection('billing-defaults')" class="text-gray-500 hover:text-sage cursor-pointer hover:underline">Billing Defaults</button>
           </li>
         </ul>
       </nav>
@@ -16,6 +19,73 @@
 
     <!-- Settings forms -->
     <div class="divide-y divide-gray-200">
+      <!-- Organization Settings -->
+      <div id="organization-settings" class="grid max-w-7xl grid-cols-1 gap-x-8 gap-y-10 px-4 py-16 sm:px-6 md:grid-cols-3 lg:px-8">
+        <div>
+          <h2 class="text-base/7 font-semibold text-gray-900">Organization Settings</h2>
+          <p class="mt-1 text-sm/6 text-gray-500">
+            Configure your organization's domain, branding, and global settings.
+          </p>
+        </div>
+
+        <form @submit.prevent="saveTenantSettings" class="md:col-span-2">
+          <div class="grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
+            <div class="sm:col-span-4">
+              <label for="org-name" class="block text-sm/6 font-medium text-gray-900">Organization Name</label>
+              <div class="mt-2">
+                <input type="text" name="org-name" id="org-name" v-model="tenantForm.name"
+                  class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6" />
+              </div>
+            </div>
+
+            <div class="sm:col-span-4">
+              <label for="slug" class="block text-sm/6 font-medium text-gray-900">Organization Slug (Subdomain)</label>
+              <div class="mt-2">
+                <input type="text" name="slug" id="slug" v-model="tenantForm.slug"
+                  placeholder="mycompany"
+                  class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6" />
+              </div>
+              <p class="mt-2 text-sm text-gray-500">Subdomain identifier (e.g., mycompany.localhost or mycompany.yourdomain.com)</p>
+            </div>
+
+            <div class="sm:col-span-4">
+              <label for="domain" class="block text-sm/6 font-medium text-gray-900">Email Domain</label>
+              <div class="mt-2">
+                <input type="text" name="domain" id="domain" v-model="tenantForm.domain"
+                  placeholder="example.com"
+                  class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6" />
+              </div>
+              <p class="mt-2 text-sm text-gray-500">Domain used for Google OAuth login (e.g., snowpack-data.com)</p>
+            </div>
+
+            <div class="sm:col-span-4">
+              <label for="billing-email" class="block text-sm/6 font-medium text-gray-900">Billing Contact Email</label>
+              <div class="mt-2">
+                <input type="email" name="billing-email" id="billing-email" v-model="tenantSettings.billing_email"
+                  placeholder="billing@example.com"
+                  class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6" />
+              </div>
+            </div>
+
+            <div class="sm:col-span-3">
+              <label for="commission-rate" class="block text-sm/6 font-medium text-gray-900">Default Commission Rate (%)</label>
+              <div class="mt-2">
+                <input type="number" name="commission-rate" id="commission-rate" v-model.number="tenantSettings.default_commission_rate"
+                  min="0" max="100" step="0.01"
+                  class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-sage sm:text-sm/6" />
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-8 flex">
+            <button type="submit"
+              class="rounded-md bg-sage px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sage-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sage">
+              Save Organization Settings
+            </button>
+          </div>
+        </form>
+      </div>
+
       <!-- Company Settings -->
       <div id="company-settings" class="grid max-w-7xl grid-cols-1 gap-x-8 gap-y-10 px-4 py-16 sm:px-6 md:grid-cols-3 lg:px-8">
         <div>
@@ -169,7 +239,7 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue';
-import { fetchAccounts, createAccount, updateAccount, deleteAccount as deleteAccountAPI } from '../../api';
+import { fetchAccounts, createAccount, updateAccount, deleteAccount as deleteAccountAPI, getTenant, updateTenant } from '../../api';
 import AccountDrawer from '../../components/accounts/AccountDrawer.vue';
 import ConfirmationModal from '../../components/ConfirmationModal.vue';
 
@@ -179,6 +249,17 @@ const isAccountDrawerOpen = ref(false);
 const selectedAccount = ref(null);
 const showDeleteModal = ref(false);
 const accountToDelete = ref(null);
+
+// Tenant settings state
+const tenantForm = ref({
+  name: '',
+  slug: '',
+  domain: ''
+});
+const tenantSettings = ref({
+  billing_email: '',
+  default_commission_rate: 0
+});
 
 // Filter accounts to show only internal accounts
 const internalAccounts = computed(() => {
@@ -193,7 +274,58 @@ onMounted(async () => {
   } catch (error) {
     console.error('Error loading accounts:', error);
   }
+  
+  // Load tenant settings
+  await loadTenantSettings();
 });
+
+// Tenant settings functions
+const loadTenantSettings = async () => {
+  try {
+    const tenant = await getTenant();
+    tenantForm.value = {
+      name: tenant.name || '',
+      slug: tenant.slug || '',
+      domain: tenant.domain || ''
+    };
+    
+    // Parse settings JSON
+    if (tenant.settings) {
+      const settings = typeof tenant.settings === 'string' ? JSON.parse(tenant.settings) : tenant.settings;
+      tenantSettings.value = {
+        billing_email: settings.billing_email || '',
+        default_commission_rate: settings.default_commission_rate || 0
+      };
+    }
+  } catch (error) {
+    console.error('Error loading tenant settings:', error);
+  }
+};
+
+const saveTenantSettings = async () => {
+  try {
+    const payload = {
+      name: tenantForm.value.name,
+      slug: tenantForm.value.slug,
+      domain: tenantForm.value.domain,
+      settings: JSON.stringify(tenantSettings.value)
+    };
+    
+    await updateTenant(payload);
+    alert('Organization settings saved successfully');
+  } catch (error) {
+    console.error('Error saving tenant settings:', error);
+    alert('Failed to save organization settings');
+  }
+};
+
+// Scroll to section function for nav links
+const scrollToSection = (id) => {
+  const element = document.getElementById(id);
+  if (element) {
+    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+};
 
 // Helper functions
 const formatBillingFrequency = (frequency) => {

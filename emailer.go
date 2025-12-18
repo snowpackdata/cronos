@@ -28,7 +28,7 @@ const (
 	EmailTypeWelcome            EmailType = "welcome.html"
 	EmailTypeSurveyConfirmation EmailType = "survey_confirmation.html"
 
-	SNOWPACK_SENDER_ADDRESS string = "no-reply@snowpack-data.com"
+	CRONOS_SENDER_ADDRESS string = "noreply@cronosplatform.com"
 )
 
 func (s EmailType) String() string {
@@ -38,13 +38,14 @@ func (s EmailType) String() string {
 type Email struct {
 	// Email is a non-persistent object that is used to store the email
 	// information for a user across the application
-	SenderName       string `default:"Snowpack Data"`
-	SenderEmail      string `default:"no-reply@snowpack-data.com"`
+	SenderName       string `default:"Cronos"`
+	SenderEmail      string `default:"noreply@cronosplatform.com"`
 	RecipientName    string
 	RecipientEmail   string
 	Subject          string
 	PlainTextContent string
 	htmlFile         string
+	TemplateData     map[string]interface{} // Dynamic data for email templates
 }
 
 func (e *Email) HTMLContent() string {
@@ -55,7 +56,8 @@ func (e *Email) HTMLContent() string {
 		log.Println(err)
 	}
 	var tpl bytes.Buffer
-	if err = t.ExecuteTemplate(&tpl, e.htmlFile, ""); err != nil {
+	// Pass template data to the template execution
+	if err = t.ExecuteTemplate(&tpl, e.htmlFile, e.TemplateData); err != nil {
 		log.Println("Error executing template file")
 		log.Println(err)
 	}
@@ -63,32 +65,35 @@ func (e *Email) HTMLContent() string {
 
 }
 
-func (a *App) EmailFromAdmin(emailType EmailType, address string) error {
+func (a *App) EmailFromAdmin(emailType EmailType, address string, templateData map[string]interface{}) error {
 	var email Email
 	switch emailType {
 	case EmailTypeRegisterClient:
 		email = Email{
-			SenderName:     "Snowpack Data",
-			SenderEmail:    SNOWPACK_SENDER_ADDRESS,
+			SenderName:     "Cronos",
+			SenderEmail:    CRONOS_SENDER_ADDRESS,
 			RecipientEmail: address,
-			Subject:        "Welcome to Snowpack Data",
+			Subject:        "You're invited to collaborate on Cronos",
 			htmlFile:       emailType.String(),
+			TemplateData:   templateData,
 		}
 	case EmailTypeRegisterStaff:
 		email = Email{
-			SenderName:     "Snowpack Data",
-			SenderEmail:    SNOWPACK_SENDER_ADDRESS,
+			SenderName:     "Cronos",
+			SenderEmail:    CRONOS_SENDER_ADDRESS,
 			RecipientEmail: address,
-			Subject:        "Welcome to Snowpack Data",
+			Subject:        "You're invited to collaborate on Cronos",
 			htmlFile:       emailType.String(),
+			TemplateData:   templateData,
 		}
 	case EmailTypeSurveyConfirmation:
 		email = Email{
-			SenderName:     "Snowpack Data",
-			SenderEmail:    SNOWPACK_SENDER_ADDRESS,
+			SenderName:     "Cronos",
+			SenderEmail:    CRONOS_SENDER_ADDRESS,
 			RecipientEmail: address,
 			Subject:        "We Received your Survey Response",
 			htmlFile:       emailType.String(),
+			TemplateData:   templateData,
 		}
 	}
 	from := mail.NewEmail(email.SenderName, email.SenderEmail)
@@ -125,40 +130,45 @@ func generateInvoiceFilename(invoice *Invoice) string {
 	} else if invoice.Project.Name != "" {
 		accountName = invoice.Project.Name
 	}
-	
+
 	// Sanitize account name: remove special characters, replace spaces with underscores
 	reg := regexp.MustCompile(`[^a-zA-Z0-9-]+`)
 	cleanAccountName := reg.ReplaceAllString(accountName, "_")
 	cleanAccountName = strings.Trim(cleanAccountName, "_")
-	
+
 	// Format dates
 	periodStart := invoice.PeriodStart.Format("2006-01-02")
 	periodEnd := invoice.PeriodEnd.Format("2006-01-02")
-	
+
 	// Generate filename: invoice_123456_ClientName_2025-01-01_2025-01-31.pdf
-	filename := fmt.Sprintf("invoice_%06d_%s_%s_%s.pdf", 
-		invoice.ID, 
-		cleanAccountName, 
-		periodStart, 
+	filename := fmt.Sprintf("invoice_%06d_%s_%s_%s.pdf",
+		invoice.ID,
+		cleanAccountName,
+		periodStart,
 		periodEnd)
-	
+
 	return filename
 }
 
 // SendInvoiceEmail sends an invoice email with HTML content, CC, and PDF attachment
-func (a *App) SendInvoiceEmail(to, cc, subject, htmlBody string, pdfURL string, invoice *Invoice) error {
-	from := mail.NewEmail("Snowpack Data", "billing@snowpack-data.com")
+func (a *App) SendInvoiceEmail(to, cc, subject, htmlBody string, pdfURL string, invoice *Invoice, tenantBillingEmail string) error {
+	from := mail.NewEmail("Cronos", CRONOS_SENDER_ADDRESS)
 	toEmail := mail.NewEmail("", to)
-	
+
 	// Create the message
 	message := mail.NewV3Mail()
 	message.SetFrom(from)
 	message.Subject = subject
-	
+
+	// Set Reply-To to tenant's billing email so replies go to the tenant
+	if tenantBillingEmail != "" {
+		message.SetReplyTo(mail.NewEmail("", tenantBillingEmail))
+	}
+
 	// Add personalization (to and cc)
 	p := mail.NewPersonalization()
 	p.AddTos(toEmail)
-	
+
 	// Add CC recipients if provided
 	if cc != "" {
 		// Split by comma for multiple CC addresses
@@ -170,13 +180,13 @@ func (a *App) SendInvoiceEmail(to, cc, subject, htmlBody string, pdfURL string, 
 			}
 		}
 	}
-	
+
 	message.AddPersonalizations(p)
-	
+
 	// Add HTML content
 	content := mail.NewContent("text/html", htmlBody)
 	message.AddContent(content)
-	
+
 	// Download and attach the PDF from GCS
 	if pdfURL != "" {
 		// Parse the GCS URL to extract bucket and object path
@@ -188,18 +198,18 @@ func (a *App) SendInvoiceEmail(to, cc, subject, htmlBody string, pdfURL string, 
 				if len(pathParts) == 2 {
 					bucketName := string(pathParts[0])
 					objectPath := string(pathParts[1])
-					
+
 					// Download the PDF from GCS
 					ctx := context.Background()
 					storageClient := a.InitializeStorageClient(a.Project, bucketName)
 					bucket := storageClient.Bucket(bucketName)
-					
+
 					rc, err := bucket.Object(objectPath).NewReader(ctx)
 					if err != nil {
 						log.Printf("Error reading PDF from GCS: %v", err)
 					} else {
 						defer rc.Close()
-						
+
 						// Read the PDF bytes
 						pdfBytes, err := io.ReadAll(rc)
 						if err != nil {
@@ -207,16 +217,16 @@ func (a *App) SendInvoiceEmail(to, cc, subject, htmlBody string, pdfURL string, 
 						} else {
 							// Base64 encode and attach
 							encodedPDF := base64.StdEncoding.EncodeToString(pdfBytes)
-							
+
 							// Generate descriptive filename: invoice_123456_ClientName_2025-01-01_2025-01-31.pdf
 							filename := generateInvoiceFilename(invoice)
-							
+
 							attachment := mail.NewAttachment()
 							attachment.SetContent(encodedPDF)
 							attachment.SetType("application/pdf")
 							attachment.SetFilename(filename)
 							attachment.SetDisposition("attachment")
-							
+
 							message.AddAttachment(attachment)
 						}
 					}
@@ -224,17 +234,17 @@ func (a *App) SendInvoiceEmail(to, cc, subject, htmlBody string, pdfURL string, 
 			}
 		}
 	}
-	
+
 	// Send the email
 	client := sendgrid.NewSendClient(os.Getenv("SENDGRID_API_KEY"))
 	response, err := client.Send(message)
 	if err != nil {
 		return errors.Wrap(err, "error sending invoice email")
 	}
-	
+
 	if response.StatusCode >= 400 {
 		return errors.New("SendGrid returned error status: " + response.Body)
 	}
-	
+
 	return nil
 }

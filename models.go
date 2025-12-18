@@ -16,6 +16,7 @@ import (
 	"log"
 
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
+	"gorm.io/datatypes"
 	_ "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -287,19 +288,39 @@ const (
 	CompensationTypeBasePlusVariable CompensationType = "COMPENSATION_TYPE_BASE_PLUS_VARIABLE"
 )
 
+// Tenant represents a multi-tenant organization using the platform
+type Tenant struct {
+	gorm.Model
+	Slug        string         `gorm:"uniqueIndex;size:63;not null" json:"slug"`
+	Name        string         `gorm:"size:255;not null" json:"name"`
+	Domain      string         `gorm:"uniqueIndex;size:255" json:"domain"` // Email domain for Google OAuth (e.g., snowpackdata.com)
+	Plan        string         `gorm:"default:'trial'" json:"plan"`
+	Status      string         `gorm:"default:'active'" json:"status"`
+	TrialEndsAt *time.Time     `json:"trial_ends_at,omitempty"`
+	Settings    datatypes.JSON `json:"settings"`
+	Branding    datatypes.JSON `json:"branding"`
+}
+
 type User struct {
 	// User is the generic user object for anyone accessing the application
 	gorm.Model
-	Email     string `gorm:"unique" json:"email"`
-	Password  string `json:"-"`
-	IsAdmin   bool   `json:"is_admin"`
-	Role      string `json:"role"`
-	AccountID uint   `json:"account_id"`
+	TenantID            uint       `gorm:"not null;index:idx_users_tenant_email,priority:1" json:"tenant_id"`
+	Tenant              Tenant     `gorm:"foreignKey:TenantID" json:"-"`
+	Email               string     `gorm:"uniqueIndex:idx_users_tenant_email,priority:2;size:255" json:"email"`
+	Password            string     `json:"-"`
+	IsAdmin             bool       `json:"is_admin"`
+	Role                string     `json:"role"`
+	AccountID           uint       `json:"account_id"`
+	GoogleAccessToken   string     `json:"-"` // OAuth2 access token from Google login
+	GoogleRefreshToken  string     `json:"-"` // OAuth2 refresh token from Google login
+	GoogleTokenExpiry   *time.Time `json:"-"` // When the access token expires
 }
 
 type Employee struct {
 	// Employee refers to internal information regarding an employee
 	gorm.Model
+	TenantID                uint         `gorm:"not null;index:idx_employees_tenant,priority:1" json:"tenant_id"`
+	Tenant                  Tenant       `gorm:"foreignKey:TenantID" json:"-"`
 	UserID                  uint         `json:"user_id"`
 	User                    User         `json:"user"`
 	Title                   string       `json:"title"`
@@ -327,6 +348,8 @@ type Employee struct {
 // Used for base salary, monthly bonuses, or other fixed compensation
 type RecurringEntry struct {
 	gorm.Model
+	TenantID    uint       `gorm:"not null;index:idx_recurring_entries_tenant,priority:1" json:"tenant_id"`
+	Tenant      Tenant     `gorm:"foreignKey:TenantID" json:"-"`
 	EmployeeID  uint       `json:"employee_id"`
 	Employee    Employee   `json:"employee"`
 	Type        string     `json:"type"`        // "base_salary", "bonus", "stipend"
@@ -346,6 +369,8 @@ type RecurringEntry struct {
 // Created from RecurringEntry templates, separate from timesheet entries
 type RecurringBillLineItem struct {
 	gorm.Model
+	TenantID         uint           `gorm:"not null;index:idx_recurring_bill_items_tenant,priority:1" json:"tenant_id"`
+	Tenant           Tenant         `gorm:"foreignKey:TenantID" json:"-"`
 	BillID           uint           `json:"bill_id"`
 	Bill             Bill           `json:"bill"`
 	RecurringEntryID uint           `json:"recurring_entry_id"`
@@ -360,6 +385,8 @@ type RecurringBillLineItem struct {
 type Client struct {
 	// Client refers to an external customer that may access the site to see time entries
 	gorm.Model
+	TenantID  uint   `gorm:"not null;index:idx_clients_tenant,priority:1" json:"tenant_id"`
+	Tenant    Tenant `gorm:"foreignKey:TenantID" json:"-"`
 	UserID    uint   `json:"user_id"`
 	User      User   `json:"user"`
 	Title     string `json:"title"`
@@ -370,19 +397,23 @@ type Client struct {
 // GoogleAuth stores OAuth tokens for Google Calendar integration
 type GoogleAuth struct {
 	gorm.Model
-	UserID       uint      `json:"user_id" gorm:"uniqueIndex"`
-	User         User      `json:"user"`
+	TenantID     uint      `gorm:"not null;index:idx_google_auth_tenant" json:"tenant_id"`
+	Tenant       Tenant    `gorm:"foreignKey:TenantID" json:"-"`
+	UserID       uint      `gorm:"not null;uniqueIndex:idx_google_auth_tenant_user" json:"user_id"`
+	GoogleEmail  string    `json:"google_email" gorm:"size:255"`
 	AccessToken  string    `json:"-" gorm:"type:text"`
 	RefreshToken string    `json:"-" gorm:"type:text"`
-	TokenExpiry  time.Time `json:"token_expiry"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 type Account struct {
 	// Account is the specific customer account
 	gorm.Model
+	TenantID              uint      `gorm:"not null;index:idx_accounts_tenant_legal_name,priority:1" json:"tenant_id"`
+	Tenant                Tenant    `gorm:"foreignKey:TenantID" json:"-"`
 	Name                  string    `json:"name"`
 	Type                  string    `json:"type"`
-	LegalName             string    `gorm:"unique" json:"legal_name"`
+	LegalName             string    `gorm:"uniqueIndex:idx_accounts_tenant_legal_name,priority:2" json:"legal_name"`
 	Address               string    `json:"address"`
 	Email                 string    `json:"email"`
 	Website               string    `json:"website"`
@@ -399,6 +430,8 @@ type Account struct {
 type Rate struct {
 	// Rate stores all of available rates that can be added to individual projects
 	gorm.Model
+	TenantID     uint      `gorm:"not null;index:idx_rates_tenant,priority:1" json:"tenant_id"`
+	Tenant       Tenant    `gorm:"foreignKey:TenantID" json:"-"`
 	Name         string    `json:"name"`
 	Amount       float64   `json:"amount"`
 	ActiveFrom   time.Time `json:"active_from"`
@@ -412,9 +445,11 @@ type Project struct {
 	// often with specific time period. A rate will have a specific billing code
 	// associated with the project.
 	gorm.Model
+	TenantID            uint                 `gorm:"not null;index:idx_projects_tenant_account,priority:1" json:"tenant_id"`
+	Tenant              Tenant               `gorm:"foreignKey:TenantID" json:"-"`
 	Name                string               `json:"name"`
 	Description         string               `json:"description"`
-	AccountID           uint                 `json:"account_id"`
+	AccountID           uint                 `gorm:"index:idx_projects_tenant_account,priority:2" json:"account_id"`
 	Account             Account              `json:"account"`
 	ActiveStart         time.Time            `json:"active_start"`
 	ActiveEnd           time.Time            `json:"active_end"`
@@ -438,10 +473,12 @@ type Project struct {
 
 type BillingCode struct {
 	gorm.Model
+	TenantID       uint      `gorm:"not null;index:idx_billing_codes_tenant_code,priority:1" json:"tenant_id"`
+	Tenant         Tenant    `gorm:"foreignKey:TenantID" json:"-"`
 	Name           string    `json:"name"`
 	RateType       string    `json:"type"`
 	Category       string    `json:"category"`
-	Code           string    `gorm:"unique" json:"code"`
+	Code           string    `gorm:"uniqueIndex:idx_billing_codes_tenant_code,priority:2" json:"code"`
 	RoundedTo      int       `gorm:"default:15" json:"rounded_to"`
 	ProjectID      uint      `json:"project"`
 	ActiveStart    time.Time `json:"active_start"`
@@ -454,10 +491,12 @@ type BillingCode struct {
 }
 type Entry struct {
 	gorm.Model
-	ProjectID            uint               `json:"project_id"` // Can remove these, unnecessary with billing code
-	Project              Project            `json:"project"`    // Can remove these, unnecessary with billing code
+	TenantID             uint               `gorm:"not null;index:idx_entries_tenant_employee,priority:1;index:idx_entries_tenant_project,priority:1" json:"tenant_id"`
+	Tenant               Tenant             `gorm:"foreignKey:TenantID" json:"-"`
+	ProjectID            uint               `gorm:"index:idx_entries_tenant_project,priority:2" json:"project_id"` // Can remove these, unnecessary with billing code
+	Project              Project            `json:"project"`                                                       // Can remove these, unnecessary with billing code
 	Notes                string             `gorm:"type:varchar(2048)" json:"notes"`
-	EmployeeID           uint               `json:"employee_id" gorm:"index:idx_employee_internal"`
+	EmployeeID           uint               `json:"employee_id" gorm:"index:idx_employee_internal;index:idx_entries_tenant_employee,priority:2"`
 	Employee             Employee           `json:"employee"`
 	ImpersonateAsUserID  *uint              `json:"impersonate_as_user_id"`
 	ImpersonateAsUser    *Employee          `json:"impersonate_as_user" gorm:"foreignKey:ImpersonateAsUserID"`
@@ -492,8 +531,10 @@ func (e *Entry) BeforeSave(tx *gorm.DB) (err error) {
 // the term Invoice, these can mean either an invoice or bill in relationship to Snowpack.
 type Invoice struct {
 	gorm.Model
+	TenantID         uint              `gorm:"not null;index:idx_invoices_tenant_state,priority:1;index:idx_invoices_tenant_account,priority:1" json:"tenant_id"`
+	Tenant           Tenant            `gorm:"foreignKey:TenantID" json:"-"`
 	Name             string            `json:"name"`
-	AccountID        uint              `json:"account_id"`
+	AccountID        uint              `gorm:"index:idx_invoices_tenant_account,priority:2" json:"account_id"`
 	Account          Account           `json:"account"`
 	ProjectID        *uint             `json:"project_id"`
 	Project          Project           `json:"project"`
@@ -507,7 +548,7 @@ type Invoice struct {
 	SentAt           time.Time         `json:"sent_at"`
 	DueAt            time.Time         `json:"due_at"`
 	ClosedAt         time.Time         `json:"closed_at"`
-	State            string            `json:"state"`
+	State            string            `gorm:"index:idx_invoices_tenant_state,priority:2" json:"state"`
 	Type             string            `json:"type"`
 	TotalHours       float64           `json:"total_hours"`
 	TotalFees        float64           `json:"total_fees"`
@@ -529,6 +570,8 @@ type Invoice struct {
 // For bills: separate lines for salary, commission, timesheet, adjustments
 type InvoiceLineItem struct {
 	gorm.Model
+	TenantID    uint    `gorm:"not null;index:idx_invoice_line_items_tenant,priority:1" json:"tenant_id"`
+	Tenant      Tenant  `gorm:"foreignKey:TenantID" json:"-"`
 	InvoiceID   uint    `json:"invoice_id"`
 	Type        string  `json:"type"` // LineItemType
 	Description string  `json:"description"`
@@ -558,6 +601,8 @@ type InvoiceLineItem struct {
 // invoice as a line item.
 type Adjustment struct {
 	gorm.Model
+	TenantID  uint    `gorm:"not null;index:idx_adjustments_tenant,priority:1" json:"tenant_id"`
+	Tenant    Tenant  `gorm:"foreignKey:TenantID" json:"-"`
 	InvoiceID *uint   `json:"invoice_id"`
 	Invoice   Invoice `json:"-"`
 	Bill      Bill    `json:"-"`
@@ -571,6 +616,8 @@ type Adjustment struct {
 // Commission represents a commission payment to a staff member
 type Commission struct {
 	gorm.Model
+	TenantID    uint     `gorm:"not null;index:idx_commissions_tenant,priority:1" json:"tenant_id"`
+	Tenant      Tenant   `gorm:"foreignKey:TenantID" json:"-"`
 	StaffID     uint     `json:"staff_id"`
 	Staff       Employee `json:"staff"`
 	Role        string   `json:"role"`
@@ -589,8 +636,10 @@ type Commission struct {
 // linked to the employees.
 type Bill struct {
 	gorm.Model
+	TenantID               uint                    `gorm:"not null;index:idx_bills_tenant_state,priority:1" json:"tenant_id"`
+	Tenant                 Tenant                  `gorm:"foreignKey:TenantID" json:"-"`
 	Name                   string                  `json:"name"`
-	State                  BillState               `json:"state"`
+	State                  BillState               `gorm:"index:idx_bills_tenant_state,priority:2" json:"state"`
 	EmployeeID             uint                    `json:"user_id"`
 	Employee               Employee                `json:"user"`
 	PeriodStart            time.Time               `json:"period_start"`
@@ -620,6 +669,8 @@ type Bill struct {
 // Separate lines for: salary, commission, timesheet hours, adjustments
 type BillLineItem struct {
 	gorm.Model
+	TenantID    uint    `gorm:"not null;index:idx_bill_line_items_tenant,priority:1" json:"tenant_id"`
+	Tenant      Tenant  `gorm:"foreignKey:TenantID" json:"-"`
 	BillID      uint    `json:"bill_id"`
 	Type        string  `json:"type"` // LineItemType
 	Description string  `json:"description"`
@@ -668,6 +719,8 @@ func (a *App) VerifyJournalBalance() (int64, error) {
 // the debits and credits for a specific account.
 type Journal struct {
 	gorm.Model
+	TenantID                uint                  `gorm:"not null;index:idx_journals_tenant,priority:1" json:"tenant_id"`
+	Tenant                  Tenant                `gorm:"foreignKey:TenantID" json:"-"`
 	Account                 string                `json:"account"`
 	SubAccount              string                `json:"sub_account"`
 	Invoice                 Invoice               `json:"invoice"`
@@ -685,8 +738,10 @@ type Journal struct {
 // OfflineJournal represents journal entries imported from external sources (e.g., Beancount)
 type OfflineJournal struct {
 	gorm.Model
-	Date        time.Time `gorm:"index" json:"date"`
-	Account     string    `gorm:"index" json:"account"`
+	TenantID    uint      `gorm:"not null;index:idx_offline_journals_tenant_date,priority:1;index:idx_offline_journals_tenant_account,priority:1;index:idx_offline_journals_tenant_hash,priority:1" json:"tenant_id"`
+	Tenant      Tenant    `gorm:"foreignKey:TenantID" json:"-"`
+	Date        time.Time `gorm:"index;index:idx_offline_journals_tenant_date,priority:2" json:"date"`
+	Account     string    `gorm:"index;index:idx_offline_journals_tenant_account,priority:2" json:"account"`
 	SubAccount  string    `json:"sub_account"`
 	Description string    `json:"description"`
 	Debit       int64     `json:"debit"`  // in cents
@@ -696,7 +751,7 @@ type OfflineJournal struct {
 	TransactionGroupID string `gorm:"index" json:"transaction_group_id"` // UUID for grouping paired entries
 
 	// Deduplication - SHA256 of date+account+subaccount+description+amounts
-	ContentHash string `gorm:"uniqueIndex" json:"content_hash"`
+	ContentHash string `gorm:"uniqueIndex:idx_offline_journals_tenant_hash,priority:2" json:"content_hash"`
 	Source      string `gorm:"default:'beancount'" json:"source"`
 	SourceFile  string `json:"source_file,omitempty"` // File name for CSV imports to track which file the transaction came from
 
@@ -743,6 +798,8 @@ type CommitmentSchedule struct {
 type StaffingAssignment struct {
 	// StaffingAssignment is a record of an employee's assignment to a project
 	gorm.Model
+	TenantID uint   `gorm:"not null;index:idx_staffing_assignments_tenant,priority:1" json:"tenant_id"`
+	Tenant   Tenant `gorm:"foreignKey:TenantID" json:"-"`
 	// This is a many-to-many relationship between employees and projects
 	// An employee can be assigned to multiple projects, and a project can have multiple employees
 	// assigned to it. This is a join table that links the two together.
@@ -810,6 +867,8 @@ type Asset struct {
 	// Asset is a record of an external asset -- these are typically saved to GCS
 	// and are associated with a project. These can be images, documents, etc.
 	gorm.Model
+	TenantID uint   `gorm:"not null;index:idx_assets_tenant,priority:1" json:"tenant_id"`
+	Tenant   Tenant `gorm:"foreignKey:TenantID" json:"-"`
 	// Can optionally be associated with a project or an account
 	ProjectID *uint    `json:"project_id"`
 	Project   *Project `json:"project"`
@@ -837,11 +896,13 @@ type Asset struct {
 // This allows dynamic creation of accounts beyond the predefined constants
 type ChartOfAccount struct {
 	gorm.Model
-	AccountCode     string `json:"account_code" gorm:"unique;not null"`                                          // e.g., "OPERATING_EXPENSES_SAAS"
-	AccountName     string `json:"account_name"`                                                                 // e.g., "Operating Expenses - SaaS"
-	AccountType     string `json:"account_type" gorm:"index:idx_account_type_active,priority:1"`                 // "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
-	ParentID        *uint  `json:"parent_id"`                                                                    // For hierarchical accounts
-	IsActive        bool   `json:"is_active" gorm:"default:true;index:idx_account_type_active,priority:2;index"` // Composite index with account_type + individual index
+	TenantID        uint   `gorm:"not null;index:idx_chart_accounts_tenant_code,priority:1" json:"tenant_id"`
+	Tenant          Tenant `gorm:"foreignKey:TenantID" json:"-"`
+	AccountCode     string `json:"account_code" gorm:"uniqueIndex:idx_chart_accounts_tenant_code,priority:2;not null"` // e.g., "OPERATING_EXPENSES_SAAS"
+	AccountName     string `json:"account_name"`                                                                       // e.g., "Operating Expenses - SaaS"
+	AccountType     string `json:"account_type" gorm:"index:idx_account_type_active,priority:1"`                       // "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"
+	ParentID        *uint  `json:"parent_id"`                                                                          // For hierarchical accounts
+	IsActive        bool   `json:"is_active" gorm:"default:true;index:idx_account_type_active,priority:2;index"`       // Composite index with account_type + individual index
 	Description     string `json:"description"`
 	IsSystemDefined bool   `json:"is_system_defined" gorm:"default:false"` // True for predefined constants
 }
@@ -849,17 +910,21 @@ type ChartOfAccount struct {
 // Subaccount represents a sub-ledger account (e.g., specific vendors, clients, employees)
 type Subaccount struct {
 	gorm.Model
-	Code        string `json:"code" gorm:"not null;uniqueIndex:idx_subaccount_code_account"`                                        // e.g., "AWS", "VANTA_INC", "EMPLOYEE_123"
-	Name        string `json:"name"`                                                                                                // e.g., "Amazon Web Services", "Vanta Inc"
-	AccountCode string `json:"account_code" gorm:"uniqueIndex:idx_subaccount_code_account;index:idx_subaccount_filters,priority:1"` // Link to ChartOfAccount code, indexed for queries
-	Type        string `json:"type" gorm:"index:idx_subaccount_filters,priority:2"`                                                 // "VENDOR", "CLIENT", "EMPLOYEE", "CUSTOM"
-	IsActive    bool   `json:"is_active" gorm:"default:true;index:idx_subaccount_filters,priority:3;index"`                         // Composite index for account_code+type+is_active queries
+	TenantID    uint   `gorm:"not null;index:idx_subaccount_tenant_code_account,priority:1" json:"tenant_id"`
+	Tenant      Tenant `gorm:"foreignKey:TenantID" json:"-"`
+	Code        string `json:"code" gorm:"not null;uniqueIndex:idx_subaccount_tenant_code_account,priority:2"`                                        // e.g., "AWS", "VANTA_INC", "EMPLOYEE_123"
+	Name        string `json:"name"`                                                                                                                  // e.g., "Amazon Web Services", "Vanta Inc"
+	AccountCode string `json:"account_code" gorm:"uniqueIndex:idx_subaccount_tenant_code_account,priority:3;index:idx_subaccount_filters,priority:1"` // Link to ChartOfAccount code, indexed for queries
+	Type        string `json:"type" gorm:"index:idx_subaccount_filters,priority:2"`                                                                   // "VENDOR", "CLIENT", "EMPLOYEE", "CUSTOM"
+	IsActive    bool   `json:"is_active" gorm:"default:true;index:idx_subaccount_filters,priority:3;index"`                                           // Composite index for account_code+type+is_active queries
 }
 
 // Expense represents a pass-through expense that will be billed to a client
 type Expense struct {
 	gorm.Model
-	ProjectID       *uint     `json:"project_id"` // Nullable - internal expenses don't need a project
+	TenantID        uint      `gorm:"not null;index:idx_expenses_tenant_project,priority:1;index:idx_expenses_tenant_date,priority:1" json:"tenant_id"`
+	Tenant          Tenant    `gorm:"foreignKey:TenantID" json:"-"`
+	ProjectID       *uint     `gorm:"index:idx_expenses_tenant_project,priority:2" json:"project_id"` // Nullable - internal expenses don't need a project
 	Project         *Project  `json:"project" gorm:"foreignKey:ProjectID"`
 	SubmitterID     uint      `json:"submitter_id"`
 	Submitter       Employee  `json:"submitter"`
@@ -868,7 +933,7 @@ type Expense struct {
 	InvoiceID       *uint     `json:"invoice_id"`
 	Invoice         *Invoice  `json:"invoice"`
 	Amount          int       `json:"amount"` // Amount in cents
-	Date            time.Time `json:"date"`
+	Date            time.Time `gorm:"index:idx_expenses_tenant_date,priority:2" json:"date"`
 	Description     string    `json:"description" gorm:"type:varchar(2048)"`
 	State           string    `json:"state"` // ExpenseState
 	ReceiptID       *uint     `json:"receipt_id"`
@@ -898,7 +963,9 @@ type Expense struct {
 // ExpenseCategory represents a required categorization for expenses
 type ExpenseCategory struct {
 	gorm.Model
-	Name          string `json:"name" gorm:"type:varchar(255);uniqueIndex"`
+	TenantID      uint   `gorm:"not null;index:idx_expense_categories_tenant_name,priority:1" json:"tenant_id"`
+	Tenant        Tenant `gorm:"foreignKey:TenantID" json:"-"`
+	Name          string `json:"name" gorm:"type:varchar(255);uniqueIndex:idx_expense_categories_tenant_name,priority:2"`
 	Description   string `json:"description" gorm:"type:varchar(1024)"`
 	GLAccountCode string `json:"gl_account_code" gorm:"type:varchar(100)"` // Maps to Chart of Accounts (e.g., OPERATING_EXPENSES_TRAVEL)
 	Active        bool   `json:"active" gorm:"default:true"`
@@ -907,7 +974,9 @@ type ExpenseCategory struct {
 // ExpenseTag represents an optional tag for grouping expenses with budget tracking
 type ExpenseTag struct {
 	gorm.Model
-	Name        string    `json:"name" gorm:"type:varchar(255);uniqueIndex"`
+	TenantID    uint      `gorm:"not null;index:idx_expense_tags_tenant_name,priority:1" json:"tenant_id"`
+	Tenant      Tenant    `gorm:"foreignKey:TenantID" json:"-"`
+	Name        string    `json:"name" gorm:"type:varchar(255);uniqueIndex:idx_expense_tags_tenant_name,priority:2"`
 	Description string    `json:"description" gorm:"type:varchar(1024)"`
 	Active      bool      `json:"active" gorm:"default:true"`
 	Budget      *int      `json:"budget"` // Budget in cents, nullable
@@ -916,9 +985,10 @@ type ExpenseTag struct {
 
 // ExpenseTagAssignment is the junction table for expense-to-tag many-to-many relationship
 type ExpenseTagAssignment struct {
-	ExpenseID uint      `gorm:"primaryKey;column:expense_id"`
-	TagID     uint      `gorm:"primaryKey;column:expense_tag_id"`
-	CreatedAt time.Time `gorm:"autoCreateTime"`
+	gorm.Model
+	TenantID  uint `gorm:"not null;index:idx_expense_tag_assignments_tenant,priority:1"`
+	ExpenseID uint `gorm:"primaryKey;column:expense_id"`
+	TagID     uint `gorm:"primaryKey;column:expense_tag_id"`
 }
 
 type AssetType string
@@ -954,31 +1024,6 @@ const (
 	AssetUploadStatusFailed     AssetUploadStatus = "failed"
 	AssetUploadStatusProcessing AssetUploadStatus = "processing"
 )
-
-// WEBSITE SPECIFIC MODULES
-
-// Survey is a simple object that we can use to track the responses to a survey
-type Survey struct {
-	gorm.Model
-	SurveyType      string           `json:"survey_type"`
-	UserEmail       string           `json:"user_email"`
-	UserRole        string           `json:"user_role"`
-	CompanyName     string           `json:"company_name"`
-	Completed       bool             `json:"completed"`
-	SurveyResponses []SurveyResponse `json:"survey_responses"`
-}
-
-// SurveyResponse is a response to a survey question. There may be any number of these
-type SurveyResponse struct {
-	gorm.Model
-	SurveyID         uint   `json:"survey_id"`
-	Survey           Survey `json:"survey"`
-	Step             int    `json:"step"`
-	Question         string `json:"question"`
-	AnswerType       string `json:"answer_type"`
-	StructuredAnswer string `json:"answer"`
-	FreeformAnswer   string `json:"freeform_answer"`
-}
 
 // OBJECT METHODS
 

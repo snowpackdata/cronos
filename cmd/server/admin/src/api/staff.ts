@@ -44,6 +44,10 @@ export const createStaff = async (staffData: Partial<Staff>): Promise<Staff> => 
     if (staffData.last_name) formData.append('last_name', staffData.last_name);
     if (staffData.title) formData.append('title', staffData.title);
     if (staffData.email) formData.append('email', staffData.email);
+    
+    // User account fields
+    if ((staffData as any).user_role) formData.append('user_role', (staffData as any).user_role);
+    if ((staffData as any).password) formData.append('password', (staffData as any).password);
 
     // Send both employment_status and is_active for backward compatibility
     const isActive = staffData.employment_status === 'EMPLOYMENT_STATUS_ACTIVE' || staffData.employment_status === 'EMPLOYMENT_STATUS_INACTIVE';

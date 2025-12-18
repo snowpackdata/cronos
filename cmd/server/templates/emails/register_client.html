@@ -3,7 +3,7 @@
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-    <title>Snowpack Transactional Email</title>
+    <title>Cronos Invitation Email</title>
     <style>
         img {
             border: none;
@@ -327,7 +327,7 @@
     </style>
 </head>
 <body>
-<span class="preheader">Register to view Snowpack Timesheets</span>
+<span class="preheader">You're invited to join {{.OrgName}} on Cronos</span>
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="body">
     <tr>
         <td>&nbsp;</td>
@@ -343,8 +343,8 @@
                             <table role="presentation" border="0" cellpadding="0" cellspacing="0">
                                 <tr>
                                     <td>
-                                        <p>Thanks for working with Snowpack,</p>
-                                        <p>Follow the link below and use this email to register on Snowpack to view timesheets and current work progress.</p>
+                                        <p>{{.AdminName}} is inviting you to collaborate in their organization on Cronos.</p>
+                                        <p>Follow the link below to complete your registration and view timesheets and work progress.</p>
                                         <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="btn btn-primary">
                                             <tbody>
                                             <tr>
@@ -352,7 +352,7 @@
                                                     <table role="presentation" border="0" cellpadding="0" cellspacing="0">
                                                         <tbody>
                                                         <tr>
-                                                            <td> <a href="https://snowpack-data.com/register" target="_blank">Register Here</a> </td>
+                                                            <td> <a href="{{.RegistrationURL}}" target="_blank">Register Here</a> </td>
                                                         </tr>
                                                         </tbody>
                                                     </table>
@@ -361,7 +361,7 @@
                                             </tbody>
                                         </table>
                                         <p>Thanks for your interest in working with us!</p>
-                                        <p>The Snowpack Team!</p>
+                                        <p>The Cronos Team</p>
                                     </td>
                                 </tr>
                             </table>
@@ -377,7 +377,7 @@
                     <table role="presentation" border="0" cellpadding="0" cellspacing="0">
                         <tr>
                             <td class="content-block">
-                                <span class="apple-link">Snowpack-Data, San Francisco CA 94103</span>
+                                <span class="apple-link">Cronos Platform</span>
                             </td>
                         </tr>
                         <tr>

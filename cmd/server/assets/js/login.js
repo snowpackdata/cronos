@@ -24,42 +24,29 @@ loginButton.addEventListener('click', async (e) => {
             return;
         }
         let token = result.token;
+        const tenantSlug = result.tenant_slug;
+        const isStaff = result.is_staff;
         
-        // Store the token in localStorage
-        localStorage.setItem('snowpack_token', token);
+        // Determine the target URL based on current environment
+        const currentHost = window.location.hostname;
+        const currentProtocol = window.location.protocol;
+        const currentPort = window.location.port;
         
-        // Also store in a cookie for better server-side compatibility
-        // Set cookie to expire in 30 days (same as the token)
-        const expiryDate = new Date();
-        expiryDate.setDate(expiryDate.getDate() + 30);
-        
-        // Get the current domain
-        const domain = window.location.hostname;
-        const isLocalhost = domain === 'localhost' || domain === '127.0.0.1';
-        
-        // Use domain specific settings only for non-localhost 
-        const domainParam = isLocalhost ? '' : `; domain=${domain}`;
-        
-        // Set secure flag for HTTPS connections
-        const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-        
-        // Set the cookie with proper configuration for production
-        document.cookie = `x-access-token=${token}; expires=${expiryDate.toUTCString()}; path=/${domainParam}${secure}; SameSite=Lax`;
-        
-        // Parse the token to check user role
-        try {
-            tokenJson = parseJwt(token);
-            
-            // Redirect based on user role
-            if (tokenJson.IsStaff === true) {
-                window.location.href = '/admin/timesheet';
-            } else {
-                window.location.href = '/portal/dashboard';
-            }
-        } catch (error) {
-            // If we can't parse the token, default to 404 page
-            window.location.href = '/404';
+        let targetHost;
+        if (currentHost === 'localhost' || currentHost === '127.0.0.1') {
+            // Local development - use tenant.localhost
+            targetHost = `${tenantSlug}.localhost`;
+        } else {
+            // Production - use tenant.domain.com
+            const baseDomain = currentHost.replace(/^[^.]+\./, ''); // Remove existing subdomain if any
+            targetHost = `${tenantSlug}.${baseDomain}`;
         }
+        
+        const portPart = currentPort ? `:${currentPort}` : '';
+        const redirectPath = isStaff ? '/admin/timesheet' : '/portal/dashboard';
+        const redirectURL = `${currentProtocol}//${targetHost}${portPart}${redirectPath}?token=${token}`;
+        
+        window.location.href = redirectURL;
     })
     .catch((error) => {
         loginError.innerText = "An error occurred during login. Please try again.";

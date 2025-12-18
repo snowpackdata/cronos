@@ -214,6 +214,19 @@ const router = createRouter({
 router.beforeEach(async (to, _from, next) => {
   document.title = `${to.meta.title || 'Admin'} | Cronos`;
 
+  // Check if token is in URL query params (from OAuth redirect)
+  const urlToken = to.query.token as string;
+  if (urlToken) {
+    // Save token to localStorage and cookie immediately
+    localStorage.setItem('snowpack_token', urlToken);
+    document.cookie = `x-access-token=${urlToken}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=Lax`;
+    
+    // Remove token from URL and continue navigation
+    const { token, ...queryWithoutToken } = to.query;
+    next({ ...to, query: queryWithoutToken, replace: true });
+    return;
+  }
+
   const token = localStorage.getItem('snowpack_token');
   const requiresAuth = to.matched.some(record => record.meta.requiresAuth);
   let userIsStaff = false;

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -32,7 +33,7 @@ func (a *App) InitializeSQLite() {
 			SlowThreshold:             time.Second, // Slow SQL threshold
 			LogLevel:                  logger.Info, // Log level
 			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,        // Don't include params in the SQL log
+			ParameterizedQueries:      false,       // Show params in SQL log for debugging
 			Colorful:                  true,        // Disable color
 		},
 	)
@@ -56,7 +57,7 @@ func (a *App) InitializeLocal(user, password, connection, database string) {
 			SlowThreshold:             time.Second, // Slow SQL threshold
 			LogLevel:                  logger.Info, // Log level
 			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,        // Don't include params in the SQL log
+			ParameterizedQueries:      false,       // Show params in SQL log for debugging
 			Colorful:                  true,        // Disable color
 		},
 	)
@@ -66,7 +67,10 @@ func (a *App) InitializeLocal(user, password, connection, database string) {
 		port = "5432"
 	}
 	dbURI := fmt.Sprintf("host=127.0.0.1 user=%s password=%s port=%s database=%s sslmode=disable TimeZone=UTC", user, password, port, database)
-	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{Logger: newLogger})
+	db, err := gorm.Open(postgres.Open(dbURI), &gorm.Config{
+		Logger:                                   newLogger,
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
 
 	if err != nil {
 		fmt.Println(err)
@@ -85,7 +89,7 @@ func (a *App) InitializeCloud(dbURI string) {
 			SlowThreshold:             time.Second, // Slow SQL threshold
 			LogLevel:                  logger.Info, // Log level
 			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,        // Don't include params in the SQL log
+			ParameterizedQueries:      false,       // Show params in SQL log for debugging
 			Colorful:                  true,        // Disable color
 		},
 	)
@@ -110,38 +114,79 @@ func (a *App) InitializeStorageClient(projectID, bucketName string) *storage.Cli
 	return storageClient
 }
 
+// MigrateTenants migrates only the Tenant and GoogleAuth tables (fast, targeted migration)
+func (a *App) MigrateTenants() error {
+	log.Println("Running targeted Tenant and GoogleAuth migration...")
+	if err := a.DB.AutoMigrate(&Tenant{}, &GoogleAuth{}); err != nil {
+		log.Printf("MigrateTenants error: %v", err)
+		return err
+	}
+	log.Println("Tenant and GoogleAuth migration completed successfully")
+	return nil
+}
+
+// MigrateModel
+func (a *App) MigrateModel(model interface{}) {
+	err := a.DB.AutoMigrate(model)
+	if err != nil {
+		log.Printf("AutoMigrate error for %T: %v", model, err)
+	}
+	log.Printf("AutoMigrate completed for %T", model)
+}
+
 // Calling the Migrate
 func (a *App) Migrate() {
-	// Migrate the schema
-	_ = a.DB.AutoMigrate(&User{})
-	_ = a.DB.AutoMigrate(&Employee{})
-	_ = a.DB.AutoMigrate(&Client{})
-	_ = a.DB.AutoMigrate(&GoogleAuth{})
-	_ = a.DB.AutoMigrate(&Commission{})
-	_ = a.DB.AutoMigrate(&Account{})
-	_ = a.DB.AutoMigrate(&Rate{})
-	_ = a.DB.AutoMigrate(&Project{})
-	_ = a.DB.AutoMigrate(&Entry{})
-	_ = a.DB.AutoMigrate(&BillingCode{})
-	_ = a.DB.AutoMigrate(&Journal{})
-	_ = a.DB.AutoMigrate(&OfflineJournal{})
-	_ = a.DB.AutoMigrate(&Invoice{})
-	_ = a.DB.AutoMigrate(&InvoiceLineItem{})
-	_ = a.DB.AutoMigrate(&Adjustment{})
-	_ = a.DB.AutoMigrate(&Survey{})
-	_ = a.DB.AutoMigrate(&SurveyResponse{})
-	_ = a.DB.AutoMigrate(&Bill{})
-	_ = a.DB.AutoMigrate(&BillLineItem{})
-	_ = a.DB.AutoMigrate(&StaffingAssignment{})
-	_ = a.DB.AutoMigrate(&Asset{})
-	_ = a.DB.AutoMigrate(&ChartOfAccount{})
-	_ = a.DB.AutoMigrate(&Subaccount{})
-	_ = a.DB.AutoMigrate(&ExpenseCategory{})
-	_ = a.DB.AutoMigrate(&ExpenseTag{})
-	_ = a.DB.AutoMigrate(&Expense{})
-	_ = a.DB.AutoMigrate(&ExpenseTagAssignment{})
-	_ = a.DB.AutoMigrate(&RecurringEntry{})
-	_ = a.DB.AutoMigrate(&RecurringBillLineItem{})
+	// Migrate each model individually to handle constraint errors gracefully
+	models := []interface{}{
+		// Level 0: No foreign keys
+		&Tenant{},
+		&ChartOfAccount{},
+		&ExpenseCategory{},
+		&ExpenseTag{},
+
+		// Level 1: Only references Tenant
+		&Subaccount{},
+		&Account{},
+		&Client{},
+
+		// Level 2: References Tenant + Account/Client/User
+		&User{},
+		&Asset{},
+		&Employee{},
+		&GoogleAuth{},
+		&Commission{},
+		&Rate{},
+		&BillingCode{},
+
+		// Level 3: References Employee (ae_id, sdr_id)
+		&Project{},
+
+		&Entry{},
+		&Journal{},
+		&OfflineJournal{},
+		&Invoice{},
+		&Bill{},
+		&StaffingAssignment{},
+		&Expense{},
+		&RecurringEntry{},
+
+		// Level 5: Junction tables and line items
+		&InvoiceLineItem{},
+		&BillLineItem{},
+		&Adjustment{},
+		&ExpenseTagAssignment{},
+		&RecurringBillLineItem{},
+	}
+
+	for _, model := range models {
+		err := a.DB.AutoMigrate(model)
+		if err != nil {
+			// Ignore "constraint does not exist" errors from old database
+			if !strings.Contains(err.Error(), "does not exist") {
+				log.Printf("AutoMigrate error for %T: %v", model, err)
+			}
+		}
+	}
 }
 
 // GenerateSecureFilename generates a hash from the filename of an invoice
@@ -155,4 +200,33 @@ func GenerateSecureFilename(filename string) string {
 	hasher.Write(filenameBytes)
 	sha := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 	return sha
+}
+
+// TenantScope returns a GORM scope that filters by tenant_id
+func TenantScope(tenantID uint) func(db *gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		return db.Where("tenant_id = ?", tenantID)
+	}
+}
+
+// WithTenant creates a database session scoped to a tenant from context
+func (a *App) WithTenant(ctx context.Context) *gorm.DB {
+	tenantID := GetTenantIDFromContext(ctx)
+	if tenantID == 0 {
+		log.Printf("WARNING: No tenant in context, returning unscoped DB")
+		return a.DB
+	}
+	return a.DB.Scopes(TenantScope(tenantID))
+}
+
+// GetTenantIDFromContext extracts tenant ID from context
+func GetTenantIDFromContext(ctx context.Context) uint {
+	type contextKey string
+	const TenantContextKey contextKey = "tenant"
+
+	tenant, ok := ctx.Value(TenantContextKey).(*Tenant)
+	if !ok || tenant == nil {
+		return 0
+	}
+	return tenant.ID
 }

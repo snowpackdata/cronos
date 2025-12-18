@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors" // Ensured for gorm.ErrRecordNotFound check
 	"github.com/snowpackdata/cronos"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -23,8 +24,9 @@ import (
 
 // ProjectsListHandler provides a list of Projects
 func (a *App) ProjectsListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var projects []cronos.Project
-	a.cronosApp.DB.Preload("BillingCodes").Preload("Account").Preload("StaffingAssignments").Preload("StaffingAssignments.Employee.HeadshotAsset").Preload("Assets").Order("active_end DESC").Find(&projects)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("BillingCodes").Preload("Account").Preload("StaffingAssignments").Preload("StaffingAssignments.Employee.HeadshotAsset").Preload("Assets").Order("active_end DESC").Find(&projects)
 
 	// Don't refresh signed URLs on list page - they're refreshed on-demand when assets are viewed/downloaded
 	// This dramatically improves page load performance
@@ -34,6 +36,7 @@ func (a *App) ProjectsListHandler(w http.ResponseWriter, r *http.Request) {
 
 // AccountAssetsListHandler provides a list of Assets for a specific Account
 func (a *App) AccountAssetsListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	accountIDStr, ok := vars["accountId"]
 	if !ok {
@@ -47,9 +50,9 @@ func (a *App) AccountAssetsListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	accountID := uint(accountIDUint64)
 
-	// Optional: Verify account exists
+	// Optional: Verify account exists (within tenant)
 	var account cronos.Account
-	if errDb := a.cronosApp.DB.First(&account, accountID).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&account, accountID).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Account not found")
 		} else {
@@ -59,8 +62,8 @@ func (a *App) AccountAssetsListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var assets []cronos.Asset
-	// Fetch assets that belong to this account_id and are not soft-deleted
-	if errDb := a.cronosApp.DB.Where("account_id = ?", accountID).Find(&assets).Error; errDb != nil {
+	// Fetch assets that belong to this account_id and tenant (not soft-deleted)
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("account_id = ?", accountID).Find(&assets).Error; errDb != nil {
 		log.Printf("AccountAssetsListHandler: Error fetching assets for account %d: %v", accountID, errDb)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve assets for account")
 		return
@@ -76,9 +79,10 @@ func (a *App) AccountAssetsListHandler(w http.ResponseWriter, r *http.Request) {
 
 // StaffListHandler provides a list of Projects
 func (a *App) StaffListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var staff []cronos.Employee
 	// Consider preloading User if email or other User fields are needed directly
-	a.cronosApp.DB.Preload("Entries").Preload("HeadshotAsset").Find(&staff)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Entries").Preload("HeadshotAsset").Find(&staff)
 
 	// Convert each employee for frontend display
 	for i := range staff {
@@ -90,12 +94,13 @@ func (a *App) StaffListHandler(w http.ResponseWriter, r *http.Request) {
 
 // StaffHandler handles CRUD operations for individual staff/employee records
 func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	var employee cronos.Employee
 
 	switch {
 	case r.Method == "GET":
-		if err := a.cronosApp.DB.Preload("User").Preload("Entries").Preload("HeadshotAsset").First(&employee, vars["id"]).Error; err != nil {
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("User").Preload("Entries").Preload("HeadshotAsset").First(&employee, vars["id"]).Error; err != nil {
 			respondWithError(w, http.StatusNotFound, "Employee not found")
 			return
 		}
@@ -104,6 +109,7 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case r.Method == "PUT":
+		tenant := MustGetTenant(r.Context())
 		// Parse multipart form data first
 		if err := r.ParseMultipartForm(32 << 20); err != nil { // 32 MB limit
 			log.Printf("Failed to parse multipart form: %v", err)
@@ -111,7 +117,7 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := a.cronosApp.DB.First(&employee, vars["id"]).Error; err != nil {
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&employee, vars["id"]).Error; err != nil {
 			respondWithError(w, http.StatusNotFound, "Employee not found")
 			return
 		}
@@ -179,10 +185,10 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Handle email update - update associated user's email
+		// Handle email update - update associated user's email (within tenant)
 		if r.FormValue("email") != "" && employee.UserID != 0 {
 			var user cronos.User
-			if err := a.cronosApp.DB.First(&user, employee.UserID).Error; err == nil {
+			if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&user, employee.UserID).Error; err == nil {
 				user.Email = r.FormValue("email")
 				if err := a.cronosApp.DB.Save(&user).Error; err != nil {
 					log.Printf("Failed to update user email: %v", err)
@@ -249,6 +255,7 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 					UploadStatus:  stringPtr("completed"),
 					UploadedBy:    &employee.ID,
 					UploadedAt:    &uploadedAt,
+					TenantID:      tenant.ID,
 				}
 
 				if err := a.cronosApp.DB.Create(&asset).Error; err != nil {
@@ -268,7 +275,7 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		a.cronosApp.DB.Preload("User").Preload("HeadshotAsset").First(&employee, employee.ID)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("User").Preload("HeadshotAsset").First(&employee, employee.ID)
 		convertEmployeeForFrontend(&employee)
 		respondWithJSON(w, http.StatusOK, employee)
 		return
@@ -295,24 +302,39 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 			// Create new user for staff member
 			email := r.FormValue("email")
 			if email == "" {
-				// Generate email from first/last name if not provided
-				firstName := r.FormValue("first_name")
-				lastName := r.FormValue("last_name")
-				if firstName == "" || lastName == "" {
-					respondWithError(w, http.StatusBadRequest, "Either email or both first_name and last_name are required")
+				respondWithError(w, http.StatusBadRequest, "Email address is required")
+				return
+			}
+
+			// Get user role from form, default to STAFF
+			userRole := r.FormValue("user_role")
+			if userRole == "" {
+				userRole = cronos.UserRoleStaff.String()
+			}
+
+			// Get password from form or use default
+			password := r.FormValue("password")
+			if password == "" {
+				// Default password: "ChangeMe123!" - should be changed on first login
+				password = "$2a$10$N8z9fTtXoZEGGCo8D7Oj2.D3E4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R" // bcrypt hash
+			} else {
+				// Hash the provided password
+				hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+				if err != nil {
+					log.Printf("Failed to hash password: %v", err)
+					respondWithError(w, http.StatusInternalServerError, "Failed to hash password")
 					return
 				}
-				// Generate email in format: firstname.lastname@snowpack-data.com
-				email = strings.ToLower(firstName + "." + lastName + "@snowpack-data.com")
+				password = string(hashedPassword)
 			}
 
 			// Create new user (AccountID might be required - set to 1 as default for now)
 			newUser := cronos.User{
 				Email:     email,
-				Role:      cronos.UserRoleStaff.String(),
+				Role:      userRole,
 				AccountID: 1, // Default account - may need to be configurable
-				// Default password: "ChangeMe123!" - should be changed on first login
-				Password: "$2a$10$N8z9fTtXoZEGGCo8D7Oj2.D3E4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R", // bcrypt hash of "ChangeMe123!"
+				Password:  password,
+				TenantID:  tenant.ID,
 			}
 
 			if err := a.cronosApp.DB.Create(&newUser).Error; err != nil {
@@ -376,6 +398,7 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		employee.TenantID = tenant.ID
 		if err := a.cronosApp.DB.Create(&employee).Error; err != nil {
 			log.Printf("Failed to create employee: %v", err)
 			respondWithError(w, http.StatusInternalServerError, "Failed to create employee: "+err.Error())
@@ -402,13 +425,13 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		a.cronosApp.DB.Preload("User").First(&employee, employee.ID)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("User").First(&employee, employee.ID)
 		convertEmployeeForFrontend(&employee)
 		respondWithJSON(w, http.StatusCreated, employee)
 		return
 
 	case r.Method == "DELETE":
-		if err := a.cronosApp.DB.Delete(&cronos.Employee{}, vars["id"]).Error; err != nil {
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Delete(&cronos.Employee{}, vars["id"]).Error; err != nil {
 			respondWithError(w, http.StatusInternalServerError, "Failed to delete employee")
 			return
 		}
@@ -423,9 +446,10 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 
 // AccountsListHandler provides a list of Accounts with their associated client user details.
 func (a *App) AccountsListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var accounts []cronos.Account
 	// Get accounts first, preloading projects as before.
-	if err := a.cronosApp.DB.Preload("Projects").Preload("Assets").Order("name ASC").Find(&accounts).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Projects").Preload("Assets").Order("name ASC").Find(&accounts).Error; err != nil {
 		log.Printf("Error fetching accounts: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve accounts")
 		return
@@ -453,8 +477,8 @@ func (a *App) AccountsListHandler(w http.ResponseWriter, r *http.Request) {
 
 	for i, acc := range accounts {
 		var usersLinkedToAccount []cronos.User
-		// Find all User records directly associated with this account via User.AccountID
-		if err := a.cronosApp.DB.Where("account_id = ?", acc.ID).Find(&usersLinkedToAccount).Error; err != nil {
+		// Find all User records directly associated with this account via User.AccountID (within tenant)
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("account_id = ?", acc.ID).Find(&usersLinkedToAccount).Error; err != nil {
 			log.Printf("Error fetching users for account ID %d: %v", acc.ID, err)
 			// Continue to next account, or handle error more gracefully
 			results[i] = AccountWithDetailedClients{Account: acc, ClientUsers: []ClientUserDetail{}}
@@ -464,8 +488,8 @@ func (a *App) AccountsListHandler(w http.ResponseWriter, r *http.Request) {
 		detailedClients := make([]ClientUserDetail, 0, len(usersLinkedToAccount))
 		for _, user := range usersLinkedToAccount {
 			var clientProfile cronos.Client
-			// For each user, find their corresponding Client profile record
-			if err := a.cronosApp.DB.Where("user_id = ?", user.ID).First(&clientProfile).Error; err == nil {
+			// For each user, find their corresponding Client profile record (within tenant)
+			if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", user.ID).First(&clientProfile).Error; err == nil {
 				// Client profile found, user is fully registered
 				detailedClients = append(detailedClients, ClientUserDetail{
 					UserID:    user.ID,
@@ -498,8 +522,9 @@ func (a *App) AccountsListHandler(w http.ResponseWriter, r *http.Request) {
 
 // RatesListHandler provides a list of Rates that are available
 func (a *App) RatesListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var rates []cronos.Rate
-	a.cronosApp.DB.Preload("BillingCodes").Find(&rates)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("BillingCodes").Find(&rates)
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(&rates)
@@ -507,8 +532,9 @@ func (a *App) RatesListHandler(w http.ResponseWriter, r *http.Request) {
 
 // BillingCodesListHandler provides a list of BillingCodes that are available
 func (a *App) BillingCodesListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var billingCodes []cronos.BillingCode
-	a.cronosApp.DB.Preload("Rate").Preload("InternalRate").Find(&billingCodes)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Rate").Preload("InternalRate").Find(&billingCodes)
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(&billingCodes)
@@ -517,14 +543,15 @@ func (a *App) BillingCodesListHandler(w http.ResponseWriter, r *http.Request) {
 // ActiveBillingCodesListHandler provides a list of BillingCodes that are available and active for the
 // entry to be generated
 func (a *App) ActiveBillingCodesListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var billingCodes []cronos.BillingCode
 
 	// Get today's date at the start of the day to ensure we include all billing codes active today
 	today := time.Now().Truncate(24 * time.Hour)
 
 	// Modified query to include billing codes where active_start is on or before today,
-	// and active_end is on or after today, including codes that expire exactly at the end of today
-	a.cronosApp.DB.Preload("Rate").Preload("InternalRate").
+	// and active_end is on or after today, including codes that expire exactly at the end of today (within tenant)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Rate").Preload("InternalRate").
 		Where("active_start <= ? AND active_end >= ?", today, today).
 		Find(&billingCodes)
 
@@ -537,6 +564,7 @@ func (a *App) ActiveBillingCodesListHandler(w http.ResponseWriter, r *http.Reque
 // Supports optional date range filtering via query parameters: start_date and end_date (YYYY-MM-DD format)
 // Supports optional user_id parameter for admins to view other users' entries
 func (a *App) EntriesListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var entries []cronos.Entry
 
 	var employee cronos.Employee
@@ -548,25 +576,25 @@ func (a *App) EntriesListHandler(w http.ResponseWriter, r *http.Request) {
 		// Parse the requested user ID
 		viewUserID, err := strconv.Atoi(viewUserIDStr)
 		if err == nil && viewUserID > 0 {
-			// Fetch the employee for the requested user
+			// Fetch the employee for the requested user (within tenant)
 			var viewEmployee cronos.Employee
-			result := a.cronosApp.DB.Preload("User").Where("id = ?", viewUserID).First(&viewEmployee)
+			result := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("User").Where("id = ?", viewUserID).First(&viewEmployee)
 			if result.Error == nil {
 				// Use the requested employee instead of the current user
 				employee = viewEmployee
 			} else {
 				// If employee not found, fall back to current user
-				a.cronosApp.DB.Where("user_id = ?", userIDInt).First(&employee)
+				a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userIDInt).First(&employee)
 			}
 		} else {
-			a.cronosApp.DB.Where("user_id = ?", userIDInt).First(&employee)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userIDInt).First(&employee)
 		}
 	} else {
-		a.cronosApp.DB.Where("user_id = ?", userIDInt).First(&employee)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userIDInt).First(&employee)
 	}
 
-	// Build query with optional date filtering
-	query := a.cronosApp.DB.Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").
+	// Build query with optional date filtering (within tenant)
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").
 		Preload("Employee").Preload("ImpersonateAsUser").
 		Where("employee_id = ? OR impersonate_as_user_id = ?", employee.ID, employee.ID)
 
@@ -609,10 +637,11 @@ func (a *App) EntriesListHandler(w http.ResponseWriter, r *http.Request) {
 
 // DraftInvoiceListHandler provides a list of Draft Invoices that are available and associated entries
 func (a *App) DraftInvoiceListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var invoices []cronos.Invoice
 
-	// Preload ALL relationships to avoid N+1 queries
-	a.cronosApp.DB.
+	// Preload ALL relationships to avoid N+1 queries (within tenant)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Preload("Account").
 		Preload("Project").
 		Preload("Entries", func(db *gorm.DB) *gorm.DB {
@@ -639,9 +668,10 @@ func (a *App) DraftInvoiceListHandler(w http.ResponseWriter, r *http.Request) {
 // InvoiceListHandler provides access to all approved/pending/paid invoices. These invoices may be filtered by project
 // and provide access to line items only via inspection.
 func (a *App) InvoiceListHandler(w http.ResponseWriter, r *http.Request) {
-	// Get all invoices that are approved, sent, or paid
+	tenant := MustGetTenant(r.Context())
+	// Get all invoices that are approved, sent, or paid (within tenant)
 	var invoices []cronos.Invoice
-	a.cronosApp.DB.
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Preload("Account").
 		Preload("Project.Account").
 		Preload("LineItems").
@@ -664,11 +694,12 @@ func (a *App) InvoiceListHandler(w http.ResponseWriter, r *http.Request) {
 
 // ProjectHandler Provides CRUD interface for the project object
 func (a *App) ProjectHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	var project cronos.Project
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.Preload("StaffingAssignments").Preload("StaffingAssignments.Employee").Preload("Assets").First(&project, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("StaffingAssignments").Preload("StaffingAssignments.Employee").Preload("Assets").First(&project, vars["id"])
 
 		// Refresh expired signed URLs for project assets
 		if err := a.cronosApp.RefreshAssetsURLsIfExpired(project.Assets); err != nil {
@@ -682,7 +713,7 @@ func (a *App) ProjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	case r.Method == "PUT":
-		a.cronosApp.DB.First(&project, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&project, vars["id"])
 		if r.FormValue("name") != "" {
 			project.Name = r.FormValue("name")
 		}
@@ -691,7 +722,7 @@ func (a *App) ProjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.FormValue("account_id") != "" {
 			var account cronos.Account
-			a.cronosApp.DB.Where("id = ?", r.FormValue("account_id")).First(&account)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", r.FormValue("account_id")).First(&account)
 			project.AccountID = account.ID
 		}
 		if r.FormValue("active_start") != "" {
@@ -760,10 +791,10 @@ func (a *App) ProjectHandler(w http.ResponseWriter, r *http.Request) {
 
 		a.cronosApp.DB.Save(&project)
 
-		// If project dates were updated, sync all billing codes for this project
+		// If project dates were updated, sync all billing codes for this project (within tenant)
 		if datesUpdated {
 			var billingCodes []cronos.BillingCode
-			if err := a.cronosApp.DB.Where("project_id = ?", project.ID).Find(&billingCodes).Error; err == nil {
+			if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("project_id = ?", project.ID).Find(&billingCodes).Error; err == nil {
 				for _, bc := range billingCodes {
 					bc.ActiveStart = project.ActiveStart
 					bc.ActiveEnd = project.ActiveEnd
@@ -802,9 +833,10 @@ func (a *App) ProjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var account cronos.Account
-		a.cronosApp.DB.Where("id = ?", r.FormValue("account_id")).First(&account)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", r.FormValue("account_id")).First(&account)
 		project.AccountID = account.ID
 		project.Account = account
+		project.TenantID = tenant.ID
 		a.cronosApp.DB.Create(&project)
 
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -812,7 +844,7 @@ func (a *App) ProjectHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&project)
 		return
 	case r.Method == "DELETE":
-		a.cronosApp.DB.Where("id = ?", vars["id"]).Delete(&cronos.Project{})
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", vars["id"]).Delete(&cronos.Project{})
 		_ = json.NewEncoder(w).Encode("Deleted Record")
 		return
 	default:
@@ -824,16 +856,17 @@ func (a *App) ProjectHandler(w http.ResponseWriter, r *http.Request) {
 
 // ProjectAnalyticsHandler provides analytics for a given project
 func (a *App) ProjectAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	var project cronos.Project
-	a.cronosApp.DB.First(&project, vars["id"])
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&project, vars["id"])
 
 	// We want to get both the Total Hours, Total Fees for the lifetime entries of this project
 	// As well as the Total Hours, Total Fees for the current billing period (Weekly, Bi-Weekly, Monthly, Bi-Monthly, Project)
 
-	// Get all non-voided, non-deleted entries for this project
+	// Get all non-voided, non-deleted entries for this project (within tenant)
 	var entries []cronos.Entry
-	a.cronosApp.DB.Where("project_id = ? AND state != ? AND deleted_at IS NULL", project.ID, "ENTRY_STATE_VOID").
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("project_id = ? AND state != ? AND deleted_at IS NULL", project.ID, "ENTRY_STATE_VOID").
 		Find(&entries)
 
 	// Calculate total hours based on duration between start and end times
@@ -886,9 +919,9 @@ func (a *App) ProjectAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	var periodHours float64
 	var periodFees float64
 
-	// Get entries for the current period
+	// Get entries for the current period (within tenant)
 	var periodEntries []cronos.Entry
-	a.cronosApp.DB.Where("project_id = ? AND state != ? AND deleted_at IS NULL AND start >= ?",
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("project_id = ? AND state != ? AND deleted_at IS NULL AND start >= ?",
 		project.ID, "ENTRY_STATE_VOID", periodStart).Find(&periodEntries)
 
 	// Calculate period hours and fees
@@ -923,18 +956,19 @@ func (a *App) ProjectAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 
 // ProjectAssignmentHandler provides CRUD interface for the project assignment object
 func (a *App) ProjectAssignmentHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	switch {
 	case r.Method == "GET":
 		var staffingAssignment cronos.StaffingAssignment
-		a.cronosApp.DB.Preload("Employee").Preload("Project").First(&staffingAssignment, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Employee").Preload("Project").First(&staffingAssignment, vars["id"])
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(&staffingAssignment)
 		return
 	case r.Method == "PUT":
 		var staffingAssignment cronos.StaffingAssignment
-		a.cronosApp.DB.Preload("Employee").Preload("Project").First(&staffingAssignment, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Employee").Preload("Project").First(&staffingAssignment, vars["id"])
 		if r.FormValue("employee_id") != "" {
 			employeeID, _ := strconv.Atoi(r.FormValue("employee_id"))
 			staffingAssignment.EmployeeID = uint(employeeID)
@@ -1006,13 +1040,14 @@ func (a *App) ProjectAssignmentHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		staffingAssignment.TenantID = tenant.ID
 		a.cronosApp.DB.Create(&staffingAssignment)
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(&staffingAssignment)
 		return
 	case r.Method == "DELETE":
-		a.cronosApp.DB.Where("id = ?", vars["id"]).Delete(&cronos.StaffingAssignment{})
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", vars["id"]).Delete(&cronos.StaffingAssignment{})
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode("Deleted Record")
@@ -1022,18 +1057,19 @@ func (a *App) ProjectAssignmentHandler(w http.ResponseWriter, r *http.Request) {
 
 // AccountHandler Provides CRUD interface for the account object
 func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Account handler is identical to the project handler except with the account model
 	vars := mux.Vars(r)
 	var account cronos.Account
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.Preload("Assets").First(&account, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Assets").First(&account, vars["id"])
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(&account)
 		return
 	case r.Method == "PUT":
-		a.cronosApp.DB.First(&account, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&account, vars["id"])
 		if r.FormValue("name") != "" {
 			account.Name = r.FormValue("name")
 		}
@@ -1085,6 +1121,7 @@ func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
 		account.BudgetDollars = budgetDollars
 		singleInvoice, _ := strconv.ParseBool(r.FormValue("projects_single_invoice"))
 		account.ProjectsSingleInvoice = singleInvoice
+		account.TenantID = tenant.ID
 		a.cronosApp.DB.Create(&account)
 
 		// Auto-create subaccounts for this client under key GL accounts
@@ -1111,7 +1148,7 @@ func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&account)
 		return
 	case r.Method == "DELETE":
-		a.cronosApp.DB.Where("id = ?", vars["id"]).Delete(&cronos.Account{})
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", vars["id"]).Delete(&cronos.Account{})
 		_ = json.NewEncoder(w).Encode("Deleted Record")
 		return
 	default:
@@ -1123,15 +1160,15 @@ func (a *App) AccountHandler(w http.ResponseWriter, r *http.Request) {
 
 // BillingCodeHandler Provides CRUD interface for the billing code object
 // generateBillingCode generates a unique billing code based on account name and existing codes
-func (a *App) generateBillingCode(accountID uint) (string, error) {
+func (a *App) generateBillingCode(accountID uint, tenantID uint) (string, error) {
 	var account cronos.Account
-	if err := a.cronosApp.DB.First(&account, accountID).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenantID)).First(&account, accountID).Error; err != nil {
 		return "", fmt.Errorf("failed to fetch account: %w", err)
 	}
 
-	// Check if account has existing billing codes to extract prefix
+	// Check if account has existing billing codes to extract prefix (within tenant)
 	var existingCodes []cronos.BillingCode
-	if err := a.cronosApp.DB.Joins("JOIN projects ON projects.id = billing_codes.project_id").
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenantID)).Joins("JOIN projects ON projects.id = billing_codes.project_id").
 		Where("projects.account_id = ?", accountID).
 		Order("billing_codes.code DESC").
 		Find(&existingCodes).Error; err != nil {
@@ -1246,18 +1283,19 @@ func (a *App) generateBillingCode(accountID uint) (string, error) {
 }
 
 func (a *App) BillingCodeHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// BillingCode handler is identical to the project handler except with the billing code model
 	vars := mux.Vars(r)
 	var billingCode cronos.BillingCode
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.First(&billingCode, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&billingCode, vars["id"])
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(&billingCode)
 		return
 	case r.Method == "PUT":
-		a.cronosApp.DB.First(&billingCode, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&billingCode, vars["id"])
 		if r.FormValue("name") != "" {
 			billingCode.Name = r.FormValue("name")
 		}
@@ -1276,7 +1314,7 @@ func (a *App) BillingCodeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.FormValue("project_id") != "" {
 			var project cronos.Project
-			a.cronosApp.DB.Where("id = ?", r.FormValue("project_id")).First(&project)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", r.FormValue("project_id")).First(&project)
 			billingCode.ProjectID = project.ID
 			project.BillingCodes = append(project.BillingCodes, billingCode)
 			a.cronosApp.DB.Save(&project)
@@ -1299,13 +1337,13 @@ func (a *App) BillingCodeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.FormValue("rate_id") != "" {
 			var rate cronos.Rate
-			a.cronosApp.DB.Where("id = ?", r.FormValue("rate_id")).First(&rate)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", r.FormValue("rate_id")).First(&rate)
 			billingCode.RateID = rate.ID
 			billingCode.Rate = rate
 		}
 		if r.FormValue("internal_rate_id") != "" {
 			var internalRate cronos.Rate
-			a.cronosApp.DB.Where("id = ?", r.FormValue("internal_rate_id")).First(&internalRate)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", r.FormValue("internal_rate_id")).First(&internalRate)
 			billingCode.InternalRateID = internalRate.ID
 			billingCode.InternalRate = internalRate
 		}
@@ -1321,9 +1359,9 @@ func (a *App) BillingCodeHandler(w http.ResponseWriter, r *http.Request) {
 		billingCode.ActiveStart, _ = time.Parse("2006-01-02", r.FormValue("active_start"))
 		billingCode.ActiveEnd, _ = time.Parse("2006-01-02", r.FormValue("active_end"))
 
-		// Get project and account info
+		// Get project and account info (within tenant)
 		var project cronos.Project
-		if err := a.cronosApp.DB.Preload("Account").Where("id = ?", r.FormValue("project_id")).First(&project).Error; err != nil {
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Account").Where("id = ?", r.FormValue("project_id")).First(&project).Error; err != nil {
 			log.Printf("Error fetching project: %v", err)
 			respondWithError(w, http.StatusBadRequest, "Invalid project ID")
 			return
@@ -1333,7 +1371,7 @@ func (a *App) BillingCodeHandler(w http.ResponseWriter, r *http.Request) {
 		// Auto-generate code if not provided or empty
 		providedCode := r.FormValue("code")
 		if providedCode == "" {
-			generatedCode, err := a.generateBillingCode(project.AccountID)
+			generatedCode, err := a.generateBillingCode(project.AccountID, tenant.ID)
 			if err != nil {
 				log.Printf("Error generating billing code: %v", err)
 				respondWithError(w, http.StatusInternalServerError, "Failed to generate billing code")
@@ -1351,13 +1389,14 @@ func (a *App) BillingCodeHandler(w http.ResponseWriter, r *http.Request) {
 		billingCode.RateID = uint(externalRateID)
 		billingCode.InternalRateID = uint(internalRateID)
 
+		billingCode.TenantID = tenant.ID
 		a.cronosApp.DB.Create(&billingCode)
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(&billingCode)
 		return
 	case r.Method == "DELETE":
-		a.cronosApp.DB.Where("id = ?", vars["id"]).Delete(&cronos.BillingCode{})
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", vars["id"]).Delete(&cronos.BillingCode{})
 		_ = json.NewEncoder(w).Encode("Deleted Record")
 		return
 	default:
@@ -1369,18 +1408,19 @@ func (a *App) BillingCodeHandler(w http.ResponseWriter, r *http.Request) {
 
 // RateHandler Provides CRUD interface for the rate object
 func (a *App) RateHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Rate handler is identical to the project handler except with the rate model
 	vars := mux.Vars(r)
 	var rate cronos.Rate
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.First(&rate, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&rate, vars["id"])
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(&rate)
 		return
 	case r.Method == "PUT":
-		a.cronosApp.DB.First(&rate, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&rate, vars["id"])
 		if r.FormValue("name") != "" {
 			rate.Name = r.FormValue("name")
 		}
@@ -1424,7 +1464,7 @@ func (a *App) RateHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&rate)
 		return
 	case r.Method == "DELETE":
-		a.cronosApp.DB.Where("id = ?", vars["id"]).Delete(&cronos.Rate{})
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", vars["id"]).Delete(&cronos.Rate{})
 		_ = json.NewEncoder(w).Encode("Deleted Record")
 		return
 	default:
@@ -1437,23 +1477,24 @@ func (a *App) RateHandler(w http.ResponseWriter, r *http.Request) {
 // EntryHandler Provides CRUD interface for the entry object
 // The entry object is a bit more nuanced because for each entry we want to create a dual-entry
 func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Initial setup for the entry handler is similar to all the above handlers
 	vars := mux.Vars(r)
 	var entry cronos.Entry
 
-	// Get current user's employee record
+	// Get current user's employee record (within tenant)
 	var employee cronos.Employee
 	userIDInt := r.Context().Value("user_id")
-	a.cronosApp.DB.Where("user_id = ?", userIDInt).First(&employee)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userIDInt).First(&employee)
 
-	// Get the current user to check if they're an admin
+	// Get the current user to check if they're an admin (within tenant)
 	var currentUser cronos.User
-	a.cronosApp.DB.First(&currentUser, employee.UserID)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&currentUser, employee.UserID)
 	isAdmin := currentUser.Role == cronos.UserRoleAdmin.String()
 
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").Preload("Employee").Preload("ImpersonateAsUser").First(&entry, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").Preload("Employee").Preload("ImpersonateAsUser").First(&entry, vars["id"])
 		apiEntry := entry.GetAPIEntry()
 
 		// Set a flag for UI to identify if this entry was created by someone else impersonating this user
@@ -1467,7 +1508,7 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(apiEntry)
 		return
 	case r.Method == "PUT":
-		a.cronosApp.DB.First(&entry, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&entry, vars["id"])
 
 		// We cannot edit entries that are approved, paid, or voided
 		if entry.State == cronos.EntryStateApproved.String() || entry.State == cronos.EntryStatePaid.String() || entry.State == cronos.EntryStateVoid.String() {
@@ -1493,7 +1534,7 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 
 		if r.FormValue("billing_code_id") != "" {
 			var billingCode cronos.BillingCode
-			a.cronosApp.DB.Preload("Rate").Preload("InternalRate").Where("id = ?", r.FormValue("billing_code_id")).First(&billingCode)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Rate").Preload("InternalRate").Where("id = ?", r.FormValue("billing_code_id")).First(&billingCode)
 			entry.BillingCodeID = billingCode.ID
 			entry.BillingCode = billingCode // Explicitly associate the full billing code object
 
@@ -1562,8 +1603,8 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 
 		a.cronosApp.DB.Save(&entry)
 
-		// Get the updated entry with all relationships loaded
-		a.cronosApp.DB.Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").Preload("Employee").Preload("ImpersonateAsUser").First(&entry, entry.ID)
+		// Get the updated entry with all relationships loaded (within tenant)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").Preload("Employee").Preload("ImpersonateAsUser").First(&entry, entry.ID)
 		apiEntry := entry.GetAPIEntry()
 
 		// Set a flag for UI to identify if this entry was created by someone else impersonating this user
@@ -1580,12 +1621,13 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 		entry.End, _ = time.Parse("2006-01-02T15:04", r.FormValue("end"))
 		var employee cronos.Employee
 		userID := r.Context().Value("user_id")
-		a.cronosApp.DB.Where("user_id = ?", userID).First(&employee)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", userID).First(&employee)
 		entry.EmployeeID = employee.ID
+		entry.TenantID = tenant.ID
 
-		// Retrieve the billing code with all its relationships
+		// Retrieve the billing code with all its relationships (within tenant)
 		var billingCode cronos.BillingCode
-		a.cronosApp.DB.Preload("Rate").Preload("InternalRate").Where("id = ?", r.FormValue("billing_code_id")).First(&billingCode)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Rate").Preload("InternalRate").Where("id = ?", r.FormValue("billing_code_id")).First(&billingCode)
 		entry.BillingCodeID = billingCode.ID
 		entry.BillingCode = billingCode // Explicitly associate the full billing code object
 		entry.ProjectID = billingCode.ProjectID
@@ -1603,9 +1645,9 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 			impersonateID, err := strconv.Atoi(r.FormValue("impersonate_as_user_id"))
 			if err == nil {
 				impersonateIDUint := uint(impersonateID)
-				// Validate that the impersonated employee exists before setting the foreign key
+				// Validate that the impersonated employee exists before setting the foreign key (within tenant)
 				var impersonatedEmployee cronos.Employee
-				if err := a.cronosApp.DB.Where("id = ?", impersonateIDUint).First(&impersonatedEmployee).Error; err != nil {
+				if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", impersonateIDUint).First(&impersonatedEmployee).Error; err != nil {
 					w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 					w.WriteHeader(http.StatusBadRequest)
 					errorResponse := map[string]string{
@@ -1636,8 +1678,8 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Println(err)
 		}
 
-		// Get the created entry with all relationships loaded
-		a.cronosApp.DB.Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").Preload("Employee").Preload("ImpersonateAsUser").First(&entry, entry.ID)
+		// Get the created entry with all relationships loaded (within tenant)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("BillingCode.Rate").Preload("BillingCode.InternalRate").Preload("Employee").Preload("ImpersonateAsUser").First(&entry, entry.ID)
 		apiEntry := entry.GetAPIEntry()
 
 		// Set a flag for UI to identify if this entry was created by someone else impersonating this user
@@ -1654,7 +1696,7 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	case r.Method == "DELETE":
-		a.cronosApp.DB.Where("id = ?", vars["id"]).Delete(&cronos.Entry{})
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", vars["id"]).Delete(&cronos.Entry{})
 		_ = json.NewEncoder(w).Encode("Deleted Record")
 		return
 	default:
@@ -1666,11 +1708,12 @@ func (a *App) EntryHandler(w http.ResponseWriter, r *http.Request) {
 
 // BillHandler has a series of functions that allow us to view and manipulate staff payroll bills
 func (a *App) BillHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	var bill cronos.Bill
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.Preload("Employee").First(&bill, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Employee").First(&bill, vars["id"])
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(&bill)
@@ -1683,8 +1726,9 @@ func (a *App) BillHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) BillListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var bills []cronos.Bill
-	a.cronosApp.DB.
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
 		Preload("Employee.HeadshotAsset").
 		Preload("Entries").
 		Preload("Entries.BillingCode").
@@ -1708,9 +1752,10 @@ func (a *App) BillListHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) BillStateHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	var bill cronos.Bill
-	a.cronosApp.DB.First(&bill, vars["id"])
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&bill, vars["id"])
 	status := vars["state"]
 	switch {
 	case status == "accept":
@@ -1795,10 +1840,11 @@ func (a *App) BillStateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) RegenerateBillHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Regenerate the bill
 	vars := mux.Vars(r)
 	var bill cronos.Bill
-	a.cronosApp.DB.First(&bill, vars["id"])
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&bill, vars["id"])
 	err := a.cronosApp.RegeneratePDF(&bill)
 	if err != nil {
 		fmt.Println(err)
@@ -1809,23 +1855,31 @@ func (a *App) RegenerateBillHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) InviteUserHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
+	userID := r.Context().Value("user_id")
 	vars := mux.Vars(r)
 	var account cronos.Account
-	a.cronosApp.DB.First(&account, vars["id"])
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&account, vars["id"])
+
+	// Get the admin user who is sending the invitation
+	var adminUser cronos.User
+	a.cronosApp.DB.First(&adminUser, userID)
+	adminName := adminUser.Email // Use email as fallback, could use FirstName + LastName if available
+
 	if account.Type == cronos.AccountTypeInternal.String() {
-		err := a.cronosApp.RegisterStaff(r.FormValue("email"), account.ID)
+		err := a.cronosApp.RegisterStaff(r.FormValue("email"), account.ID, adminName, tenant.Name, tenant.Slug)
 		if err != nil {
 			fmt.Println(err)
 		}
 	} else if account.Type == cronos.AccountTypeClient.String() {
-		err := a.cronosApp.RegisterClient(r.FormValue("email"), account.ID)
+		err := a.cronosApp.RegisterClient(r.FormValue("email"), account.ID, adminName, tenant.Name, tenant.Slug)
 		if err != nil {
 			fmt.Println(err)
 		}
 	}
-	// Retrieve the user we just created
+	// Retrieve the user we just created (within tenant)
 	var user cronos.User
-	a.cronosApp.DB.Where("email = ?", r.FormValue("email")).First(&user)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("email = ?", r.FormValue("email")).First(&user)
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusCreated)
 	err := json.NewEncoder(w).Encode(user)
@@ -1837,6 +1891,7 @@ func (a *App) InviteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // EntryStateHandler allows us to toggle the state of entries on an invoice
 func (a *App) EntryStateHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Toggle the state of the entry to approved
 	vars := mux.Vars(r)
 	entryID := vars["id"]
@@ -1880,9 +1935,9 @@ func (a *App) EntryStateHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Load entry to check current state
+		// Load entry to check current state (within tenant)
 		var entry cronos.Entry
-		if err := a.cronosApp.DB.First(&entry, entryIDUint).Error; err != nil {
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&entry, entryIDUint).Error; err != nil {
 			http.Error(w, "Entry not found", http.StatusNotFound)
 			return
 		}
@@ -1894,18 +1949,18 @@ func (a *App) EntryStateHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Update state to void
-		result := a.cronosApp.DB.Model(&cronos.Entry{}).Where("id = ?", entryID).Update("state", newState)
+		// Update state to void (within tenant)
+		result := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.Entry{}).Where("id = ?", entryID).Update("state", newState)
 		if result.Error != nil {
 			http.Error(w, result.Error.Error(), http.StatusInternalServerError)
 			return
 		}
 	} else {
-		// For other state changes (reject, exclude, draft), just update the state
+		// For other state changes (reject, exclude, draft), just update the state (within tenant)
 		// REJECT: Entry never approved, staff doesn't get paid
 		// EXCLUDE: Entry was approved (staff paid), but excluded from client billing
 		// DRAFT: Back to draft state
-		result := a.cronosApp.DB.Model(&cronos.Entry{}).Where("id = ?", entryID).Update("state", newState)
+		result := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.Entry{}).Where("id = ?", entryID).Update("state", newState)
 		if result.Error != nil {
 			http.Error(w, result.Error.Error(), http.StatusInternalServerError)
 			return
@@ -1918,11 +1973,12 @@ func (a *App) EntryStateHandler(w http.ResponseWriter, r *http.Request) {
 
 // InvoiceStateHandler allows us to accept invoices
 func (a *App) InvoiceStateHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// Retrieve the invoice and entries
 	vars := mux.Vars(r)
 	// Retrieve the url variables of invoice and state
 	var invoice cronos.Invoice
-	a.cronosApp.DB.Preload("Entries").First(&invoice, vars["id"])
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Entries").First(&invoice, vars["id"])
 	state := vars["state"]
 	switch {
 	case state == "approve":
@@ -1984,8 +2040,8 @@ func (a *App) InvoiceStateHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Reload the invoice to get the updated state
-		if err := a.cronosApp.DB.First(&invoice, invoice.ID).Error; err != nil {
+		// Reload the invoice to get the updated state (within tenant)
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&invoice, invoice.ID).Error; err != nil {
 			log.Printf("Error reloading invoice after MarkInvoicePaid: %v", err)
 			http.Error(w, "Error updating invoice", http.StatusInternalServerError)
 			return
@@ -2016,8 +2072,8 @@ func (a *App) InvoiceStateHandler(w http.ResponseWriter, r *http.Request) {
 		// Regenerate and save the invoice PDF to GCS
 		log.Printf("Regenerating PDF for invoice ID: %d", invoice.ID)
 
-		// Reload invoice with all necessary data
-		a.cronosApp.DB.Preload("Entries").Preload("Account").First(&invoice, invoice.ID)
+		// Reload invoice with all necessary data (within tenant)
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Entries").Preload("Account").First(&invoice, invoice.ID)
 
 		if err := a.cronosApp.SaveInvoiceToGCS(&invoice); err != nil {
 			log.Printf("Error regenerating PDF for invoice %d: %v", invoice.ID, err)
@@ -2108,6 +2164,7 @@ func generateInvoiceEmailHTML(messageBody string, invoiceLink string, invoiceNum
 
 // SendInvoiceEmailHandler sends an invoice via email
 func (a *App) SendInvoiceEmailHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	var invoice cronos.Invoice
 
@@ -2125,8 +2182,8 @@ func (a *App) SendInvoiceEmailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load invoice
-	if err := a.cronosApp.DB.Preload("Account").Preload("Project").First(&invoice, vars["id"]).Error; err != nil {
+	// Load invoice (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Account").Preload("Project").First(&invoice, vars["id"]).Error; err != nil {
 		log.Printf("Error loading invoice: %v", err)
 		http.Error(w, "Invoice not found", http.StatusNotFound)
 		return
@@ -2141,8 +2198,8 @@ func (a *App) SendInvoiceEmailHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to generate invoice PDF", http.StatusInternalServerError)
 			return
 		}
-		// Reload invoice to get updated GCSFile path
-		if err := a.cronosApp.DB.First(&invoice, vars["id"]).Error; err != nil {
+		// Reload invoice to get updated GCSFile path (within tenant)
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&invoice, vars["id"]).Error; err != nil {
 			log.Printf("Error reloading invoice after PDF generation: %v", err)
 			http.Error(w, "Failed to reload invoice", http.StatusInternalServerError)
 			return
@@ -2156,6 +2213,15 @@ func (a *App) SendInvoiceEmailHandler(w http.ResponseWriter, r *http.Request) {
 	// Generate HTML email
 	htmlBody := generateInvoiceEmailHTML(emailData.Body, invoice.GCSFile, invoiceNumber)
 
+	// Extract tenant billing email from settings JSON
+	var tenantSettings map[string]interface{}
+	tenantBillingEmail := ""
+	if err := json.Unmarshal(tenant.Settings, &tenantSettings); err == nil {
+		if billingEmail, ok := tenantSettings["billing_email"].(string); ok {
+			tenantBillingEmail = billingEmail
+		}
+	}
+
 	// Send the email via SendGrid
 	if err := a.cronosApp.SendInvoiceEmail(
 		emailData.To,
@@ -2164,6 +2230,7 @@ func (a *App) SendInvoiceEmailHandler(w http.ResponseWriter, r *http.Request) {
 		htmlBody,
 		invoice.GCSFile,
 		&invoice,
+		tenantBillingEmail,
 	); err != nil {
 		log.Printf("Error sending invoice email: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to send email: %v", err), http.StatusInternalServerError)
@@ -2186,18 +2253,19 @@ func (a *App) SendInvoiceEmailHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) AdjustmentHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// CRUD for our Adjustment Object
 	vars := mux.Vars(r)
 	var adjustment cronos.Adjustment
 	switch {
 	case r.Method == "GET":
-		a.cronosApp.DB.First(&adjustment, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&adjustment, vars["id"])
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(&adjustment)
 		return
 	case r.Method == "PUT":
-		a.cronosApp.DB.First(&adjustment, vars["id"])
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&adjustment, vars["id"])
 		if r.FormValue("amount") != "" {
 			amountFloat, _ := strconv.ParseFloat(r.FormValue("amount"), 64)
 			adjustment.Amount = amountFloat
@@ -2243,6 +2311,7 @@ func (a *App) AdjustmentHandler(w http.ResponseWriter, r *http.Request) {
 		// Set notes and state
 		adjustment.Notes = r.FormValue("notes")
 		adjustment.State = cronos.AdjustmentStateDraft.String()
+		adjustment.TenantID = tenant.ID
 
 		// Create the adjustment in the database
 		if err := a.cronosApp.DB.Create(&adjustment).Error; err != nil {
@@ -2256,7 +2325,7 @@ func (a *App) AdjustmentHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&adjustment)
 		return
 	case r.Method == "DELETE":
-		a.cronosApp.DB.Where("id = ?", vars["id"]).Delete(&cronos.Adjustment{})
+		a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("id = ?", vars["id"]).Delete(&cronos.Adjustment{})
 		_ = json.NewEncoder(w).Encode("Deleted Record")
 		return
 	default:
@@ -2267,14 +2336,15 @@ func (a *App) AdjustmentHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) AdjustmentStateHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	// State handler for adjustments with proper accounting
 	vars := mux.Vars(r)
 	adjustmentID := vars["id"]
 	status := vars["state"]
 
-	// Load the adjustment with its relationships
+	// Load the adjustment with its relationships (within tenant)
 	var adjustment cronos.Adjustment
-	if err := a.cronosApp.DB.Preload("Invoice").Preload("Bill").First(&adjustment, adjustmentID).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Invoice").Preload("Bill").First(&adjustment, adjustmentID).Error; err != nil {
 		http.Error(w, "Adjustment not found", http.StatusNotFound)
 		return
 	}
@@ -2294,12 +2364,12 @@ func (a *App) AdjustmentStateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case status == "void":
-		// Reverse any existing journal entries for this adjustment before voiding
+		// Reverse any existing journal entries for this adjustment before voiding (within tenant)
 		var existingJournals []cronos.Journal
 		if adjustment.InvoiceID != nil {
-			a.cronosApp.DB.Where("invoice_id = ? AND memo LIKE ?", *adjustment.InvoiceID, "%adjustment%").Find(&existingJournals)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("invoice_id = ? AND memo LIKE ?", *adjustment.InvoiceID, "%adjustment%").Find(&existingJournals)
 		} else if adjustment.BillID != nil {
-			a.cronosApp.DB.Where("bill_id = ? AND memo LIKE ?", *adjustment.BillID, "%adjustment%").Find(&existingJournals)
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("bill_id = ? AND memo LIKE ?", *adjustment.BillID, "%adjustment%").Find(&existingJournals)
 		}
 
 		// Reverse the journals
@@ -2312,6 +2382,7 @@ func (a *App) AdjustmentStateHandler(w http.ResponseWriter, r *http.Request) {
 				Memo:       fmt.Sprintf("VOID: Reverse %s", journal.Memo),
 				Debit:      journal.Credit, // Swap
 				Credit:     journal.Debit,
+				TenantID:   tenant.ID,
 			}
 			if err := a.cronosApp.DB.Create(&reversal).Error; err != nil {
 				log.Printf("Warning: Failed to reverse adjustment journal: %v", err)
@@ -2415,6 +2486,7 @@ func (a *App) ContactPageEmail(w http.ResponseWriter, r *http.Request) {
 
 // PortalProjectsListHandler provides a list of Projects for the authenticated client's account.
 func (a *App) PortalProjectsListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	accountIDVal := r.Context().Value("account_id") // Use the correct context key
 	accountID, ok := accountIDVal.(uint)
 	if !ok || accountID == 0 {
@@ -2424,8 +2496,8 @@ func (a *App) PortalProjectsListHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var projects []cronos.Project
-	// Assuming cronos.Project has an AccountID field
-	if err := a.cronosApp.DB.Preload("BillingCodes.Rate").Preload("StaffingAssignments").Preload("StaffingAssignments.Employee").Preload("Assets").Where("account_id = ?", accountID).Find(&projects).Error; err != nil {
+	// Assuming cronos.Project has an AccountID field (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("BillingCodes.Rate").Preload("StaffingAssignments").Preload("StaffingAssignments.Employee").Preload("Assets").Where("account_id = ?", accountID).Find(&projects).Error; err != nil {
 		log.Printf("Error fetching portal projects for account %d: %v", accountID, err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve projects.")
 		return
@@ -2439,6 +2511,7 @@ func (a *App) PortalProjectsListHandler(w http.ResponseWriter, r *http.Request) 
 
 // PortalDraftInvoiceListHandler provides a list of Draft Invoices for the authenticated client's account.
 func (a *App) PortalDraftInvoiceListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	accountIDVal := r.Context().Value("account_id") // Use the correct context key
 	accountID, ok := accountIDVal.(uint)
 	if !ok || accountID == 0 {
@@ -2448,9 +2521,9 @@ func (a *App) PortalDraftInvoiceListHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	var invoices []cronos.Invoice
-	// Assuming cronos.Invoice has an AccountID field
+	// Assuming cronos.Invoice has an AccountID field (within tenant)
 	// Modify query as needed, e.g., to use a.cronosApp.GetDraftInvoicesByAccount(accountID)
-	if err := a.cronosApp.DB.Preload("Entries", func(db *gorm.DB) *gorm.DB {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Entries", func(db *gorm.DB) *gorm.DB {
 		return db.Order("entries.start ASC")
 	}).Preload("Entries.BillingCode"). /*Preload("Account").*/ Preload("Project"). // Project might implicitly link to account or might need Preload("Project.Account")
 											Where("account_id = ? AND (state = ? OR state = ?) and state != ? AND type = ?", accountID, cronos.InvoiceStateDraft, cronos.InvoiceStateApproved, cronos.InvoiceStateVoid, cronos.InvoiceTypeAR).
@@ -2471,6 +2544,7 @@ func (a *App) PortalDraftInvoiceListHandler(w http.ResponseWriter, r *http.Reque
 
 // PortalInvoiceListHandler provides a list of Accepted (Approved, Sent, Paid) Invoices for the authenticated client's account.
 func (a *App) PortalInvoiceListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	accountIDVal := r.Context().Value("account_id") // Use the correct context key
 	accountID, ok := accountIDVal.(uint)
 	if !ok || accountID == 0 {
@@ -2480,9 +2554,9 @@ func (a *App) PortalInvoiceListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var invoices []cronos.Invoice
-	// Assuming cronos.Invoice has an AccountID field
-	if err := a.cronosApp.DB. /*Preload("Account").*/ Preload("Project").Preload("Entries").Order("sent_at DESC"). // Project might implicitly link to account or might need Preload("Project.Account")
-															Where("account_id = ? AND (state = ? OR state = ?)",
+	// Assuming cronos.Invoice has an AccountID field (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)). /*Preload("Account").*/ Preload("Project").Preload("Entries").Order("sent_at DESC"). // Project might implicitly link to account or might need Preload("Project.Account")
+																				Where("account_id = ? AND (state = ? OR state = ?)",
 			accountID,
 			// cronos.InvoiceStateApproved.String(),
 			cronos.InvoiceStateSent.String(),
@@ -2512,9 +2586,10 @@ func (a *App) ProjectAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 	}
 	projectID := uint(projectIDUint64)
 
-	// Verify project exists (should be done before processing request body)
+	tenant := MustGetTenant(r.Context())
+	// Verify project exists (should be done before processing request body) - within tenant
 	var project cronos.Project
-	if errDb := a.cronosApp.DB.First(&project, projectID).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&project, projectID).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Project not found")
 		} else {
@@ -2695,6 +2770,7 @@ func (a *App) ProjectAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Save the asset record to the database
+	asset.TenantID = tenant.ID
 	log.Printf("ProjectAssetsCreateHandler: Attempting to save asset: %+v", asset)
 	if dbErr := a.cronosApp.DB.Create(&asset).Error; dbErr != nil {
 		log.Printf("ProjectAssetsCreateHandler: Failed to save asset to DB: %v", dbErr)
@@ -2708,6 +2784,7 @@ func (a *App) ProjectAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 
 // ProjectAssetDeleteHandler handles deleting a specific asset from a project and GCS
 func (a *App) ProjectAssetDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	projectIDStr, okProjectID := vars["id"]
 	assetIDStr, okAssetID := vars["assetID"]
@@ -2730,7 +2807,7 @@ func (a *App) ProjectAssetDeleteHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var asset cronos.Asset
-	if errDb := a.cronosApp.DB.First(&asset, uint(assetID)).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&asset, uint(assetID)).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Asset not found")
 		} else {
@@ -2807,6 +2884,7 @@ func convertEmployeeForFrontend(employee *cronos.Employee) {
 // PortalRefreshAssetURLHandler handles refreshing a GCS asset's signed URL for the client portal.
 // It ensures the logged-in portal user has appropriate access to the asset.
 func (a *App) PortalRefreshAssetURLHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	assetIDStr, ok := vars["assetId"]
 	if !ok {
@@ -2833,7 +2911,7 @@ func (a *App) PortalRefreshAssetURLHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	var portalUser cronos.User
-	if errDb := a.cronosApp.DB.First(&portalUser, portalUserID).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&portalUser, portalUserID).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusUnauthorized, "Portal user not found")
 		} else {
@@ -2849,7 +2927,7 @@ func (a *App) PortalRefreshAssetURLHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	var asset cronos.Asset
-	if errDb := a.cronosApp.DB.First(&asset, uint(assetIDUint)).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&asset, uint(assetIDUint)).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Asset not found")
 		} else {
@@ -2859,11 +2937,11 @@ func (a *App) PortalRefreshAssetURLHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Permission Check
+	// Permission Check (within tenant)
 	canAccess := false
 	if asset.ProjectID != nil && *asset.ProjectID != 0 {
 		var project cronos.Project
-		if errDb := a.cronosApp.DB.First(&project, *asset.ProjectID).Error; errDb == nil {
+		if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&project, *asset.ProjectID).Error; errDb == nil {
 			if project.AccountID != 0 && project.AccountID == portalUser.AccountID {
 				canAccess = true
 			}
@@ -2921,10 +2999,8 @@ func (a *App) PortalRefreshAssetURLHandler(w http.ResponseWriter, r *http.Reques
 
 // RefreshAssetURLHandler handles refreshing a GCS asset's signed URL.
 // This is typically used by internal/admin users.
-// TODO: Implement this handler similarly to PortalRefreshAssetURLHandler but for admin users,
-// ensuring appropriate admin-level checks or less restrictive access if needed.
-// For now, it remains a stub.
 func (a *App) RefreshAssetURLHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	// Assuming assetId is passed in the path, adjust if different for admin route
 	assetIDStr, ok := vars["assetId"]
@@ -2942,16 +3018,8 @@ func (a *App) RefreshAssetURLHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Optional: Verify admin user context if not handled by middleware exclusively
-	// userID := r.Context().Value("user_id").(uint)
-	// var currentUser cronos.User
-	// if errDb := a.cronosApp.DB.First(&currentUser, userID).Error; errDb != nil || currentUser.Role != cronos.UserRoleAdmin.String() {
-	// 	respondWithError(w, http.StatusForbidden, "Admin access required")
-	// 	return
-	// }
-
 	var asset cronos.Asset
-	if errDb := a.cronosApp.DB.First(&asset, uint(assetID)).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&asset, uint(assetID)).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Asset not found")
 		} else {
@@ -2992,6 +3060,7 @@ func (a *App) RefreshAssetURLHandler(w http.ResponseWriter, r *http.Request) {
 
 // AccountAssetsCreateHandler handles adding a new asset to a specific account
 func (a *App) AccountAssetsCreateHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	accountIDStr, ok := vars["id"]
 	if !ok {
@@ -3005,9 +3074,9 @@ func (a *App) AccountAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 	}
 	accountID := uint(accountIDUint64)
 
-	// Verify account exists
+	// Verify account exists (within tenant)
 	var account cronos.Account
-	if errDb := a.cronosApp.DB.First(&account, accountID).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&account, accountID).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Account not found")
 		} else {
@@ -3158,6 +3227,7 @@ func (a *App) AccountAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	asset.TenantID = tenant.ID
 	log.Printf("AccountAssetsCreateHandler: Attempting to save asset: %+v", asset)
 	if dbErr := a.cronosApp.DB.Create(&asset).Error; dbErr != nil {
 		log.Printf("AccountAssetsCreateHandler: Failed to save asset to DB: %v", dbErr)
@@ -3171,6 +3241,7 @@ func (a *App) AccountAssetsCreateHandler(w http.ResponseWriter, r *http.Request)
 
 // AssetDownloadHandler proxies asset downloads from GCS, hiding the bucket path
 func (a *App) AssetDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	assetIDStr, ok := vars["id"]
 	if !ok {
@@ -3184,7 +3255,7 @@ func (a *App) AssetDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var asset cronos.Asset
-	if errDb := a.cronosApp.DB.First(&asset, uint(assetID)).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&asset, uint(assetID)).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Asset not found")
 		} else {
@@ -3238,6 +3309,7 @@ func (a *App) AssetDownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 // AssetRefreshURLHandler handles refreshing a GCS signed URL for an asset.
 func (a *App) AssetRefreshURLHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	assetIDStr, ok := vars["id"]
 	if !ok {
@@ -3251,7 +3323,7 @@ func (a *App) AssetRefreshURLHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var asset cronos.Asset
-	if errDb := a.cronosApp.DB.First(&asset, uint(assetID)).Error; errDb != nil {
+	if errDb := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&asset, uint(assetID)).Error; errDb != nil {
 		if errors.Is(errDb, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Asset not found")
 		} else {
@@ -3291,6 +3363,7 @@ func (a *App) AssetRefreshURLHandler(w http.ResponseWriter, r *http.Request) {
 // PortalAccountDetailsHandler provides comprehensive details for the authenticated client's account,
 // including basic account info, associated client users, and assets.
 func (a *App) PortalAccountDetailsHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	accountIDVal := r.Context().Value("account_id") // Use the correct context key
 	accountID, ok := accountIDVal.(uint)
 	if !ok || accountID == 0 {
@@ -3300,8 +3373,8 @@ func (a *App) PortalAccountDetailsHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	var account cronos.Account
-	// Fetch the main account record, preloading its directly associated assets
-	if err := a.cronosApp.DB.Preload("Assets").First(&account, accountID).Error; err != nil {
+	// Fetch the main account record, preloading its directly associated assets (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Assets").First(&account, accountID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondWithError(w, http.StatusNotFound, "Account not found")
 		} else {
@@ -3335,8 +3408,8 @@ func (a *App) PortalAccountDetailsHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	var usersLinkedToAccount []cronos.User
-	// Find all User records directly associated with this account via User.AccountID
-	if err := a.cronosApp.DB.Where("account_id = ?", account.ID).Find(&usersLinkedToAccount).Error; err != nil {
+	// Find all User records directly associated with this account via User.AccountID (within tenant)
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("account_id = ?", account.ID).Find(&usersLinkedToAccount).Error; err != nil {
 		log.Printf("Error fetching users for account ID %d: %v", account.ID, err)
 		// Proceed with empty client list if users can't be fetched
 	}
@@ -3362,8 +3435,8 @@ func (a *App) PortalAccountDetailsHandler(w http.ResponseWriter, r *http.Request
 			Email:  user.Email,
 			Status: clientStatus, // Initially set based on password check (placeholder for now)
 		}
-		// For each user, find their corresponding Client profile record
-		if err := a.cronosApp.DB.Where("user_id = ?", user.ID).First(&clientProfile).Error; err == nil {
+		// For each user, find their corresponding Client profile record (within tenant)
+		if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("user_id = ?", user.ID).First(&clientProfile).Error; err == nil {
 			// Client profile found
 			clientDetail.FirstName = clientProfile.FirstName
 			clientDetail.LastName = clientProfile.LastName
@@ -3411,7 +3484,8 @@ func (a *App) PortalAccountDetailsHandler(w http.ResponseWriter, r *http.Request
 
 // JournalsListHandler provides a list of journal entries with optional filtering
 func (a *App) JournalsListHandler(w http.ResponseWriter, r *http.Request) {
-	query := a.cronosApp.DB.Model(&cronos.Journal{})
+	tenant := MustGetTenant(r.Context())
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.Journal{})
 
 	// Time period filtering - date range parameters
 	if startDateStr := r.URL.Query().Get("start_date"); startDateStr != "" {
@@ -3512,6 +3586,7 @@ func (a *App) JournalsListHandler(w http.ResponseWriter, r *http.Request) {
 
 // AccountBalancesHandler provides summary balances for all accounts
 func (a *App) AccountBalancesHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	type AccountBalance struct {
 		Account      string `json:"account"`
 		TotalDebits  int64  `json:"total_debits"`
@@ -3527,7 +3602,7 @@ func (a *App) AccountBalancesHandler(w http.ResponseWriter, r *http.Request) {
 		IsBalanced   bool             `json:"is_balanced"`
 	}
 
-	query := a.cronosApp.DB.Model(&cronos.Journal{})
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.Journal{})
 
 	// Time period filtering - date range parameters
 	if startDateStr := r.URL.Query().Get("start_date"); startDateStr != "" {
@@ -3587,6 +3662,7 @@ func (a *App) AccountBalancesHandler(w http.ResponseWriter, r *http.Request) {
 
 // ManualJournalEntryHandler creates manual journal entries (offline bookings)
 func (a *App) ManualJournalEntryHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var request struct {
 		Date  string `json:"date"`
 		Lines []struct {
@@ -3652,6 +3728,7 @@ func (a *App) ManualJournalEntryHandler(w http.ResponseWriter, r *http.Request) 
 			Debit:      line.Debit,
 			Credit:     line.Credit,
 			Memo:       line.Memo,
+			TenantID:   tenant.ID,
 		}
 		journal.CreatedAt = entryDate
 		journal.UpdatedAt = entryDate

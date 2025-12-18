@@ -15,15 +15,16 @@ import (
 // GenerateRecurringEntriesHandler triggers generation of recurring entries for the current month
 // POST /api/admin/recurring-entries/generate
 func (a *App) GenerateRecurringEntriesHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	log.Printf("Manually triggered recurring entry generation")
 
 	// Get current month period
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 
-	// Count before generation
+	// Count before generation (within tenant)
 	var beforeCount int64
-	a.cronosApp.DB.Model(&cronos.RecurringBillLineItem{}).Count(&beforeCount)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.RecurringBillLineItem{}).Count(&beforeCount)
 
 	if err := a.cronosApp.GenerateRecurringEntriesForCurrentMonth(); err != nil {
 		log.Printf("Failed to generate recurring entries: %v", err)
@@ -31,13 +32,13 @@ func (a *App) GenerateRecurringEntriesHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Count after generation
+	// Count after generation (within tenant)
 	var afterCount int64
-	a.cronosApp.DB.Model(&cronos.RecurringBillLineItem{}).Count(&afterCount)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.RecurringBillLineItem{}).Count(&afterCount)
 
-	// Count GL entries
+	// Count GL entries (within tenant)
 	var glCount int64
-	a.cronosApp.DB.Model(&cronos.Journal{}).Where("recurring_bill_line_item_id IS NOT NULL").Count(&glCount)
+	a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Model(&cronos.Journal{}).Where("recurring_bill_line_item_id IS NOT NULL").Count(&glCount)
 
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"message":           "Recurring entries generated successfully",
@@ -52,8 +53,9 @@ func (a *App) GenerateRecurringEntriesHandler(w http.ResponseWriter, r *http.Req
 // ListRecurringEntriesHandler lists all recurring entries
 // GET /api/admin/recurring-entries
 func (a *App) ListRecurringEntriesHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var entries []cronos.RecurringEntry
-	if err := a.cronosApp.DB.Preload("Employee.HeadshotAsset").Order("employee_id, type").Find(&entries).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Employee.HeadshotAsset").Order("employee_id, type").Find(&entries).Error; err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to load recurring entries")
 		return
 	}
@@ -64,6 +66,7 @@ func (a *App) ListRecurringEntriesHandler(w http.ResponseWriter, r *http.Request
 // CreateRecurringEntryHandler creates a new recurring entry
 // POST /api/admin/recurring-entries
 func (a *App) CreateRecurringEntryHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	var req cronos.RecurringEntry
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid request body")
@@ -76,6 +79,7 @@ func (a *App) CreateRecurringEntryHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	req.TenantID = tenant.ID
 	if err := a.cronosApp.DB.Create(&req).Error; err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to create recurring entry")
 		return
@@ -87,6 +91,7 @@ func (a *App) CreateRecurringEntryHandler(w http.ResponseWriter, r *http.Request
 // UpdateRecurringEntryHandler updates an existing recurring entry
 // PUT /api/admin/recurring-entries/{id}
 func (a *App) UpdateRecurringEntryHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	id, err := strconv.ParseUint(vars["id"], 10, 64)
 	if err != nil {
@@ -95,7 +100,7 @@ func (a *App) UpdateRecurringEntryHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	var entry cronos.RecurringEntry
-	if err := a.cronosApp.DB.First(&entry, id).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).First(&entry, id).Error; err != nil {
 		respondWithError(w, http.StatusNotFound, "Recurring entry not found")
 		return
 	}
@@ -132,6 +137,7 @@ func (a *App) UpdateRecurringEntryHandler(w http.ResponseWriter, r *http.Request
 // DeleteRecurringEntryHandler deletes a recurring entry
 // DELETE /api/admin/recurring-entries/{id}
 func (a *App) DeleteRecurringEntryHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	vars := mux.Vars(r)
 	id, err := strconv.ParseUint(vars["id"], 10, 64)
 	if err != nil {
@@ -139,7 +145,7 @@ func (a *App) DeleteRecurringEntryHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := a.cronosApp.DB.Delete(&cronos.RecurringEntry{}, id).Error; err != nil {
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Delete(&cronos.RecurringEntry{}, id).Error; err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to delete recurring entry")
 		return
 	}
@@ -152,11 +158,12 @@ func (a *App) DeleteRecurringEntryHandler(w http.ResponseWriter, r *http.Request
 // SyncEmployeeRecurringEntriesHandler creates or updates recurring entries for all salaried employees
 // POST /api/admin/recurring-entries/sync
 func (a *App) SyncEmployeeRecurringEntriesHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
 	log.Printf("Syncing recurring entries for all salaried employees")
 
-	// Find all active salaried employees (support both formats)
+	// Find all active salaried employees (support both formats) - within tenant
 	var employees []cronos.Employee
-	if err := a.cronosApp.DB.Where("is_active = ? AND (compensation_type IN ? OR compensation_type IN ?)",
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("is_active = ? AND (compensation_type IN ? OR compensation_type IN ?)",
 		true,
 		[]string{"salaried", "SALARIED", "COMPENSATION_TYPE_SALARIED"},
 		[]string{"base-plus-variable", "BASE-PLUS-VARIABLE", "COMPENSATION_TYPE_BASE_PLUS_VARIABLE"}).
@@ -174,9 +181,9 @@ func (a *App) SyncEmployeeRecurringEntriesHandler(w http.ResponseWriter, r *http
 			log.Printf("Failed to sync recurring entry for employee %d: %v", employee.ID, err)
 			skipped++
 		} else {
-			// Check if we created or updated
+			// Check if we created or updated (within tenant)
 			var entry cronos.RecurringEntry
-			a.cronosApp.DB.Where("employee_id = ? AND type = ? AND is_active = ?",
+			a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Where("employee_id = ? AND type = ? AND is_active = ?",
 				employee.ID, "base_salary", true).First(&entry)
 
 			if entry.CreatedAt.After(time.Now().Add(-1 * time.Minute)) {

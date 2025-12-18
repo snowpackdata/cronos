@@ -20,7 +20,7 @@ func timePtr(t time.Time) *time.Time {
 // clients, billing codes, and timesheet entries with impersonation examples.
 func (a *App) SeedDatabase() {
 
-	// Delete all existing data except the existing development user
+	// Delete all existing data
 	a.DB.Exec("DELETE FROM journals")
 	a.DB.Exec("DELETE FROM adjustments")
 	a.DB.Exec("DELETE FROM invoices")
@@ -28,10 +28,11 @@ func (a *App) SeedDatabase() {
 	a.DB.Exec("DELETE FROM billing_codes")
 	a.DB.Exec("DELETE FROM rates")
 	a.DB.Exec("DELETE FROM projects")
+	a.DB.Exec("DELETE FROM employees")
+	a.DB.Exec("DELETE FROM users")
 	a.DB.Exec("DELETE FROM accounts")
-	a.DB.Exec("DELETE FROM employees WHERE user_id != 1")
-	a.DB.Exec("DELETE FROM users WHERE id != 1")
 	a.DB.Exec("DELETE FROM bills")
+	a.DB.Exec("DELETE FROM tenants")
 
 	// Get yesterday and tomorrow dates for testing
 	now := time.Now()
@@ -39,85 +40,107 @@ func (a *App) SeedDatabase() {
 	yesterday := today.AddDate(0, 0, -1)
 	tomorrow := today.AddDate(0, 0, 1)
 
-	// Get the existing development user with ID 1
-	var devUser User
-	var devEmployee Employee
-	userExists := a.DB.Where("id = ?", 1).First(&devUser).RowsAffected > 0
-	employeeExists := a.DB.Where("user_id = ?", 1).First(&devEmployee).RowsAffected > 0
+	// Create default tenant for local development
+	log.Println("Creating default tenant for local development...")
+	devTenant := Tenant{
+		Name:   "Snowpack Dev",
+		Slug:   "snowpack",
+		Domain: "snowpack-data.com",
+		Plan:   "trial",
+		Status: "active",
+	}
+	if err := a.DB.Create(&devTenant).Error; err != nil {
+		log.Printf("Error creating dev tenant: %v", err)
+		return
+	}
+	log.Printf("Created tenant: %s (ID: %d)", devTenant.Name, devTenant.ID)
 
-	if !userExists {
-		// If the user doesn't exist, create a default one (this shouldn't happen if the dev user was registered)
-		hashedPassword, err := bcrypt.GenerateFromPassword([]byte("devpassword"), bcrypt.DefaultCost)
-		if err != nil {
-			log.Printf("Error hashing password for dev user: %v", err)
-			hashedPassword = []byte(DEFAULT_PASSWORD) // Fallback to plain text if hashing fails
-		}
-		devUser = User{
-			Email:    "dev@example.com",
-			IsAdmin:  true,
-			Role:     UserRoleAdmin.String(),
-			Password: string(hashedPassword),
-		}
-		a.DB.Create(&devUser)
-		a.DB.Model(&devUser).Update("id", 1)
-	} else {
-		// User exists, but make sure password is hashed for dev environment
-		if devUser.Password == DEFAULT_PASSWORD {
-			hashedPassword, err := bcrypt.GenerateFromPassword([]byte("devpassword"), bcrypt.DefaultCost)
-			if err != nil {
-				log.Printf("Error hashing password for existing dev user: %v", err)
-			} else {
-				devUser.Password = string(hashedPassword)
-				a.DB.Save(&devUser)
-				log.Printf("Updated existing dev user password to hashed version")
-			}
-		}
+	// Create internal account for the tenant
+	internalAccount := Account{
+		Name:     "Internal",
+		Type:     AccountTypeInternal.String(),
+		TenantID: devTenant.ID,
+	}
+	if err := a.DB.Create(&internalAccount).Error; err != nil {
+		log.Printf("Error creating internal account: %v", err)
+		return
 	}
 
-	if !employeeExists {
-		// If the employee doesn't exist, create a default one
-		devEmployee = Employee{
-			UserID:    1,
-			Title:     "Development User",
-			FirstName: "Dev",
-			LastName:  "User",
-			IsActive:  true,
-			StartDate: yesterday,
-		}
-		a.DB.Create(&devEmployee)
+	// Create dev user
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte("devpassword"), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("Error hashing password for dev user: %v", err)
+		hashedPassword = []byte(DEFAULT_PASSWORD)
+	}
+	devUser := User{
+		Email:     "dev@example.com",
+		IsAdmin:   true,
+		Role:      UserRoleAdmin.String(),
+		Password:  string(hashedPassword),
+		TenantID:  devTenant.ID,
+		AccountID: internalAccount.ID,
+	}
+	if err := a.DB.Create(&devUser).Error; err != nil {
+		log.Printf("Error creating dev user: %v", err)
+		return
+	}
+	log.Printf("Created dev user: %s", devUser.Email)
+
+	// Create dev employee
+	devEmployee := Employee{
+		UserID:    devUser.ID,
+		TenantID:  devTenant.ID,
+		Title:     "Development User",
+		FirstName: "Dev",
+		LastName:  "User",
+		IsActive:  true,
+		StartDate: yesterday,
+	}
+	if err := a.DB.Create(&devEmployee).Error; err != nil {
+		log.Printf("Error creating dev employee: %v", err)
 	}
 
 	// Create additional users for staff
 	users := []User{
 		{
-			Email:    "nate@snowpack-data.com",
-			IsAdmin:  true,
-			Role:     UserRoleAdmin.String(),
-			Password: DEFAULT_PASSWORD,
+			Email:     "nate@snowpack-data.com",
+			IsAdmin:   true,
+			Role:      UserRoleAdmin.String(),
+			Password:  DEFAULT_PASSWORD,
+			TenantID:  devTenant.ID,
+			AccountID: internalAccount.ID,
 		},
 		{
-			Email:    "kevin@snowpack-data.com",
-			IsAdmin:  true,
-			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Email:     "kevin@snowpack-data.com",
+			IsAdmin:   true,
+			Role:      UserRoleStaff.String(),
+			Password:  DEFAULT_PASSWORD,
+			TenantID:  devTenant.ID,
+			AccountID: internalAccount.ID,
 		},
 		{
-			Email:    "david@snowpack-data.com",
-			IsAdmin:  false,
-			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Email:     "david@snowpack-data.com",
+			IsAdmin:   false,
+			Role:      UserRoleStaff.String(),
+			Password:  DEFAULT_PASSWORD,
+			TenantID:  devTenant.ID,
+			AccountID: internalAccount.ID,
 		},
 		{
-			Email:    "john@snowpack-data.com",
-			IsAdmin:  false,
-			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Email:     "john@snowpack-data.com",
+			IsAdmin:   false,
+			Role:      UserRoleStaff.String(),
+			Password:  DEFAULT_PASSWORD,
+			TenantID:  devTenant.ID,
+			AccountID: internalAccount.ID,
 		},
 		{
-			Email:    "jane@snowpack-data.com",
-			IsAdmin:  false,
-			Role:     UserRoleStaff.String(),
-			Password: DEFAULT_PASSWORD,
+			Email:     "jane@snowpack-data.com",
+			IsAdmin:   false,
+			Role:      UserRoleStaff.String(),
+			Password:  DEFAULT_PASSWORD,
+			TenantID:  devTenant.ID,
+			AccountID: internalAccount.ID,
 		},
 	}
 	_ = a.DB.Create(&users)
@@ -126,6 +149,7 @@ func (a *App) SeedDatabase() {
 	employees := []Employee{
 		{
 			User:      users[0],
+			TenantID:  devTenant.ID,
 			Title:     "Partner",
 			FirstName: "Nate",
 			LastName:  "Robinson",
@@ -134,6 +158,7 @@ func (a *App) SeedDatabase() {
 		},
 		{
 			User:      users[1],
+			TenantID:  devTenant.ID,
 			Title:     "Partner",
 			FirstName: "Kevin",
 			LastName:  "Koenitzer",
@@ -142,6 +167,7 @@ func (a *App) SeedDatabase() {
 		},
 		{
 			User:      users[2],
+			TenantID:  devTenant.ID,
 			Title:     "Partner",
 			FirstName: "David",
 			LastName:  "Shore",
@@ -150,6 +176,7 @@ func (a *App) SeedDatabase() {
 		},
 		{
 			User:      users[3],
+			TenantID:  devTenant.ID,
 			Title:     "Senior Data Engineer",
 			FirstName: "John",
 			LastName:  "Doe",
@@ -158,6 +185,7 @@ func (a *App) SeedDatabase() {
 		},
 		{
 			User:      users[4],
+			TenantID:  devTenant.ID,
 			Title:     "Data Scientist",
 			FirstName: "Jane",
 			LastName:  "Smith",
@@ -167,19 +195,8 @@ func (a *App) SeedDatabase() {
 	}
 	_ = a.DB.Create(&employees)
 
-	// Create initial Company for Snowpack with dev user as client
-	snowpack := Account{
-		Name:                  "Snowpack Data",
-		Type:                  AccountTypeInternal.String(),
-		LegalName:             "Snowpack Data, LLC",
-		Email:                 "billing@snowpack-data.com",
-		Website:               "https://snowpack-data.com",
-		Clients:               []User{devUser},
-		BillingFrequency:      BillingFrequencyMonthly.String(),
-		ProjectsSingleInvoice: true,
-	}
-	_ = a.DB.Create(&snowpack)
-	a.DB.Save(&snowpack)
+	// Note: We already created the internal account, so we'll skip creating another one
+	// The internal account was created earlier in the seed process
 
 	// Create client accounts for testing
 	clientAccounts := []Account{
@@ -191,6 +208,7 @@ func (a *App) SeedDatabase() {
 			Website:               "https://acme.com",
 			BillingFrequency:      BillingFrequencyMonthly.String(),
 			ProjectsSingleInvoice: true,
+			TenantID:              devTenant.ID,
 		},
 		{
 			Name:                  "Tech Innovators",
@@ -200,6 +218,7 @@ func (a *App) SeedDatabase() {
 			Website:               "https://techinnovators.com",
 			BillingFrequency:      BillingFrequencyBiweekly.String(),
 			ProjectsSingleInvoice: false,
+			TenantID:              devTenant.ID,
 		},
 		{
 			Name:                  "Data Solutions",
@@ -209,6 +228,7 @@ func (a *App) SeedDatabase() {
 			Website:               "https://datasolutions.com",
 			BillingFrequency:      BillingFrequencyWeekly.String(),
 			ProjectsSingleInvoice: true,
+			TenantID:              devTenant.ID,
 		},
 	}
 	_ = a.DB.Create(&clientAccounts)
@@ -223,6 +243,7 @@ func (a *App) SeedDatabase() {
 		{
 			Name:             "Data Platform Development",
 			AccountID:        clientAccounts[0].ID,
+			TenantID:         devTenant.ID,
 			ActiveStart:      yesterday,
 			ActiveEnd:        tomorrow,
 			BudgetHours:      500,
@@ -238,6 +259,7 @@ func (a *App) SeedDatabase() {
 		{
 			Name:             "AI Implementation",
 			AccountID:        clientAccounts[1].ID,
+			TenantID:         devTenant.ID,
 			ActiveStart:      yesterday,
 			ActiveEnd:        tomorrow,
 			BudgetHours:      300,
@@ -252,6 +274,7 @@ func (a *App) SeedDatabase() {
 		{
 			Name:             "Data Strategy Consulting",
 			AccountID:        clientAccounts[2].ID,
+			TenantID:         devTenant.ID,
 			ActiveStart:      yesterday,
 			ActiveEnd:        tomorrow,
 			BudgetHours:      200,
@@ -265,7 +288,8 @@ func (a *App) SeedDatabase() {
 		},
 		{
 			Name:             "Internal Operations",
-			AccountID:        snowpack.ID,
+			AccountID:        internalAccount.ID,
+			TenantID:         devTenant.ID,
 			ActiveStart:      yesterday,
 			ActiveEnd:        tomorrow,
 			BudgetHours:      100,

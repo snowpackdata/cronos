@@ -6,6 +6,9 @@
 
 @layer base {
   @theme {
+    --color-sage: #58837e;
+    --color-sage-light: #7ba199;
+    --color-sage-dark: #446961;
     --color-teal: #226d87;
     --color-blue: #021c51;
     --color-blue-light-blue: #ced9e1;
@@ -18,14 +21,20 @@
     --color-orange: #ff7849;
     --color-green: #58837e;
     --color-green-light-green: #b5e7a0;
+    --color-green-50: #f0fdf4;
     --color-green-100: #dcfce7;
+    --color-green-200: #bbf7d0;
     --color-green-600: #16a34a;
     --color-gray: #d6d7d9;
     --color-gray-gray-light: #eeeff1;
     --color-gray-gray-dark: #22262a;
     --color-gray-100: #f3f4f6;
+    --color-gray-200: #e5e7eb;
+    --color-gray-300: #d1d5db;
     --color-gray-400: #9ca3af;
     --color-gray-500: #6b7280;
+    --color-gray-600: #4b5563;
+    --color-gray-700: #374151;
     --color-gray-800: #1F2937;
     --color-gray-900: #111827;
     --color-neutral: #f4f5f7;

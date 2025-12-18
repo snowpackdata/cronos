@@ -14,7 +14,8 @@ help:
 	@echo "  make install-clean  - Clean & reinstall (fixes corrupted deps)"
 	@echo "  make build-admin    - Build Vue admin panel"
 	@echo "  make build-portal   - Build Vue portal panel"
-	@echo "  make build-all-ui   - Build both admin and portal"
+	@echo "  make build-tailwind - Build Tailwind CSS for public templates"
+	@echo "  make build-all-ui   - Build admin, portal, and Tailwind CSS"
 	@echo ""
 	@echo "🏃 Run Commands:"
 	@echo "  make run-local      - Run locally with SQLite (fresh DB each time)"
@@ -80,8 +81,15 @@ build-portal:
 	@cd portal && npm install && npm run build
 	@echo "✅ Portal UI build complete."
 
-# Build both Admin and Portal UIs
-build-all-ui: build-admin build-portal
+# Build Tailwind CSS for public templates
+build-tailwind:
+	@echo "🎨 Building Tailwind CSS (Output: assets/css/outputs.css)..."
+	@npm install
+	@npm run tailwindcss:build
+	@echo "✅ Tailwind CSS build complete."
+
+# Build both Admin and Portal UIs + Tailwind CSS
+build-all-ui: build-admin build-portal build-tailwind
 
 # Quick local run - builds everything and starts server
 run-local: build-all-ui
@@ -138,15 +146,15 @@ run-staging-hot:
 	@test -f ~/cloud-sql-proxy || (echo "❌ Cloud SQL Proxy not found at ~/cloud-sql-proxy" && exit 1)
 	@echo "✅ Cloud SQL Proxy found"
 	@echo ""
-	@echo "Starting Cloud SQL Proxy on port 5433..."
-	@~/cloud-sql-proxy --port 5433 $$CLOUD_SQL_CONNECTION_NAME > /tmp/cloud-sql-proxy.log 2>&1 & echo $$! > /tmp/cloud-sql-proxy.pid
+	@echo "Starting Cloud SQL Proxy on port $${DB_PORT:-5434}..."
+	@~/cloud-sql-proxy --port $${DB_PORT:-5434} $$CLOUD_SQL_CONNECTION_NAME > /tmp/cloud-sql-proxy.log 2>&1 & echo $$! > /tmp/cloud-sql-proxy.pid
 	@echo "Waiting for proxy to be ready..."
 	@sleep 5
 	@tail -3 /tmp/cloud-sql-proxy.log
 	@echo "✅ Cloud SQL Proxy started (PID: $$(cat /tmp/cloud-sql-proxy.pid))"
 	@echo ""
 	@echo "Starting services:"
-	@echo "  - Cloud SQL Proxy (port 5433)"
+	@echo "  - Cloud SQL Proxy (port $${DB_PORT:-5434})"
 	@echo "  - Vue Admin Dev Server (port 5173)"
 	@echo "  - Vue Portal Dev Server (port 5174)"
 	@echo "  - Go Server with Air (port 8080)"
