@@ -227,7 +227,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { fetchProjects as getProjects } from '../../api/projects';
 import { 
-  getExpenses as fetchExpenses, 
+  getExpensesForReview as fetchExpenses, 
   approveExpense, 
   rejectExpense,
   type Expense

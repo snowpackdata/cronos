@@ -155,7 +155,8 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('../views/planning/ExpenseApprovalView.vue'),
     meta: {
       title: 'Expense Approvals',
-      requiresAuth: true
+      requiresAuth: true,
+      requiresAdmin: true
     }
   },
   {
@@ -272,6 +273,14 @@ router.beforeEach(async (to, _from, next) => {
 
   if (requiresAuth) {
     if (token && userIsStaff) {
+      // Check if route requires admin access
+      const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin);
+      if (requiresAdmin && userRole !== 'ADMIN') {
+        // Only admins can access admin-only routes
+        next({ name: 'timesheet' });
+        return;
+      }
+      
       // Check if user is staff (not admin) and trying to access restricted routes
       const staffAllowedPaths = ['/timesheet', '/expenses'];
       if (userRole === 'STAFF' && !staffAllowedPaths.includes(to.path)) {

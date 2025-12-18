@@ -36,6 +36,14 @@ export async function getExpenses(params?: {
   return response.data;
 }
 
+export async function getExpensesForReview(params?: {
+  status?: string;
+  project_id?: number;
+}): Promise<Expense[]> {
+  const response = await api.get('/api/expenses/review', { params });
+  return response.data;
+}
+
 export async function createExpense(formData: FormData): Promise<Expense> {
   const response = await api.post('/api/expenses', formData);
   return response.data;

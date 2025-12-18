@@ -330,6 +330,7 @@ func main() {
 
 	// Expenses routes
 	adminApi.HandleFunc("/expenses", a.GetExpensesHandler).Methods("GET")
+	adminApi.HandleFunc("/expenses/review", a.GetExpensesForReviewHandler).Methods("GET")
 	adminApi.HandleFunc("/expenses", a.CreateExpenseHandler).Methods("POST")
 	adminApi.HandleFunc("/expenses/{id:[0-9]+}", a.UpdateExpenseHandler).Methods("PUT")
 	adminApi.HandleFunc("/expenses/{id:[0-9]+}", a.DeleteExpenseHandler).Methods("DELETE")

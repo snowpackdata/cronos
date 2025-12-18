@@ -14,6 +14,10 @@
 */.DS_Store
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+cmd/server/server
+cmd/server/static/admin/assets
+cmd/server/static/admin/vite.svg
+cmd/server/static/portal/assets
 
 # Dependency directories (remove the comment below to include it)
 # vendor/

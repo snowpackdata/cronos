@@ -260,17 +260,8 @@ func (a *App) GoogleLoginCallbackHandler(w http.ResponseWriter, r *http.Request)
 		}
 		targetHost = fmt.Sprintf("%s.localhost%s", tenant.Slug, port)
 	} else {
-		// Production - use tenant.domain.com
-		// Remove any existing subdomain and add tenant slug
-		parts := strings.Split(host, ".")
-		if len(parts) > 2 {
-			// Has subdomain, replace it
-			parts[0] = tenant.Slug
-		} else {
-			// No subdomain, prepend tenant slug
-			parts = append([]string{tenant.Slug}, parts...)
-		}
-		targetHost = strings.Join(parts, ".")
+		// Production - use tenant.cronosplatform.com
+		targetHost = fmt.Sprintf("%s.cronosplatform.com", tenant.Slug)
 	}
 
 	redirectURL := fmt.Sprintf("%s://%s%s?token=%s", scheme, targetHost, redirectPath, tokenString)

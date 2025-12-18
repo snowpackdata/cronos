@@ -37,9 +37,8 @@ loginButton.addEventListener('click', async (e) => {
             // Local development - use tenant.localhost
             targetHost = `${tenantSlug}.localhost`;
         } else {
-            // Production - use tenant.domain.com
-            const baseDomain = currentHost.replace(/^[^.]+\./, ''); // Remove existing subdomain if any
-            targetHost = `${tenantSlug}.${baseDomain}`;
+            // Production - use cronosplatform.com as the base domain
+            targetHost = `${tenantSlug}.cronosplatform.com`;
         }
         
         const portPart = currentPort ? `:${currentPort}` : '';

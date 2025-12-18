@@ -20,6 +20,7 @@ import (
 )
 
 // GetExpensesHandler returns expenses filtered by status and/or project
+// This endpoint always returns only the current user's expenses
 func (a *App) GetExpensesHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := MustGetTenant(r.Context())
 	userIDVal := r.Context().Value("user_id")
@@ -28,9 +29,6 @@ func (a *App) GetExpensesHandler(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusUnauthorized, "User ID not found in context")
 		return
 	}
-
-	isStaffVal := r.Context().Value("is_staff")
-	isStaff, _ := isStaffVal.(bool)
 
 	// Get query parameters
 	status := r.URL.Query().Get("status")
@@ -47,12 +45,56 @@ func (a *App) GetExpensesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Project").Preload("Submitter.HeadshotAsset").Preload("Approver").Preload("Receipt")
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID))
 
-	// If staff, show all expenses; otherwise only show user's own expenses
-	if !isStaff {
-		query = query.Where("submitter_id = ?", employee.ID)
+	// Always filter by current user's expenses only
+	query = query.Where("submitter_id = ?", employee.ID)
+
+	if status != "" {
+		query = query.Where("state = ?", status)
 	}
+
+	if projectIDStr != "" {
+		projectID, err := strconv.ParseUint(projectIDStr, 10, 64)
+		if err == nil {
+			query = query.Where("project_id = ?", uint(projectID))
+		}
+	}
+
+	var expenses []cronos.Expense
+	if err := query.
+		Preload("Project").
+		Preload("Submitter.HeadshotAsset").
+		Preload("Category").
+		Preload("Tags").
+		Preload("Receipt").
+		Order("date DESC").
+		Find(&expenses).Error; err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error fetching expenses")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, expenses)
+}
+
+// GetExpensesForReviewHandler returns all expenses for admin review
+// This endpoint is admin-only and shows all expenses across all users
+func (a *App) GetExpensesForReviewHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
+
+	// Check if user has admin role
+	userRoleVal := r.Context().Value("user_role")
+	userRole, _ := userRoleVal.(string)
+	if userRole != "ADMIN" {
+		respondWithError(w, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	// Get query parameters
+	status := r.URL.Query().Get("status")
+	projectIDStr := r.URL.Query().Get("project_id")
+
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID))
 
 	if status != "" {
 		query = query.Where("state = ?", status)
