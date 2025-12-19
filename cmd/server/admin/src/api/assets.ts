@@ -126,7 +126,7 @@ export const deleteAsset = async (assetId: number): Promise<void> => {
 
 // Function to refresh a GCS asset's signed URL
 export const refreshAssetUrl = async (assetId: number): Promise<{ new_url: string; new_expires_at: string }> => {
-  const response = await apiClient.post<{ new_url: string; new_expires_at: string }>(`/assets/${assetId}/refresh-url`);
+  const response = await apiClient.post<{ new_url: string; new_expires_at: string }>(`/api/assets/${assetId}/refresh-url`);
   return response.data;
 };
 

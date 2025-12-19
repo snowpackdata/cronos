@@ -483,7 +483,7 @@ type BillingCode struct {
 	Category       string    `json:"category"`
 	Code           string    `gorm:"uniqueIndex:idx_billing_codes_tenant_code,priority:2" json:"code"`
 	RoundedTo      int       `gorm:"default:15" json:"rounded_to"`
-	ProjectID      uint      `json:"project"`
+	ProjectID      uint      `json:"project_id"`
 	ActiveStart    time.Time `json:"active_start"`
 	ActiveEnd      time.Time `json:"active_end"`
 	RateID         uint      `json:"rate_id"`

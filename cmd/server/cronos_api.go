@@ -447,14 +447,34 @@ func (a *App) StaffHandler(w http.ResponseWriter, r *http.Request) {
 // AccountsListHandler provides a list of Accounts with their associated client user details.
 func (a *App) AccountsListHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := MustGetTenant(r.Context())
+
+	// Check if minimal mode is requested (for performance optimization)
+	preload := r.URL.Query().Get("preload")
+	minimal := preload == "false"
+
 	var accounts []cronos.Account
-	// Get accounts first, preloading projects as before.
-	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Projects").Preload("Assets").Preload("LogoAsset").Order("name ASC").Find(&accounts).Error; err != nil {
+
+	// Build query based on whether we need to preload nested data
+	query := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID))
+
+	if !minimal {
+		// Full mode: preload all nested data (original behavior)
+		query = query.Preload("Projects").Preload("Assets").Preload("LogoAsset")
+	}
+
+	if err := query.Order("name ASC").Find(&accounts).Error; err != nil {
 		log.Printf("Error fetching accounts: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve accounts")
 		return
 	}
 
+	// If minimal mode, just return the basic accounts without client user details
+	if minimal {
+		respondWithJSON(w, http.StatusOK, accounts)
+		return
+	}
+
+	// Full mode: fetch and attach detailed client user information
 	// This new struct will be part of the response for each account.
 	type ClientUserDetail struct {
 		UserID    uint   `json:"user_id"`
@@ -541,6 +561,26 @@ func (a *App) BillingCodesListHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(&billingCodes)
+}
+
+// ProjectBillingCodesListHandler provides a list of BillingCodes for a specific project
+func (a *App) ProjectBillingCodesListHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
+	vars := mux.Vars(r)
+	projectID := vars["id"]
+
+	var billingCodes []cronos.BillingCode
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
+		Preload("Rate").
+		Preload("InternalRate").
+		Where("project_id = ?", projectID).
+		Find(&billingCodes).Error; err != nil {
+		log.Printf("Error fetching billing codes for project %s: %v", projectID, err)
+		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve billing codes")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, billingCodes)
 }
 
 // ActiveBillingCodesListHandler provides a list of BillingCodes that are available and active for the

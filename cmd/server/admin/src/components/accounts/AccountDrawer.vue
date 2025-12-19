@@ -11,7 +11,7 @@
                 <form class="flex h-full flex-col overflow-y-scroll bg-white shadow-xl" @submit.prevent="handleSubmit">
                   <div class="flex-1">
                     <!-- Header -->
-                    <div class="bg-sage-dark px-4 py-6 sm:px-6">
+                    <div class="bg-sage-dark px-4 py-4 sm:px-6">
                       <div class="flex items-start justify-between space-x-3">
                         <div class="space-y-1">
                           <DialogTitle class="text-base font-semibold text-white">{{ isEditing ? 'Edit Account' : 'New Account' }}</DialogTitle>
@@ -30,9 +30,9 @@
                     </div>
 
                     <!-- Divider container -->
-                    <div class="space-y-6 py-6 sm:space-y-0 sm:divide-y sm:divide-gray-200 sm:py-0">
+                    <div class="space-y-4 py-4 sm:space-y-0 sm:divide-y sm:divide-gray-200 sm:py-0">
                       <!-- Account name -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-name" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Account name</label>
                         </div>
@@ -48,7 +48,7 @@
                       </div>
 
                       <!-- Legal name -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-legal-name" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Legal name</label>
                         </div>
@@ -64,7 +64,7 @@
                       </div>
 
                       <!-- Account type -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-type" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Account Type</label>
                         </div>
@@ -82,7 +82,7 @@
                       </div>
                       
                       <!-- Email -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-email" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Email</label>
                         </div>
@@ -98,7 +98,7 @@
                       </div>
 
                       <!-- Website -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-website" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Website</label>
                         </div>
@@ -114,7 +114,7 @@
                       </div>
 
                       <!-- Address -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-address" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Address</label>
                         </div>
@@ -130,7 +130,7 @@
                       </div>
 
                       <!-- Logo Upload (Internal Accounts Only) -->
-                      <div v-if="account.type === 'ACCOUNT_TYPE_INTERNAL'" class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div v-if="account.type === 'ACCOUNT_TYPE_INTERNAL'" class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-logo" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Company Logo</label>
                           <p class="text-xs text-gray-500 mt-1">For invoices and bills</p>
@@ -153,7 +153,7 @@
                       </div>
 
                       <!-- Billing Frequency -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-billing-frequency" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Billing Frequency</label>
                         </div>
@@ -174,7 +174,7 @@
                       </div>
 
                       <!-- Projects Single Invoice -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-projects-single-invoice" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Invoice Type</label>
                         </div>
@@ -195,7 +195,7 @@
                       </div>
 
                       <!-- Budget Hours -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-budget-hours" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Budget Hours</label>
                         </div>
@@ -211,7 +211,7 @@
                       </div>
 
                       <!-- Budget Dollars -->
-                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-5">
+                      <div class="space-y-2 px-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:space-y-0 sm:px-6 sm:py-3">
                         <div>
                           <label for="account-budget-dollars" class="block text-sm/6 font-medium text-gray-900 sm:mt-1.5">Budget Dollars</label>
                         </div>
@@ -296,7 +296,7 @@ const handleDelete = () => {
 };
 
 // Determine if editing or creating new
-const isEditing = computed(() => !!props.accountData?.id);
+const isEditing = computed(() => !!(props.accountData?.id || props.accountData?.ID));
 
 // Initialize account with default values or provided data
 const account = ref({

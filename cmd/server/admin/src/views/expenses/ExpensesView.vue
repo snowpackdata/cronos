@@ -4,9 +4,6 @@
     <div class="mb-2 flex justify-between items-center">
       <div>
         <h1 class="text-lg font-bold text-gray-900">My Expenses</h1>
-        <p class="text-xs text-gray-500">
-          Submit and track your business expenses
-        </p>
       </div>
       <button
         @click="openCreateModal"

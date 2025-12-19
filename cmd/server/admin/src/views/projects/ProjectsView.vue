@@ -248,7 +248,6 @@ const handleSaveAssetForProject = async (assetData: Asset) => {
     <div class="sm:flex sm:items-center">
       <div class="sm:flex-auto">
         <h1 class="text-base font-semibold leading-6 text-blue">Projects</h1>
-        <p class="mt-1 text-xs text-gray">A list of all projects including their status, client, and dates.</p>
       </div>
       <div class="mt-3 sm:ml-16 sm:mt-0 sm:flex-none">
         <button

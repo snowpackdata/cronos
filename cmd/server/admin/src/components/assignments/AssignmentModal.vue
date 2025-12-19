@@ -16,6 +16,32 @@
                     {{ isEditing ? 'Edit Assignment' : 'Add New Assignment' }}
                   </DialogTitle>
                   <div class="mt-4 space-y-4">
+                    <!-- Project Dropdown or Display -->
+                    <div>
+                      <label for="assignment-project" class="block text-sm font-medium leading-6 text-gray-900">Project</label>
+                      <!-- Single project: just display it -->
+                      <div 
+                        v-if="projectsList.length === 1"
+                        class="mt-1 block w-full rounded-md border-gray-300 py-1.5 pl-3 pr-10 text-gray-900 bg-gray-50 border sm:text-sm"
+                      >
+                        {{ projectsList[0].name }}{{ projectsList[0].account?.name ? ` (${projectsList[0].account.name})` : '' }}
+                      </div>
+                      <!-- Multiple projects: show dropdown -->
+                      <select 
+                        v-else
+                        id="assignment-project"
+                        name="assignment-project"
+                        v-model.number="formData.project_id"
+                        required
+                        class="mt-1 block w-full rounded-md border-gray-300 py-1.5 pl-3 pr-10 text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                      >
+                        <option :value="undefined" disabled>Select project...</option>
+                        <option v-for="project in projectsList" :key="project.ID" :value="Number(project.ID)">
+                          {{ project.name }}{{ project.account?.name ? ` (${project.account.name})` : '' }}
+                        </option>
+                      </select>
+                    </div>
+
                     <!-- Staff Member Dropdown -->
                     <div>
                       <label for="assignment-staff" class="block text-sm font-medium leading-6 text-gray-900">Staff Member</label>
@@ -83,19 +109,29 @@
                     </div>
                   </div>
                 </div>
-                <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+                <div class="mt-5 sm:mt-6">
+                  <div class="sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+                    <button 
+                      type="submit"
+                      class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2"
+                    >
+                      {{ isEditing ? 'Update Assignment' : 'Add Assignment' }}
+                    </button>
+                    <button 
+                      type="button"
+                      class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0"
+                      @click="handleClose"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                   <button 
-                    type="submit"
-                    class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2"
-                  >
-                    {{ isEditing ? 'Update Assignment' : 'Add Assignment' }}
-                  </button>
-                  <button 
+                    v-if="isEditing && assignmentData?.ID"
                     type="button"
-                    class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0"
-                    @click="handleClose"
+                    class="mt-3 inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500"
+                    @click="handleDelete"
                   >
-                    Cancel
+                    Delete Assignment
                   </button>
                 </div>
               </form>
@@ -111,11 +147,11 @@
 import { ref, watch, computed, defineEmits } from 'vue';
 import type { PropType } from 'vue';
 import { Dialog, DialogPanel, DialogTitle, TransitionChild, TransitionRoot } from '@headlessui/vue';
-import type { StaffingAssignment, Staff } from '../../types/Project';
+import type { StaffingAssignment, Staff, Project } from '../../types/Project';
 import TimelineEditor from './TimelineEditor.vue';
 import type { CommitmentSegment } from './TimelineEditor.vue';
 
-const emit = defineEmits(['close', 'save']);
+const emit = defineEmits(['close', 'save', 'delete']);
 
 // Helper to format date strings (e.g., ISO) to YYYY-MM-DD for date inputs
 // (Same as in ProjectDrawer)
@@ -149,15 +185,20 @@ const props = defineProps({
     required: true,
     default: () => [],
   },
+  projectsList: {
+    type: Array as PropType<Project[]>,
+    default: () => [],
+  },
   projectData: {
     type: Object as PropType<{ active_start: string; active_end: string } | null>,
     default: null,
   },
 });
 
-// Adjusted form data type to use employee_id and segments
-type AssignmentFormData = Partial<Omit<StaffingAssignment, 'ID' | 'Employee' | 'project_id'>> & {
+// Adjusted form data type to use employee_id, project_id and segments
+type AssignmentFormData = Partial<Omit<StaffingAssignment, 'ID' | 'Employee'>> & {
   segments?: CommitmentSegment[];
+  project_id?: number;
 };
 const formData = ref<AssignmentFormData>({});
 
@@ -170,7 +211,7 @@ watch(() => props.isOpen, (isOpen) => {
     const assignment = props.assignmentData;
     console.log('AssignmentModal opened. Editing assignment:', assignment);
     console.log('Staff list:', props.staffList);
-    if (assignment) {
+    if (assignment && assignment.ID) {
       // Editing: Populate form with segments
       let segments: CommitmentSegment[] | undefined = undefined;
       
@@ -195,6 +236,7 @@ watch(() => props.isOpen, (isOpen) => {
       
       formData.value = {
         employee_id: assignment.employee_id ? Number(assignment.employee_id) : undefined,
+        project_id: assignment.project_id ? Number(assignment.project_id) : undefined,
         commitment: assignment.commitment !== undefined ? Number(assignment.commitment) : undefined,
         start_date: formatDateForInput(assignment.start_date),
         end_date: formatDateForInput(assignment.end_date),
@@ -211,8 +253,14 @@ watch(() => props.isOpen, (isOpen) => {
         ? formatDateForInput(props.projectData.active_end)
         : '';
       
+      // Auto-select project if only one exists
+      const autoProjectId = props.projectsList.length === 1 
+        ? props.projectsList[0].ID 
+        : (assignment?.project_id || undefined);
+      
       formData.value = {
-        employee_id: undefined,
+        employee_id: assignment?.employee_id || undefined,
+        project_id: autoProjectId,
         commitment: undefined,
         start_date: defaultStartDate,
         end_date: defaultEndDate,
@@ -228,9 +276,13 @@ const handleClose = () => {
   emit('close');
 };
 
-// handleSave adjusted to use employee_id
+// handleSave adjusted to use employee_id and project_id
 const handleSave = () => {
   // Validation
+  if (!formData.value.project_id) {
+    alert('Please select a project.');
+    return;
+  }
   if (!formData.value.employee_id) {
     alert('Please select a staff member.');
     return;
@@ -253,11 +305,18 @@ const handleSave = () => {
 
   emit('save', {
     employee_id: formData.value.employee_id,
+    project_id: formData.value.project_id,
     commitment: avgCommitment || undefined, // Fallback/average for legacy field
     start_date: formData.value.start_date,
     end_date: formData.value.end_date,
     segments: formData.value.segments,
   });
+};
+
+const handleDelete = () => {
+  if (props.assignmentData?.ID) {
+    emit('delete', props.assignmentData.ID);
+  }
 };
 
 </script> 

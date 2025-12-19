@@ -117,14 +117,14 @@ api.interceptors.response.use(
 );
 
 // Generic fetch all items of a resource
-export async function fetchAll<T>(endpoint: string): Promise<T[]> {
+export async function fetchAll<T>(endpoint: string, params?: Record<string, any>): Promise<T[]> {
   const normalizedUrl = normalizeApiUrl(endpoint);
-  const response = await api.get<T[]>(normalizedUrl);
-  
+  const response = await api.get<T[]>(normalizedUrl, { params });
+
   // Special case for bills endpoint debugging
   if (endpoint === 'bills') {
   }
-  
+
   return response.data;
 }
 

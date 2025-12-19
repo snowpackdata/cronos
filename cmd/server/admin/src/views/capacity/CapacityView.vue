@@ -515,7 +515,6 @@ onMounted(async () => {
     <div class="sm:flex sm:items-center">
       <div class="sm:flex-auto">
         <h1 class="text-base font-semibold leading-6 text-blue">Capacity Management</h1>
-        <p class="mt-1 text-xs text-gray">View project and staff commitments historically and into the future.</p>
       </div>
       <div class="mt-3 sm:ml-16 sm:mt-0 sm:flex-none">
         <div class="inline-flex rounded-md shadow-sm" role="group">

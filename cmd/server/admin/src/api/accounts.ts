@@ -73,10 +73,12 @@ function prepareAccountForApi(account: Account): FormData {
 const accountsAPI = {
   /**
    * Fetch all accounts
+   * @param minimal - If true, don't preload nested data (clients, assets, etc.)
    * @returns Promise with account data
    */
-  async fetchAccounts(): Promise<Account[]> {
-    return fetchAll<Account>('accounts');
+  async fetchAccounts(minimal: boolean = false): Promise<Account[]> {
+    const params = minimal ? { preload: 'false' } : {};
+    return fetchAll<Account>('accounts', params);
   },
 
   /**

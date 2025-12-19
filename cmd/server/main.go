@@ -244,6 +244,7 @@ func main() {
 	adminApi.HandleFunc("/projects/{id:[0-9]+}/backfill", a.BackfillProjectInvoicesHandler).Methods("POST")
 	adminApi.HandleFunc("/projects/{id:[0-9]+}/assets", a.ProjectAssetsCreateHandler).Methods("POST")
 	adminApi.HandleFunc("/projects/{id:[0-9]+}/assets/{assetID}", a.ProjectAssetDeleteHandler).Methods("DELETE")
+	adminApi.HandleFunc("/projects/{id:[0-9]+}/billing_codes", a.ProjectBillingCodesListHandler).Methods("GET")
 
 	// Entry routes
 	adminApi.HandleFunc("/entries", a.EntriesListHandler).Methods("GET")
@@ -287,7 +288,7 @@ func main() {
 	adminApi.HandleFunc("/project_assignments/{id:[0-9]+}", a.ProjectAssignmentHandler).Methods("GET", "PUT", "POST", "DELETE")
 
 	// Asset routes
-	adminApi.HandleFunc("/assets/{id:[0-9]+}/refresh-url", a.AssetRefreshURLHandler).Methods("POST")
+	adminApi.HandleFunc("/assets/{id:[0-9]+}/refresh-url", a.RefreshAssetURLHandler).Methods("POST")
 	adminApi.HandleFunc("/assets/{id:[0-9]+}/download", a.AssetDownloadHandler).Methods("GET")
 
 	// Journal routes

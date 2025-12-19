@@ -297,6 +297,27 @@ const adminNavigationSections = [
   { name: 'Expenses', path: '/expenses', icon: 'fa-receipt' },
   // Expandable sections
   {
+    name: 'Organization',
+    icon: 'fa-building',
+    items: [
+      { name: 'Accounts & Projects', path: '/organization', icon: 'fa-sitemap' },
+      { name: 'Team', path: '/staff', icon: 'fa-users' },
+      { name: 'Rates', path: '/rates', icon: 'fa-percent' },
+      { name: 'Expenses', path: '/expense-config', icon: 'fa-tags' },
+    ]
+  },
+  {
+    name: 'Planning',
+    icon: 'fa-calendar-alt',
+    items: [
+      { name: 'Staffing', path: '/staffing', icon: 'fa-user-clock' },
+      { name: 'Timesheet Admin', path: '/timesheet-admin', icon: 'fa-toolbox' },
+      { name: 'Capacity', path: '/capacity', icon: 'fa-chart-gantt' },
+      { name: 'Expense Approvals', path: '/expense-approvals', icon: 'fa-receipt' },
+      { name: 'Recurring Compensation', path: '/recurring-entries', icon: 'fa-repeat' },
+    ]
+  },
+  {
     name: 'Accounting',
     icon: 'fa-book',
     items: [
@@ -305,28 +326,6 @@ const adminNavigationSections = [
   { name: 'General Ledger', path: '/accounting', icon: 'fa-book' },
       { name: 'Chart of Accounts', path: '/chart-of-accounts', icon: 'fa-list-alt' },
       { name: 'Offline Journals', path: '/offline-journals', icon: 'fa-file-import' },
-    ]
-  },
-  {
-    name: 'Organization',
-    icon: 'fa-building',
-    items: [
-  { name: 'Accounts', path: '/accounts', icon: 'fa-building' },
-  { name: 'Projects', path: '/projects', icon: 'fa-bars-progress' },
-  { name: 'Team', path: '/staff', icon: 'fa-users' },
-  { name: 'Billing Codes', path: '/billing-codes', icon: 'fa-barcode' },
-  { name: 'Rates', path: '/rates', icon: 'fa-percent' },
-      { name: 'Expenses', path: '/expense-config', icon: 'fa-tags' },
-    ]
-  },
-  {
-    name: 'Planning',
-    icon: 'fa-calendar-alt',
-    items: [
-      { name: 'Timesheet Admin', path: '/timesheet-admin', icon: 'fa-toolbox' },
-      { name: 'Capacity', path: '/capacity', icon: 'fa-chart-gantt' },
-      { name: 'Expense Approvals', path: '/expense-approvals', icon: 'fa-receipt' },
-      { name: 'Recurring Compensation', path: '/recurring-entries', icon: 'fa-repeat' },
     ]
   }
 ];

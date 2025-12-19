@@ -519,7 +519,6 @@ const voidInvoice = async (invoice: Invoice) => {
     <div class="sm:flex sm:items-center">
       <div class="sm:flex-auto">
         <h1 class="text-xl font-semibold text-gray-900">Accounts Receivable</h1>
-        <p class="mt-2 text-sm text-gray-700">A list of all invoices including their status, amount, and line item details.</p>
       </div>
     </div>
 

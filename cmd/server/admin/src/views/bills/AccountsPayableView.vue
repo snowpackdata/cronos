@@ -370,7 +370,6 @@ const regenerateBillPDF = async (bill: Bill) => {
     <div class="sm:flex sm:items-center">
       <div class="sm:flex-auto">
         <h1 class="text-xl font-semibold text-gray-900">Accounts Payable</h1>
-        <p class="mt-2 text-sm text-gray-700">Track and manage payroll bills for employees and contractors.</p>
       </div>
     </div>
 

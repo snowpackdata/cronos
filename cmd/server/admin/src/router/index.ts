@@ -85,23 +85,29 @@ const routes: Array<RouteRecordRaw> = [
     meta: { requiresAuth: false }
   },
   {
-    path: '/projects',
-    name: 'projects',
-    component: () => import('../views/projects/ProjectsView.vue'),
+    path: '/organization',
+    name: 'organization',
+    component: () => import('../views/organization/OrganizationView.vue'),
     meta: {
-      title: 'Projects',
+      title: 'Organization',
       requiresAuth: true
     }
   },
+  // Keep old routes for backward compatibility, redirect to organization
+  {
+    path: '/accounts',
+    redirect: '/organization',
+    meta: { requiresAuth: false }
+  },
+  {
+    path: '/projects',
+    redirect: '/organization',
+    meta: { requiresAuth: false }
+  },
   {
     path: '/billing-codes',
-    name: 'billing-codes',
-    // @ts-ignore - Vue component type declaration
-    component: () => import('../views/billing-codes/BillingCodesView.vue'),
-    meta: {
-      title: 'Billing Codes',
-      requiresAuth: true
-    }
+    redirect: '/organization',
+    meta: { requiresAuth: false }
   },
   {
     path: '/rates',
@@ -109,16 +115,6 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('../views/rates/RatesView.vue'),
     meta: {
       title: 'Rates',
-      requiresAuth: true
-    }
-  },
-  {
-    path: '/accounts',
-    name: 'accounts',
-    // @ts-ignore - Vue component type declaration
-    component: () => import('../views/accounts/AccountsView.vue'),
-    meta: {
-      title: 'Accounts',
       requiresAuth: true
     }
   },
@@ -165,6 +161,15 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('../views/planning/RecurringEntriesView.vue'),
     meta: {
       title: 'Recurring Compensation',
+      requiresAuth: true
+    }
+  },
+  {
+    path: '/staffing',
+    name: 'staffing',
+    component: () => import('../views/planning/StaffingView.vue'),
+    meta: {
+      title: 'Staffing Assignments',
       requiresAuth: true
     }
   },

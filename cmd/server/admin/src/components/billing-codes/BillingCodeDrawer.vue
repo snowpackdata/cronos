@@ -259,9 +259,9 @@ const billingCode = ref({
   name: props.billingCodeData?.name || '',
   code: props.billingCodeData?.code || '',
   category: props.billingCodeData?.category || 'BILLING_CODE_CATEGORY_EXTERNAL_CLIENT',
-  projectId: props.billingCodeData?.projectId || props.billingCodeData?.project || '',
+  projectId: props.billingCodeData?.project_id || props.billingCodeData?.projectId || props.billingCodeData?.project || props.projectId || '',
   // Ensure rateId is always a number (default to 0 if not provided)
-  rateId: props.billingCodeData?.rateId ? Number(props.billingCodeData?.rateId) : 
+  rateId: props.billingCodeData?.rateId ? Number(props.billingCodeData?.rateId) :
          props.billingCodeData?.rate_id ? Number(props.billingCodeData?.rate_id) : 0,
   active_start: parseServerDate(props.billingCodeData?.active_start) || getTodayFormatted(),
   active_end: parseServerDate(props.billingCodeData?.active_end) || '',
@@ -278,9 +278,9 @@ watch(() => props.billingCodeData, (newVal) => {
       name: newVal.name || '',
       code: newVal.code || '',
       category: newVal.category || 'BILLING_CODE_CATEGORY_EXTERNAL_CLIENT',
-      projectId: newVal.project || newVal.projectId || '',
+      projectId: newVal.project_id || newVal.projectId || newVal.project || props.projectId || '',
       // Ensure rateId is always a number (default to 0 if not provided)
-      rateId: newVal.rate_id ? Number(newVal.rate_id) : 
+      rateId: newVal.rate_id ? Number(newVal.rate_id) :
              newVal.rateId ? Number(newVal.rateId) : 0,
       active_start: parseServerDate(newVal.active_start) || getTodayFormatted(),
       active_end: parseServerDate(newVal.active_end) || '',

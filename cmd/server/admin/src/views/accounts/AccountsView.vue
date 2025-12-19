@@ -3,7 +3,6 @@
     <div class="sm:flex sm:items-center">
       <div class="sm:flex-auto">
         <h1 class="text-base font-semibold leading-6 text-blue">Client Accounts</h1>
-        <p class="mt-1 text-xs text-gray">A list of all client accounts including their contact and billing information.</p>
       </div>
       <div class="mt-3 sm:ml-16 sm:mt-0 sm:flex-none">
         <button
