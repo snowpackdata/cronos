@@ -174,6 +174,15 @@ const routes: Array<RouteRecordRaw> = [
     }
   },
   {
+    path: '/project-analytics/:projectId?',
+    name: 'project-analytics',
+    component: () => import('../views/planning/ProjectAnalyticsView.vue'),
+    meta: {
+      title: 'Project Analytics',
+      requiresAuth: true
+    }
+  },
+  {
     path: '/expense-config',
     name: 'expense-config',
     component: () => import('../views/organization/ExpenseConfigView.vue'),

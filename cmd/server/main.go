@@ -278,6 +278,9 @@ func main() {
 	adminApi.HandleFunc("/capacity", a.CapacityDataHandler).Methods("GET")
 	adminApi.HandleFunc("/capacity/detail", a.CapacityDetailHandler).Methods("GET")
 
+	// Project analytics routes
+	adminApi.HandleFunc("/project-profitability", a.ProjectProfitabilityHandler).Methods("GET")
+
 	// Bill routes
 	adminApi.HandleFunc("/bills", a.BillListHandler).Methods("GET")
 	adminApi.HandleFunc("/bills/{id:[0-9]+}", a.BillHandler).Methods("GET")

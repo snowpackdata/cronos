@@ -4,6 +4,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/snowpackdata/cronos"
@@ -695,4 +696,372 @@ func (a *App) PortalCapacityDataHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondWithJSON(w, http.StatusOK, response)
+}
+
+// ProjectProfitabilityData represents comprehensive analytics for a project including profitability and burndown
+type ProjectProfitabilityData struct {
+	ProjectID          uint      `json:"project_id"`
+	ProjectName        string    `json:"project_name"`
+	BillingFrequency   string    `json:"billing_frequency"`
+	ProjectActiveStart time.Time `json:"project_active_start"`
+	ProjectActiveEnd   time.Time `json:"project_active_end"`
+
+	// Budget information
+	BudgetHoursPerPeriod   int     `json:"budget_hours_per_period"`
+	BudgetDollarsPerPeriod int     `json:"budget_dollars_per_period"`
+	BudgetCapHours         int     `json:"budget_cap_hours"`
+	BudgetCapDollars       int     `json:"budget_cap_dollars"`
+	TotalBudgetHours       float64 `json:"total_budget_hours"`
+	TotalBudgetDollars     float64 `json:"total_budget_dollars"`
+
+	// Actual performance
+	TotalTrackedHours     float64 `json:"total_tracked_hours"`
+	TotalRevenue          float64 `json:"total_revenue"`           // What we bill to client (in dollars)
+	TotalCost             float64 `json:"total_cost"`              // What we pay to staff (in dollars)
+	TotalProfit           float64 `json:"total_profit"`            // Revenue - Cost
+	ProfitMargin          float64 `json:"profit_margin"`           // (Profit / Revenue) * 100
+	TotalInvoiced         float64 `json:"total_invoiced"`          // Total amount invoiced
+	TotalInvoicedAccepted float64 `json:"total_invoiced_accepted"` // Total accepted invoices
+
+	// Progress indicators
+	HoursCompletion   float64 `json:"hours_completion"`   // Percentage
+	DollarsCompletion float64 `json:"dollars_completion"` // Percentage
+	IsAheadOfBudget   bool    `json:"is_ahead_of_budget"`
+	IsOnBudget        bool    `json:"is_on_budget"`
+	IsBehindBudget    bool    `json:"is_behind_budget"`
+
+	// Time series data for burndown
+	BurndownData []BurndownDataPoint `json:"burndown_data"`
+}
+
+// BurndownDataPoint represents a single point in the burndown chart
+type BurndownDataPoint struct {
+	Date                   time.Time `json:"date"`
+	PlannedBudgetRemaining float64   `json:"planned_budget_remaining"` // Budget remaining on this day (linear burndown)
+	ActualSpent            float64   `json:"actual_spent"`             // Cumulative actual spent to date
+	ActualCost             float64   `json:"actual_cost"`              // Cumulative internal cost to date
+	InvoicedAmount         float64   `json:"invoiced_amount"`          // Cumulative invoiced amount to date
+}
+
+// entryWithCost is a helper struct to cache calculated costs
+type entryWithCost struct {
+	entry   cronos.Entry
+	hours   float64
+	revenue float64
+	cost    float64
+}
+
+// ProjectProfitabilityHandler returns comprehensive project analytics including profitability and burndown
+func (a *App) ProjectProfitabilityHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := MustGetTenant(r.Context())
+	projectIDStr := r.URL.Query().Get("project_id")
+	if projectIDStr == "" {
+		respondWithError(w, http.StatusBadRequest, "project_id query parameter is required")
+		return
+	}
+
+	projectID, err := strconv.ParseUint(projectIDStr, 10, 32)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid project_id")
+		return
+	}
+
+	var project cronos.Project
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).Preload("Account").First(&project, uint(projectID)).Error; err != nil {
+		log.Printf("Error fetching project %d: %v", projectID, err)
+		respondWithError(w, http.StatusNotFound, "Project not found")
+		return
+	}
+
+	// Fetch all non-voided entries for the project with preloaded billing codes and rates
+	var entries []cronos.Entry
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
+		Preload("BillingCode.Rate").
+		Preload("BillingCode.InternalRate").
+		Preload("Employee").
+		Where("project_id = ? AND state != ? AND deleted_at IS NULL", project.ID, cronos.EntryStateVoid.String()).
+		Order("start ASC").
+		Find(&entries).Error; err != nil {
+		log.Printf("Error fetching entries for project %d: %v", projectID, err)
+		respondWithError(w, http.StatusInternalServerError, "Failed to fetch entries")
+		return
+	}
+
+	// Fetch all invoices for the project - includes both project-specific and account-level invoices
+	// For account-level invoices, we'll calculate this project's portion from the entries
+	var invoices []cronos.Invoice
+	if err := a.cronosApp.DB.Scopes(cronos.TenantScope(tenant.ID)).
+		Preload("Entries").
+		Where("(project_id = ? OR (account_id = ? AND project_id IS NULL)) AND deleted_at IS NULL", project.ID, project.AccountID).
+		Find(&invoices).Error; err != nil {
+		log.Printf("Error fetching invoices for project %d: %v", projectID, err)
+		// Continue without invoice data
+	}
+
+	// Pre-calculate all entry costs in a single pass to avoid N+1 queries
+	entriesWithCosts := make([]entryWithCost, 0, len(entries))
+	var totalHours, totalRevenue, totalCost float64
+
+	for _, entry := range entries {
+		if !entry.Start.IsZero() && !entry.End.IsZero() && entry.End.After(entry.Start) {
+			duration := entry.End.Sub(entry.Start)
+			hours := duration.Hours()
+			revenue := float64(entry.Fee) / 100.0
+
+			// Calculate internal cost using the preloaded rates
+			var cost float64
+			if entry.Employee.HasFixedInternalRate {
+				// Use employee's fixed hourly rate
+				cost = (hours * float64(entry.Employee.FixedHourlyRate)) / 100.0
+			} else if entry.BillingCode.InternalRate.Amount > 0 {
+				// Use billing code's internal rate
+				cost = hours * entry.BillingCode.InternalRate.Amount
+			}
+
+			entriesWithCosts = append(entriesWithCosts, entryWithCost{
+				entry:   entry,
+				hours:   hours,
+				revenue: revenue,
+				cost:    cost,
+			})
+
+			totalHours += hours
+			totalRevenue += revenue
+			totalCost += cost
+		}
+	}
+
+	totalProfit := totalRevenue - totalCost
+	profitMargin := 0.0
+	if totalRevenue > 0 {
+		profitMargin = (totalProfit / totalRevenue) * 100
+	}
+
+	// Calculate invoice totals
+	// For project-specific invoices, use the full invoice amount
+	// For account-level invoices, sum only entries from this project
+	var totalInvoiced, totalInvoicedAccepted float64
+	for _, invoice := range invoices {
+		if invoice.State != cronos.InvoiceStateVoid.String() {
+			var invoiceAmount float64
+
+			// If invoice has a project_id, use the full amount
+			if invoice.ProjectID != nil && *invoice.ProjectID == project.ID {
+				invoiceAmount = invoice.TotalAmount
+			} else {
+				// Account-level invoice - calculate this project's portion from entries
+				for _, entry := range invoice.Entries {
+					if entry.ProjectID == project.ID && entry.State != cronos.EntryStateVoid.String() {
+						invoiceAmount += float64(entry.Fee) / 100.0
+					}
+				}
+			}
+
+			totalInvoiced += invoiceAmount
+			if invoice.State == cronos.InvoiceStateApproved.String() || invoice.State == cronos.InvoiceStatePaid.String() {
+				totalInvoicedAccepted += invoiceAmount
+			}
+		}
+	}
+
+	// Calculate total budget
+	var totalBudgetHours, totalBudgetDollars float64
+	if !project.ActiveStart.IsZero() && !project.ActiveEnd.IsZero() && project.ActiveEnd.After(project.ActiveStart) {
+		durationDays := project.ActiveEnd.Sub(project.ActiveStart).Hours() / 24.0
+
+		// Use budget cap if set, otherwise calculate from periodic budget
+		if project.BudgetCapHours > 0 {
+			totalBudgetHours = float64(project.BudgetCapHours)
+		} else {
+			switch project.BillingFrequency {
+			case cronos.BillingFrequencyProject.String():
+				totalBudgetHours = float64(project.BudgetHours)
+			case cronos.BillingFrequencyMonthly.String():
+				numMonths := float64((project.ActiveEnd.Year()-project.ActiveStart.Year())*12 + int(project.ActiveEnd.Month()) - int(project.ActiveStart.Month()) + 1)
+				totalBudgetHours = float64(project.BudgetHours) * numMonths
+			case cronos.BillingFrequencyWeekly.String():
+				numWeeks := math.Ceil(durationDays / 7.0)
+				totalBudgetHours = float64(project.BudgetHours) * numWeeks
+			case cronos.BillingFrequencyBiweekly.String():
+				numBiweeks := math.Ceil(durationDays / 14.0)
+				totalBudgetHours = float64(project.BudgetHours) * numBiweeks
+			default:
+				totalBudgetHours = float64(project.BudgetHours)
+			}
+		}
+
+		if project.BudgetCapDollars > 0 {
+			totalBudgetDollars = float64(project.BudgetCapDollars)
+		} else {
+			switch project.BillingFrequency {
+			case cronos.BillingFrequencyProject.String():
+				totalBudgetDollars = float64(project.BudgetDollars)
+			case cronos.BillingFrequencyMonthly.String():
+				numMonths := float64((project.ActiveEnd.Year()-project.ActiveStart.Year())*12 + int(project.ActiveEnd.Month()) - int(project.ActiveStart.Month()) + 1)
+				totalBudgetDollars = float64(project.BudgetDollars) * numMonths
+			case cronos.BillingFrequencyWeekly.String():
+				numWeeks := math.Ceil(durationDays / 7.0)
+				totalBudgetDollars = float64(project.BudgetDollars) * numWeeks
+			case cronos.BillingFrequencyBiweekly.String():
+				numBiweeks := math.Ceil(durationDays / 14.0)
+				totalBudgetDollars = float64(project.BudgetDollars) * numBiweeks
+			default:
+				totalBudgetDollars = float64(project.BudgetDollars)
+			}
+		}
+	} else {
+		totalBudgetHours = float64(project.BudgetHours)
+		totalBudgetDollars = float64(project.BudgetDollars)
+	}
+
+	// Calculate completion percentages
+	hoursCompletion := 0.0
+	if totalBudgetHours > 0 {
+		hoursCompletion = (totalHours / totalBudgetHours) * 100
+	}
+	dollarsCompletion := 0.0
+	if totalBudgetDollars > 0 {
+		dollarsCompletion = (totalRevenue / totalBudgetDollars) * 100
+	}
+
+	// Determine budget status
+	isAhead := hoursCompletion < 90 && dollarsCompletion < 90
+	isOnBudget := hoursCompletion >= 90 && hoursCompletion <= 110 && dollarsCompletion >= 90 && dollarsCompletion <= 110
+	isBehind := hoursCompletion > 110 || dollarsCompletion > 110
+
+	burndownData := a.generateBurndownData(&project, entriesWithCosts, invoices, totalBudgetHours, totalBudgetDollars)
+
+	result := ProjectProfitabilityData{
+		ProjectID:          project.ID,
+		ProjectName:        project.Name,
+		BillingFrequency:   project.BillingFrequency,
+		ProjectActiveStart: project.ActiveStart,
+		ProjectActiveEnd:   project.ActiveEnd,
+
+		BudgetHoursPerPeriod:   project.BudgetHours,
+		BudgetDollarsPerPeriod: project.BudgetDollars,
+		BudgetCapHours:         project.BudgetCapHours,
+		BudgetCapDollars:       project.BudgetCapDollars,
+		TotalBudgetHours:       totalBudgetHours,
+		TotalBudgetDollars:     totalBudgetDollars,
+
+		TotalTrackedHours:     totalHours,
+		TotalRevenue:          totalRevenue,
+		TotalCost:             totalCost,
+		TotalProfit:           totalProfit,
+		ProfitMargin:          profitMargin,
+		TotalInvoiced:         totalInvoiced,
+		TotalInvoicedAccepted: totalInvoicedAccepted,
+
+		HoursCompletion:   hoursCompletion,
+		DollarsCompletion: dollarsCompletion,
+		IsAheadOfBudget:   isAhead,
+		IsOnBudget:        isOnBudget,
+		IsBehindBudget:    isBehind,
+
+		BurndownData: burndownData,
+	}
+
+	respondWithJSON(w, http.StatusOK, result)
+}
+
+// generateBurndownData creates daily burndown data showing planned vs actual budget consumption
+func (a *App) generateBurndownData(project *cronos.Project, entriesWithCosts []entryWithCost, invoices []cronos.Invoice, totalBudgetHours, totalBudgetDollars float64) []BurndownDataPoint {
+	if project.ActiveStart.IsZero() || project.ActiveEnd.IsZero() {
+		return []BurndownDataPoint{}
+	}
+
+	var dataPoints []BurndownDataPoint
+
+	// Calculate total days in the project
+	totalDays := project.ActiveEnd.Sub(project.ActiveStart).Hours() / 24.0
+	if totalDays <= 0 {
+		return []BurndownDataPoint{}
+	}
+
+	// Daily burn rate (linear burndown)
+	dailyBurnRate := totalBudgetDollars / totalDays
+
+	// Group entries by date for efficient lookup
+	entriesByDate := make(map[string][]entryWithCost)
+	for _, ewc := range entriesWithCosts {
+		if !ewc.entry.Start.IsZero() {
+			dateKey := ewc.entry.Start.Format("2006-01-02")
+			entriesByDate[dateKey] = append(entriesByDate[dateKey], ewc)
+		}
+	}
+
+	// Generate daily data points
+	currentDate := project.ActiveStart
+	cumulativeSpent := 0.0
+	cumulativeCost := 0.0
+	cumulativeInvoiced := 0.0
+
+	for currentDate.Before(project.ActiveEnd) || currentDate.Equal(project.ActiveEnd) {
+		// Calculate days elapsed
+		daysElapsed := currentDate.Sub(project.ActiveStart).Hours() / 24.0
+
+		// Planned budget remaining (linear burndown)
+		plannedRemaining := totalBudgetDollars - (dailyBurnRate * daysElapsed)
+		if plannedRemaining < 0 {
+			plannedRemaining = 0
+		}
+
+		// Add actual spending for this date
+		dateKey := currentDate.Format("2006-01-02")
+		if entries, exists := entriesByDate[dateKey]; exists {
+			for _, ewc := range entries {
+				cumulativeSpent += ewc.revenue
+				cumulativeCost += ewc.cost
+			}
+		}
+
+		// Calculate invoiced amount up to this date
+		for _, invoice := range invoices {
+			if invoice.State != cronos.InvoiceStateVoid.String() &&
+				!invoice.PeriodEnd.IsZero() &&
+				(invoice.PeriodEnd.Before(currentDate) || invoice.PeriodEnd.Equal(currentDate)) &&
+				invoice.PeriodEnd.After(project.ActiveStart) {
+				// Only count once - check if this is the first time we've seen this invoice
+				if invoice.PeriodEnd.Format("2006-01-02") == dateKey {
+					var invoiceAmount float64
+
+					// If invoice has a project_id, use the full amount
+					if invoice.ProjectID != nil && *invoice.ProjectID == project.ID {
+						invoiceAmount = invoice.TotalAmount
+					} else {
+						// Account-level invoice - calculate this project's portion from entries
+						for _, entry := range invoice.Entries {
+							if entry.ProjectID == project.ID && entry.State != cronos.EntryStateVoid.String() {
+								invoiceAmount += float64(entry.Fee) / 100.0
+							}
+						}
+					}
+
+					cumulativeInvoiced += invoiceAmount
+				}
+			}
+		}
+
+		dataPoint := BurndownDataPoint{
+			Date:                   currentDate,
+			PlannedBudgetRemaining: plannedRemaining,
+			ActualSpent:            cumulativeSpent,
+			ActualCost:             cumulativeCost,
+			InvoicedAmount:         cumulativeInvoiced,
+		}
+
+		dataPoints = append(dataPoints, dataPoint)
+
+		// Move to next day
+		currentDate = currentDate.AddDate(0, 0, 1)
+
+		// Safety check to prevent infinite loops
+		if len(dataPoints) > 3650 { // Max 10 years
+			log.Printf("Warning: Burndown generation exceeded 3650 days, stopping")
+			break
+		}
+	}
+
+	return dataPoints
 }

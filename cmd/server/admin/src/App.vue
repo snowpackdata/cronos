@@ -313,6 +313,7 @@ const adminNavigationSections = [
       { name: 'Staffing', path: '/staffing', icon: 'fa-user-clock' },
       { name: 'Timesheet Admin', path: '/timesheet-admin', icon: 'fa-toolbox' },
       { name: 'Capacity', path: '/capacity', icon: 'fa-chart-gantt' },
+      { name: 'Project Analytics', path: '/project-analytics', icon: 'fa-chart-line' },
       { name: 'Expense Approvals', path: '/expense-approvals', icon: 'fa-receipt' },
       { name: 'Recurring Compensation', path: '/recurring-entries', icon: 'fa-repeat' },
     ]
